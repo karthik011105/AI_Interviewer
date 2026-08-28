@@ -1,0 +1,355 @@
+"""Environment-backed runtime settings for backend services."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Mapping
+
+# Load .env from the project root (two levels up from this file: backend/config.py)
+try:
+	from dotenv import load_dotenv as _load_dotenv
+
+	_env_path = Path(__file__).resolve().parent.parent / ".env"
+	# In local development, prefer .env values over inherited shell vars.
+	_load_dotenv(dotenv_path=_env_path, override=True)
+except ModuleNotFoundError:
+	pass  # python-dotenv not installed; fall back to raw os.environ
+
+
+class ConfigurationError(RuntimeError):
+	"""Raised when backend configuration is missing or invalid."""
+
+
+def _read_int(
+	source: Mapping[str, str],
+	name: str,
+	default: int,
+	*,
+	minimum: int | None = None,
+) -> int:
+	raw_value = (source.get(name) or "").strip()
+	if not raw_value:
+		value = default
+	else:
+		try:
+			value = int(raw_value)
+		except ValueError as exc:
+			raise ConfigurationError(
+				f"Environment variable {name} must be an integer."
+			) from exc
+
+	if minimum is not None and value < minimum:
+		raise ConfigurationError(
+			f"Environment variable {name} must be greater than or equal to {minimum}."
+		)
+	return value
+
+
+def _read_float(
+	source: Mapping[str, str],
+	name: str,
+	default: float,
+	*,
+	minimum: float | None = None,
+) -> float:
+	raw_value = (source.get(name) or "").strip()
+	if not raw_value:
+		value = default
+	else:
+		try:
+			value = float(raw_value)
+		except ValueError as exc:
+			raise ConfigurationError(
+				f"Environment variable {name} must be a number."
+			) from exc
+
+	if minimum is not None and value < minimum:
+		raise ConfigurationError(
+			f"Environment variable {name} must be greater than or equal to {minimum}."
+		)
+	return value
+
+
+def _read_bool(
+	source: Mapping[str, str],
+	name: str,
+	default: bool,
+) -> bool:
+	raw_value = (source.get(name) or "").strip()
+	if not raw_value:
+		return default
+
+	normalized = raw_value.casefold()
+	if normalized in {"1", "true", "yes", "on"}:
+		return True
+	if normalized in {"0", "false", "no", "off"}:
+		return False
+
+	raise ConfigurationError(
+		f"Environment variable {name} must be a boolean (true/false)."
+	)
+
+
+@dataclass(frozen=True, slots=True)
+class GroqSettings:
+	"""Groq API settings used by LLM-backed services."""
+
+	api_key: str
+	api_base_url: str
+	resume_parser_model: str
+	answer_evaluator_model: str
+	feedback_generator_model: str
+	timeout_seconds: float
+	max_retries: int
+	backoff_base_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeParsingSettings:
+	"""Thresholds and limits for PDF resume parsing."""
+
+	min_text_characters: int
+	max_text_characters: int
+	max_upload_bytes: int
+	page_separator: str
+
+
+@dataclass(frozen=True, slots=True)
+class Judge0Settings:
+	"""Settings for the self-hosted Judge0 execution service."""
+
+	api_base_url: str
+	python_language_id: int
+	cpp_language_id: int
+	java_language_id: int
+	request_timeout_seconds: float
+	cpu_time_limit_seconds: float
+	wall_time_limit_seconds: float
+	memory_limit_kb: int
+	max_source_characters: int
+	max_case_output_characters: int
+
+
+@dataclass(frozen=True, slots=True)
+class MongoSettings:
+	"""MongoDB connection settings."""
+	uri: str
+	database_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class AuthSettings:
+	"""Authentication settings."""
+	jwt_secret: str
+	jwt_algorithm: str
+	jwt_expiry_hours: int
+
+
+@dataclass(frozen=True, slots=True)
+class AppSettings:
+	"""Top-level backend settings exposed to service modules."""
+
+	groq: GroqSettings | None
+	resume_parsing: ResumeParsingSettings
+	judge0: Judge0Settings
+	mongo: MongoSettings
+	auth: AuthSettings
+	allow_local_resume_path_api: bool
+
+	@classmethod
+	def from_env(cls, env: Mapping[str, str] | None = None) -> "AppSettings":
+		source = env or os.environ
+		resume_parsing = ResumeParsingSettings(
+			min_text_characters=_read_int(
+				source,
+				"RESUME_MIN_TEXT_CHARACTERS",
+				200,
+				minimum=1,
+			),
+			max_text_characters=_read_int(
+				source,
+				"RESUME_MAX_TEXT_CHARACTERS",
+				20000,
+				minimum=200,
+			),
+			max_upload_bytes=_read_int(
+				source,
+				"RESUME_MAX_UPLOAD_BYTES",
+				5 * 1024 * 1024,
+				minimum=1024,
+			),
+			page_separator=source.get("RESUME_PAGE_SEPARATOR", "\n\n"),
+		)
+
+		if resume_parsing.max_text_characters < resume_parsing.min_text_characters:
+			raise ConfigurationError(
+				"RESUME_MAX_TEXT_CHARACTERS must be greater than or equal to "
+				"RESUME_MIN_TEXT_CHARACTERS."
+			)
+
+		judge0_settings = Judge0Settings(
+			api_base_url=(
+				(source.get("JUDGE0_API_BASE_URL") or "http://127.0.0.1:2358")
+				.strip()
+				.rstrip("/")
+			),
+			python_language_id=_read_int(
+				source,
+				"JUDGE0_PYTHON_LANGUAGE_ID",
+				71,
+				minimum=1,
+			),
+			cpp_language_id=_read_int(
+				source,
+				"JUDGE0_CPP_LANGUAGE_ID",
+				54,
+				minimum=1,
+			),
+			java_language_id=_read_int(
+				source,
+				"JUDGE0_JAVA_LANGUAGE_ID",
+				62,
+				minimum=1,
+			),
+			request_timeout_seconds=_read_float(
+				source,
+				"JUDGE0_REQUEST_TIMEOUT_SECONDS",
+				15.0,
+				minimum=0.5,
+			),
+			cpu_time_limit_seconds=_read_float(
+				source,
+				"JUDGE0_CPU_TIME_LIMIT_SECONDS",
+				2.0,
+				minimum=0.5,
+			),
+			wall_time_limit_seconds=_read_float(
+				source,
+				"JUDGE0_WALL_TIME_LIMIT_SECONDS",
+				4.0,
+				minimum=1.0,
+			),
+			memory_limit_kb=_read_int(
+				source,
+				"JUDGE0_MEMORY_LIMIT_KB",
+				262144,
+				minimum=32768,
+			),
+			max_source_characters=_read_int(
+				source,
+				"JUDGE0_MAX_SOURCE_CHARACTERS",
+				50000,
+				minimum=1000,
+			),
+			max_case_output_characters=_read_int(
+				source,
+				"JUDGE0_MAX_CASE_OUTPUT_CHARACTERS",
+				4000,
+				minimum=256,
+			),
+		)
+
+		groq_api_key = (source.get("GROQ_API_KEY") or "").strip()
+		groq_settings: GroqSettings | None = None
+		if groq_api_key:
+			_raw_base = (
+				(source.get("GROQ_API_BASE_URL") or "https://api.groq.com/openai/v1")
+				.strip()
+			)
+			_base = _raw_base.rstrip("/")
+			if _base.endswith("/openai/v1"):
+				_base = _base[: -len("/openai/v1")]
+
+			groq_settings = GroqSettings(
+				api_key=groq_api_key,
+				api_base_url=_base,
+				resume_parser_model=(
+					(source.get("GROQ_RESUME_MODEL") or "llama-3.3-70b-versatile")
+					.strip()
+				),
+				answer_evaluator_model=(
+					(source.get("GROQ_EVALUATOR_MODEL") or "llama-3.1-8b-instant")
+					.strip()
+				),
+				feedback_generator_model=(
+					(source.get("GROQ_FEEDBACK_MODEL") or "llama-3.1-8b-instant")
+					.strip()
+				),
+				timeout_seconds=_read_float(
+					source,
+					"GROQ_TIMEOUT_SECONDS",
+					20.0,
+					minimum=1.0,
+				),
+				max_retries=_read_int(
+					source,
+					"GROQ_MAX_RETRIES",
+					3,
+					minimum=0,
+				),
+				backoff_base_seconds=_read_float(
+					source,
+					"GROQ_BACKOFF_BASE_SECONDS",
+					1.0,
+					minimum=0.0,
+				),
+			)
+
+		mongo_settings = MongoSettings(
+			uri=(source.get("MONGO_URI") or "mongodb://localhost:27017").strip(),
+			database_name=(source.get("MONGO_DB_NAME") or "interview_simulator").strip(),
+		)
+
+		auth_jwt_secret = (source.get("AUTH_JWT_SECRET") or "").strip()
+		if not auth_jwt_secret:
+			raise ConfigurationError("AUTH_JWT_SECRET environment variable is missing.")
+
+		auth_settings = AuthSettings(
+			jwt_secret=auth_jwt_secret,
+			jwt_algorithm=(source.get("AUTH_JWT_ALGORITHM") or "HS256").strip(),
+			jwt_expiry_hours=_read_int(source, "AUTH_JWT_EXPIRY_HOURS", 24, minimum=1),
+		)
+
+		return cls(
+			groq=groq_settings,
+			resume_parsing=resume_parsing,
+			judge0=judge0_settings,
+			mongo=mongo_settings,
+			auth=auth_settings,
+			allow_local_resume_path_api=_read_bool(
+				source,
+				"ENABLE_LOCAL_RESUME_PATH_API",
+				False,
+			),
+		)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> AppSettings:
+	"""Return cached backend settings for the current process."""
+
+	return AppSettings.from_env()
+
+
+def reset_settings() -> None:
+	"""Clear cached backend settings.
+
+	This is mainly useful for tests that need to override environment variables.
+	"""
+
+	get_settings.cache_clear()
+
+__all__ = [
+	"AppSettings",
+	"AuthSettings",
+	"ConfigurationError",
+	"GroqSettings",
+	"Judge0Settings",
+	"MongoSettings",
+	"ResumeParsingSettings",
+	"get_settings",
+	"reset_settings",
+]

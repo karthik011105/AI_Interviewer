@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "role_sets": {
+    "core_dsa": [
+      "software_engineer",
+      "backend_python_developer",
+      "backend_java_developer",
+      "backend_node_developer",
+      "frontend_react_developer",
+      "full_stack_developer",
+      "mobile_app_developer",
+      "data_engineer",
+      "machine_learning_engineer",
+      "ai_engineer",
+      "embedded_systems_engineer",
+      "iot_engineer",
+      "robotics_software_engineer",
+      "site_reliability_engineer",
+      "firmware_engineer"
+    ]
+  },
+  "problems": [
+    {
+      "problem_id": "sample_external_problem",
+      "title": "Sample External Problem",
+      "statement": "Replace this with a problem statement you have the right to redistribute.",
+      "constraints": [
+        "1 <= n <= 10^5"
+      ],
+      "source": "licensed_external",
+      "source_problem_id": "sample-1",
+      "source_url": "https://example.com/problems/sample-1",
+      "rating": 1000,
+      "tags": [
+        "arrays",
+        "implementation"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "easy_medium",
+      "starter_code": "def solve() -> None:\n    n = int(input().strip())\n    values = list(map(int, input().split()))\n    # TODO: print the answer\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    n = int(input().strip())\n    values = list(map(int, input().split()))\n    print(sum(values))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": null,
+      "examples": [
+        {
+          "input_text": "3\n1 2 3\n",
+          "output_text": "6\n",
+          "explanation": "The sample here is only a placeholder."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "1\n9\n",
+          "output_text": "9\n"
+        },
+        {
+          "input_text": "2\n4 5\n",
+          "output_text": "9\n"
+        },
+        {
+          "input_text": "4\n1 1 1 1\n",
+          "output_text": "4\n"
+        }
+      ],
+      "hints": [
+        "Read the full input before computing the answer.",
+        "Use the starter code variables rather than renaming everything immediately.",
+        "Add edge-case coverage before promoting the problem into the live bank."
+      ],
+      "followup_questions": [
+        "How would you change the solution if the input no longer fit in memory?"
+      ]
+    }
+  ]
+}

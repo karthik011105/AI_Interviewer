@@ -1,0 +1,1277 @@
+{
+  "version": 1,
+  "roles": [
+    {
+      "role_key": "software_engineer",
+      "title": "Software Engineer",
+      "role_families": [
+        "software_foundations",
+        "backend"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "programming",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "oops",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "dbms",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "operating_systems",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "backend_python_developer",
+      "title": "Backend Python Developer",
+      "role_families": [
+        "backend",
+        "software_foundations"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "python",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "backend",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "dbms",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "backend_java_developer",
+      "title": "Backend Java Developer",
+      "role_families": [
+        "backend",
+        "software_foundations"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "java",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "backend",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "oops",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "backend_node_developer",
+      "title": "Backend Node Developer",
+      "role_families": [
+        "backend",
+        "software_foundations"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "javascript",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "async_programming",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "backend",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "dbms",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "frontend_react_developer",
+      "title": "Frontend React Developer",
+      "role_families": [
+        "frontend"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "javascript",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "react",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "html_css",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "browser",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "css_layout",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "full_stack_developer",
+      "title": "Full Stack Developer",
+      "role_families": [
+        "backend",
+        "frontend"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "javascript",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "react",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "backend",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "mobile_app_developer",
+      "title": "Mobile App Developer",
+      "role_families": [
+        "mobile",
+        "frontend"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "mobile",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "state_management",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "javascript",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "browser",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "qa_automation_engineer",
+      "title": "QA Automation Engineer",
+      "role_families": [
+        "qa",
+        "software_foundations"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "testing",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "automation",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api_testing",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "bug_reporting",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "manual_test_engineer",
+      "title": "Manual Test Engineer",
+      "role_families": [
+        "qa"
+      ],
+      "domains": [
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "testing",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "bug_reporting",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api_testing",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "test_design",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "browser",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "data_analyst",
+      "title": "Data Analyst",
+      "role_families": [
+        "data"
+      ],
+      "domains": [
+        "data"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "statistics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "visualization",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "pandas",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "dashboarding",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "business_intelligence_analyst",
+      "title": "Business Intelligence Analyst",
+      "role_families": [
+        "data"
+      ],
+      "domains": [
+        "data"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "visualization",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "dashboarding",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "data_modeling",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "statistics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "data_engineer",
+      "title": "Data Engineer",
+      "role_families": [
+        "data",
+        "cloud_devops"
+      ],
+      "domains": [
+        "data",
+        "cloud"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "sql",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "data_pipelines",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "data_modeling",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "python",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "cloud",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "machine_learning_engineer",
+      "title": "Machine Learning Engineer",
+      "role_families": [
+        "ai_ml",
+        "data"
+      ],
+      "domains": [
+        "ai_ml",
+        "data"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "python",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "ml_basics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "preprocessing",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "metrics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "experimentation",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "ai_engineer",
+      "title": "AI Engineer",
+      "role_families": [
+        "ai_ml",
+        "backend"
+      ],
+      "domains": [
+        "ai_ml",
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "python",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "llm_basics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "prompt_engineering",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "vector_search",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "api",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "data_scientist",
+      "title": "Data Scientist",
+      "role_families": [
+        "ai_ml",
+        "data"
+      ],
+      "domains": [
+        "ai_ml",
+        "data"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "python",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "statistics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "ml_basics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "experimentation",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "visualization",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "devops_engineer",
+      "title": "DevOps Engineer",
+      "role_families": [
+        "cloud_devops"
+      ],
+      "domains": [
+        "cloud",
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "linux",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "ci_cd",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "containers",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "cloud",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "monitoring",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "cloud_engineer",
+      "title": "Cloud Engineer",
+      "role_families": [
+        "cloud_devops"
+      ],
+      "domains": [
+        "cloud",
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "cloud",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "networking",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "linux",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "containers",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "security_basics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "site_reliability_engineer",
+      "title": "Site Reliability Engineer",
+      "role_families": [
+        "cloud_devops"
+      ],
+      "domains": [
+        "cloud",
+        "software"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "linux",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "monitoring",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "incident_response",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "networking",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "cloud",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    },
+    {
+      "role_key": "cybersecurity_analyst",
+      "title": "Cybersecurity Analyst",
+      "role_families": [
+        "security"
+      ],
+      "domains": [
+        "security"
+      ],
+      "core_count": 2,
+      "targeted_requirements": [
+        {
+          "topic": "security_basics",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "auth",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "web_security",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "networking",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "incident_response",
+          "count": 1,
+          "difficulties": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        {
+          "topic": "code_output",
+          "count": 1,
+          "difficulties": [
+            "medium",
+            "hard"
+          ]
+        }
+      ]
+    }
+  ]
+}

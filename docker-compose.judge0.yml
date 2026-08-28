@@ -1,0 +1,98 @@
+# Judge0 CE - Code Execution Engine for DSA Round
+# Usage:
+#   docker-compose -f docker-compose.judge0.yml up -d
+#   
+# Verify it's running:
+#   Open http://127.0.0.1:2358/languages in your browser
+#   You should see a JSON list of supported languages.
+#
+# Stop:
+#   docker-compose -f docker-compose.judge0.yml down
+
+services:
+  judge0-server:
+    image: judge0/judge0:1.13.1
+    ports:
+      - "2359:2358"
+    environment:
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0password
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=judge0redispassword
+      # Execution limits (match backend/config.py defaults)
+      - CPU_TIME_LIMIT=2
+      - CPU_EXTRA_TIME=1
+      - WALL_TIME_LIMIT=4
+      - MEMORY_LIMIT=262144
+      - MAX_PROCESSES_AND_OR_THREADS=60
+      - ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=true
+      - ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=true
+      # Disable authentication for local dev
+      - AUTHN_HEADER=
+      - AUTHN_TOKEN=
+      - AUTHZ_HEADER=
+      - AUTHZ_TOKEN=
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+
+  judge0-worker:
+    image: judge0/judge0:1.13.1
+    command: ["./scripts/workers"]
+    environment:
+      - POSTGRES_HOST=judge0-db
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0password
+      - REDIS_HOST=judge0-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=judge0redispassword
+      - CPU_TIME_LIMIT=2
+      - CPU_EXTRA_TIME=1
+      - WALL_TIME_LIMIT=4
+      - MEMORY_LIMIT=262144
+      - MAX_PROCESSES_AND_OR_THREADS=60
+      - ENABLE_PER_PROCESS_AND_THREAD_TIME_LIMIT=true
+      - ENABLE_PER_PROCESS_AND_THREAD_MEMORY_LIMIT=true
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+
+  judge0-db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=judge0
+      - POSTGRES_USER=judge0
+      - POSTGRES_PASSWORD=judge0password
+    volumes:
+      - judge0-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge0"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  judge0-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "judge0redispassword"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "judge0redispassword", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  judge0-db-data:

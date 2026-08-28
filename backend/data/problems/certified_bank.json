@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "role_sets": {
+    "core_dsa": [
+      "software_engineer",
+      "backend_python_developer",
+      "backend_java_developer",
+      "backend_node_developer",
+      "frontend_react_developer",
+      "full_stack_developer",
+      "mobile_app_developer",
+      "data_engineer",
+      "machine_learning_engineer",
+      "ai_engineer",
+      "embedded_systems_engineer",
+      "iot_engineer",
+      "robotics_software_engineer",
+      "site_reliability_engineer",
+      "firmware_engineer"
+    ]
+  },
+  "problems": [
+    {
+      "problem_id": "cf_4a_watermelon",
+      "title": "Watermelon Split",
+      "statement": "Read one integer weight w. Print YES if the watermelon can be split into two positive even weights, otherwise print NO.",
+      "constraints": [
+        "1 <= w <= 100"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "4A",
+      "source_url": "https://codeforces.com/problemset/problem/4/A",
+      "rating": 800,
+      "tags": [
+        "math",
+        "implementation"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "easy",
+      "starter_code": "def solve() -> None:\n    weight = int(input().strip())\n    # TODO: print YES or NO\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    weight = int(input().strip())\n    print(\"YES\" if weight > 2 and weight % 2 == 0 else \"NO\")\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": "def solve() -> None:\n    weight = int(input().strip())\n    answer = \"NO\"\n    for first in range(1, weight):\n        second = weight - first\n        if first % 2 == 0 and second % 2 == 0:\n            answer = \"YES\"\n            break\n    print(answer)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "examples": [
+        {
+          "input_text": "8\n",
+          "output_text": "YES\n",
+          "explanation": "4 and 4 are both positive even parts."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "2\n",
+          "output_text": "NO\n"
+        },
+        {
+          "input_text": "4\n",
+          "output_text": "YES\n"
+        },
+        {
+          "input_text": "99\n",
+          "output_text": "NO\n"
+        },
+        {
+          "input_text": "100\n",
+          "output_text": "YES\n"
+        }
+      ],
+      "hints": [
+        "Both parts must be even, so the total weight must already be even.",
+        "A split using 1 and w-1 never works because the pieces must stay even.",
+        "The only even weight that still fails is 2 because both parts must be positive."
+      ],
+      "followup_questions": [
+        "How would the answer change if zero-weight pieces were allowed?",
+        "Can you prove why checking only parity and the value 2 is enough?"
+      ]
+    },
+    {
+      "problem_id": "cf_158a_next_round",
+      "title": "Next Round Cutoff",
+      "statement": "Given n scores sorted from high to low and a position k, count how many contestants advance. A contestant advances if their score is positive and at least the k-th score.",
+      "constraints": [
+        "1 <= k <= n <= 50",
+        "0 <= score <= 100"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "158A",
+      "source_url": "https://codeforces.com/problemset/problem/158/A",
+      "rating": 800,
+      "tags": [
+        "arrays",
+        "implementation"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "easy",
+      "starter_code": "def solve() -> None:\n    n, k = map(int, input().split())\n    scores = list(map(int, input().split()))\n    # TODO: print the number of advancing contestants\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    n, k = map(int, input().split())\n    scores = list(map(int, input().split()))\n    cutoff = scores[k - 1]\n    answer = sum(1 for score in scores if score > 0 and score >= cutoff)\n    print(answer)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": null,
+      "examples": [
+        {
+          "input_text": "8 5\n10 9 8 7 7 7 5 5\n",
+          "output_text": "6\n",
+          "explanation": "Scores at least 7 and positive advance."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "4 2\n0 0 0 0\n",
+          "output_text": "0\n"
+        },
+        {
+          "input_text": "5 1\n5 4 3 2 1\n",
+          "output_text": "1\n"
+        },
+        {
+          "input_text": "5 3\n5 3 3 0 0\n",
+          "output_text": "3\n"
+        },
+        {
+          "input_text": "6 6\n1 1 1 1 1 1\n",
+          "output_text": "6\n"
+        }
+      ],
+      "hints": [
+        "The cutoff score is already in the array at position k - 1.",
+        "A zero score never advances, even if it matches the cutoff.",
+        "You only need one pass to count valid scores after computing the cutoff."
+      ],
+      "followup_questions": [
+        "What assumption about score ordering lets this simple solution work?",
+        "How would you solve it if the scores were not pre-sorted?"
+      ]
+    },
+    {
+      "problem_id": "cf_339a_helpful_maths",
+      "title": "Helpful Maths Reorder",
+      "statement": "You are given a string like 3+2+1 where each number is a single digit from 1 to 3. Rearrange the digits so the printed expression is in non-decreasing order.",
+      "constraints": [
+        "The string length is between 1 and 100",
+        "Only digits 1, 2, 3 and plus signs appear"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "339A",
+      "source_url": "https://codeforces.com/problemset/problem/339/A",
+      "rating": 800,
+      "tags": [
+        "strings",
+        "sorting"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "easy",
+      "starter_code": "def solve() -> None:\n    expression = input().strip()\n    # TODO: reorder the digits and print the expression\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    expression = input().strip()\n    digits = sorted(expression.split(\"+\"), key=int)\n    print(\"+\".join(digits))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": null,
+      "examples": [
+        {
+          "input_text": "3+2+1\n",
+          "output_text": "1+2+3\n",
+          "explanation": "Sorting the three digits is enough."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "1\n",
+          "output_text": "1\n"
+        },
+        {
+          "input_text": "2+1+3+1\n",
+          "output_text": "1+1+2+3\n"
+        },
+        {
+          "input_text": "3+3+2+1+2\n",
+          "output_text": "1+2+2+3+3\n"
+        },
+        {
+          "input_text": "2+2+2\n",
+          "output_text": "2+2+2\n"
+        }
+      ],
+      "hints": [
+        "The plus signs already separate the digits for you.",
+        "After splitting, you only need to sort the pieces and join them back together.",
+        "Sorting as strings also works here because the digits are only 1, 2, and 3."
+      ],
+      "followup_questions": [
+        "How would the solution change if the expression could contain multi-digit numbers?",
+        "Can you solve this without calling a built-in sort?"
+      ]
+    },
+    {
+      "problem_id": "cf_263a_beautiful_matrix",
+      "title": "Beautiful Matrix Distance",
+      "statement": "Read a 5x5 matrix that contains exactly one cell with value 1. Print the Manhattan distance needed to move that 1 to the center cell at row 3, column 3 using row and column swaps.",
+      "constraints": [
+        "The matrix size is always 5 x 5",
+        "Exactly one cell contains 1"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "263A",
+      "source_url": "https://codeforces.com/problemset/problem/263/A",
+      "rating": 800,
+      "tags": [
+        "implementation",
+        "matrix"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "easy",
+      "starter_code": "def solve() -> None:\n    matrix = [list(map(int, input().split())) for _ in range(5)]\n    # TODO: print the Manhattan distance to the center\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    matrix = [list(map(int, input().split())) for _ in range(5)]\n    for row_index, row in enumerate(matrix):\n        for col_index, value in enumerate(row):\n            if value == 1:\n                print(abs(row_index - 2) + abs(col_index - 2))\n                return\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": null,
+      "examples": [
+        {
+          "input_text": "0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 1 0\n0 0 0 0 0\n",
+          "output_text": "2\n",
+          "explanation": "The 1 is two moves away from the center."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "1 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n",
+          "output_text": "4\n"
+        },
+        {
+          "input_text": "0 0 0 0 0\n0 0 0 0 0\n0 0 1 0 0\n0 0 0 0 0\n0 0 0 0 0\n",
+          "output_text": "0\n"
+        },
+        {
+          "input_text": "0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 1\n",
+          "output_text": "4\n"
+        },
+        {
+          "input_text": "0 0 0 0 0\n0 1 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n0 0 0 0 0\n",
+          "output_text": "2\n"
+        }
+      ],
+      "hints": [
+        "You do not need to simulate swaps one by one.",
+        "Find the coordinates of the 1, then compare them with the center coordinates (2, 2) in zero-based indexing.",
+        "The number of required moves is the Manhattan distance between those two positions."
+      ],
+      "followup_questions": [
+        "Why is Manhattan distance enough even though the problem talks about swapping rows and columns?",
+        "How would you generalize the solution for an odd-sized square matrix?"
+      ]
+    },
+    {
+      "problem_id": "cf_580a_kefa_first_steps",
+      "title": "Kefa First Steps",
+      "statement": "Given n integers, print the length of the longest contiguous segment where each element is greater than or equal to the previous one.",
+      "constraints": [
+        "1 <= n <= 100000",
+        "1 <= a[i] <= 1000000000"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "580A",
+      "source_url": "https://codeforces.com/problemset/problem/580/A",
+      "rating": 900,
+      "tags": [
+        "arrays",
+        "two_pointers"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "medium",
+      "starter_code": "def solve() -> None:\n    n = int(input().strip())\n    values = list(map(int, input().split()))\n    # TODO: print the longest non-decreasing contiguous length\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    n = int(input().strip())\n    values = list(map(int, input().split()))\n    best = 1\n    current = 1\n    for index in range(1, n):\n        if values[index] >= values[index - 1]:\n            current += 1\n        else:\n            current = 1\n        best = max(best, current)\n    print(best)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": "def solve() -> None:\n    n = int(input().strip())\n    values = list(map(int, input().split()))\n    best = 0\n    for left in range(n):\n        current = 1\n        best = max(best, 1)\n        for right in range(left + 1, n):\n            if values[right] < values[right - 1]:\n                break\n            current += 1\n            best = max(best, current)\n    print(best)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "examples": [
+        {
+          "input_text": "6\n2 2 1 3 4 1\n",
+          "output_text": "3\n",
+          "explanation": "The longest non-decreasing contiguous segment is 1 3 4."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "1\n5\n",
+          "output_text": "1\n"
+        },
+        {
+          "input_text": "5\n1 2 3 4 5\n",
+          "output_text": "5\n"
+        },
+        {
+          "input_text": "5\n5 4 3 2 1\n",
+          "output_text": "1\n"
+        },
+        {
+          "input_text": "8\n1 2 2 1 2 3 0 0\n",
+          "output_text": "3\n"
+        }
+      ],
+      "hints": [
+        "You only need to know the current segment length ending at each position.",
+        "If the current value is at least the previous value, extend the segment; otherwise restart it at 1.",
+        "Track the best segment length while scanning once from left to right."
+      ],
+      "followup_questions": [
+        "How would the answer change if the segment had to be strictly increasing?",
+        "Can you explain why a one-pass greedy scan is enough here?"
+      ]
+    },
+    {
+      "problem_id": "cf_279b_books",
+      "title": "Books Time Window",
+      "statement": "You have n books in order and total available time t. Each book has a reading time. Print the maximum number of consecutive books you can finish without the total time of that segment exceeding t.",
+      "constraints": [
+        "1 <= n <= 100000",
+        "1 <= t <= 1000000000",
+        "1 <= time[i] <= 10000"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "279B",
+      "source_url": "https://codeforces.com/problemset/problem/279/B",
+      "rating": 1200,
+      "tags": [
+        "two_pointers",
+        "sliding_window"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "medium",
+      "starter_code": "def solve() -> None:\n    n, total_time = map(int, input().split())\n    reading_times = list(map(int, input().split()))\n    # TODO: print the max number of consecutive books that fit into total_time\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "def solve() -> None:\n    n, total_time = map(int, input().split())\n    reading_times = list(map(int, input().split()))\n    best = 0\n    current_sum = 0\n    left = 0\n    for right, value in enumerate(reading_times):\n        current_sum += value\n        while current_sum > total_time and left <= right:\n            current_sum -= reading_times[left]\n            left += 1\n        best = max(best, right - left + 1)\n    print(best)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": "def solve() -> None:\n    n, total_time = map(int, input().split())\n    reading_times = list(map(int, input().split()))\n    best = 0\n    for left in range(n):\n        current_sum = 0\n        for right in range(left, n):\n            current_sum += reading_times[right]\n            if current_sum > total_time:\n                break\n            best = max(best, right - left + 1)\n    print(best)\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "examples": [
+        {
+          "input_text": "4 5\n3 1 2 1\n",
+          "output_text": "3\n",
+          "explanation": "The segment 1 2 1 fits exactly in 4 units of time."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "5 3\n4 4 4 4 4\n",
+          "output_text": "0\n"
+        },
+        {
+          "input_text": "5 15\n1 2 3 4 5\n",
+          "output_text": "5\n"
+        },
+        {
+          "input_text": "6 6\n1 1 1 1 1 10\n",
+          "output_text": "5\n"
+        },
+        {
+          "input_text": "7 7\n2 1 3 2 1 1 1\n",
+          "output_text": "4\n"
+        }
+      ],
+      "hints": [
+        "The books must stay consecutive, which is a strong sign that a sliding window can help.",
+        "Expand the right side while the total stays within t, and shrink from the left when it grows too large.",
+        "Each index enters and leaves the window at most once, so the solution stays linear."
+      ],
+      "followup_questions": [
+        "Why does the sliding window work only because all reading times are positive?",
+        "How would you solve a version where negative values were allowed?"
+      ]
+    },
+    {
+      "problem_id": "cf_706b_interesting_drink",
+      "title": "Interesting Drink Queries",
+      "statement": "You are given prices of n shops and q queries. For each query value x, print how many shops sell the drink at price less than or equal to x.",
+      "constraints": [
+        "1 <= n, q <= 100000",
+        "1 <= price[i], x <= 1000000000"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "706B",
+      "source_url": "https://codeforces.com/problemset/problem/706/B",
+      "rating": 1000,
+      "tags": [
+        "binary_search",
+        "sorting"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "medium",
+      "starter_code": "from bisect import bisect_right\n\n\ndef solve() -> None:\n    n = int(input().strip())\n    prices = list(map(int, input().split()))\n    q = int(input().strip())\n    # TODO: print one answer per query\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "from bisect import bisect_right\n\n\ndef solve() -> None:\n    n = int(input().strip())\n    prices = sorted(map(int, input().split()))\n    q = int(input().strip())\n    answers: list[str] = []\n    for _ in range(q):\n        coins = int(input().strip())\n        answers.append(str(bisect_right(prices, coins)))\n    print(\"\\n\".join(answers))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": "def solve() -> None:\n    n = int(input().strip())\n    prices = list(map(int, input().split()))\n    q = int(input().strip())\n    answers: list[str] = []\n    for _ in range(q):\n        coins = int(input().strip())\n        answers.append(str(sum(1 for price in prices if price <= coins)))\n    print(\"\\n\".join(answers))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "examples": [
+        {
+          "input_text": "5\n3 10 8 6 11\n4\n1\n10\n3\n11\n",
+          "output_text": "0\n4\n1\n5\n",
+          "explanation": "Sort prices once, then answer each query with an upper-bound search."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "3\n5 5 5\n3\n4\n5\n6\n",
+          "output_text": "0\n3\n3\n"
+        },
+        {
+          "input_text": "1\n100\n2\n99\n100\n",
+          "output_text": "0\n1\n"
+        },
+        {
+          "input_text": "6\n1 2 3 4 5 6\n3\n3\n6\n7\n",
+          "output_text": "3\n6\n6\n"
+        },
+        {
+          "input_text": "4\n7 2 9 2\n2\n2\n8\n",
+          "output_text": "2\n3\n"
+        }
+      ],
+      "hints": [
+        "Sorting the prices once is cheaper than scanning the whole list for every query.",
+        "For each x, you need the first position where a price would be placed to the right of x.",
+        "In Python, bisect_right gives exactly the count of values less than or equal to x in a sorted list."
+      ],
+      "followup_questions": [
+        "What is the total time complexity of the sorted plus binary-search approach?",
+        "How would you answer the same queries if prices kept changing between requests?"
+      ]
+    },
+    {
+      "problem_id": "cf_230b_t_primes",
+      "title": "T-Primes",
+      "statement": "For each queried number x, print YES if x has exactly three positive divisors. Otherwise print NO.",
+      "constraints": [
+        "1 <= number of queries <= 100000",
+        "1 <= x <= 10^12"
+      ],
+      "source": "codeforces",
+      "source_problem_id": "230B",
+      "source_url": "https://codeforces.com/problemset/problem/230/B",
+      "rating": 1300,
+      "tags": [
+        "math",
+        "number_theory"
+      ],
+      "role_set": "core_dsa",
+      "difficulty": "medium",
+      "starter_code": "from math import isqrt\n\n\ndef solve() -> None:\n    _ = int(input().strip())\n    values = list(map(int, input().split()))\n    # TODO: print YES or NO for each value\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "reference_solution": "from math import isqrt\n\n\ndef _build_prime_table(limit: int):\n    is_prime = [True] * (limit + 1)\n    if limit >= 0:\n        is_prime[0] = False\n    if limit >= 1:\n        is_prime[1] = False\n    for value in range(2, isqrt(limit) + 1):\n        if not is_prime[value]:\n            continue\n        start = value * value\n        is_prime[start : limit + 1 : value] = [False] * (((limit - start) // value) + 1)\n    return is_prime\n\n\ndef solve() -> None:\n    _ = int(input().strip())\n    values = list(map(int, input().split()))\n    limit = isqrt(max(values, default=0))\n    is_prime = _build_prime_table(limit)\n    answers = []\n    for value in values:\n        root = isqrt(value)\n        answers.append(\"YES\" if root * root == value and is_prime[root] else \"NO\")\n    print(\"\\n\".join(answers))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "brute_force_solution": "from math import isqrt\n\n\ndef solve() -> None:\n    _ = int(input().strip())\n    values = list(map(int, input().split()))\n    answers: list[str] = []\n    for value in values:\n        divisors = 0\n        for candidate in range(1, isqrt(value) + 1):\n            if value % candidate != 0:\n                continue\n            divisors += 1 if candidate * candidate == value else 2\n            if divisors > 3:\n                break\n        answers.append(\"YES\" if divisors == 3 else \"NO\")\n    print(\"\\n\".join(answers))\n\n\nif __name__ == \"__main__\":\n    solve()\n",
+      "examples": [
+        {
+          "input_text": "3\n4 5 9\n",
+          "output_text": "YES\nNO\nYES\n",
+          "explanation": "4 and 9 are squares of primes, so they each have exactly three divisors."
+        }
+      ],
+      "hidden_test_cases": [
+        {
+          "input_text": "4\n1 2 3 16\n",
+          "output_text": "NO\nNO\nNO\nNO\n"
+        },
+        {
+          "input_text": "5\n25 49 27 81 121\n",
+          "output_text": "YES\nYES\nNO\nNO\nYES\n"
+        },
+        {
+          "input_text": "2\n999966000289 999950884\n",
+          "output_text": "YES\nNO\n"
+        },
+        {
+          "input_text": "3\n4 8 10\n",
+          "output_text": "YES\nNO\nNO\n"
+        }
+      ],
+      "hints": [
+        "A number has exactly three divisors only when it is the square of a prime number.",
+        "So the task becomes: is x a perfect square, and is sqrt(x) prime?",
+        "Precomputing primes up to sqrt(max(x)) keeps the per-query check fast enough."
+      ],
+      "followup_questions": [
+        "Why does the square of a composite number fail the exactly-three-divisors test?",
+        "Would a primality test per query be fast enough here, or is a sieve better?"
+      ]
+    }
+  ]
+}
