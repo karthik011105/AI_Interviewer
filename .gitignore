@@ -27,3 +27,8 @@ frontend/build/
 Thumbs.db
 # Added by code-review-graph
 .code-review-graph/
+
+# Judge0 local config — contains REDIS_PASSWORD / POSTGRES_PASSWORD that must be
+# filled in per machine. The pristine upstream template is inside
+# .local/judge0/judge0-v1.13.1.zip; extract it and set your own values.
+.local/judge0/judge0-v1.13.1/judge0.conf

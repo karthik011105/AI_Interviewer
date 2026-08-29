@@ -762,6 +762,13 @@ def _open_json_request(
 	if payload is not None:
 		request_body = json.dumps(payload).encode("utf-8")
 		headers["Content-Type"] = "application/json"
+	# Judge0 runs with authentication enabled (see docker-compose.judge0.yml).
+	# The header name must match AUTHN_HEADER there. Left unset, requests go out
+	# unauthenticated, which is only viable against a Judge0 that has authn
+	# disabled -- so this stays optional rather than required, to avoid breaking
+	# an existing local instance that was set up without a token.
+	if settings.auth_token:
+		headers[settings.auth_header] = settings.auth_token
 
 	request = urllib_request.Request(url, data=request_body, headers=headers, method=method)
 	try:

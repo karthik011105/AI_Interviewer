@@ -75,7 +75,7 @@ All of this is fixed; see §17.
 The largest remaining risks are:
 
 1. **Secrets still need rotating** (§0) — unchanged, and the only item outstanding since the first assessment.
-2. **The "local Judge0 bundle" is an empty stub zip**, and the Judge0 compose file runs privileged with authentication disabled.
+2. **[RESOLVED] Judge0 hardening** — authentication is now enabled and all hardcoded infrastructure passwords are parameterised (§22). **Still open:** Judge0 credentials were committed to the repository and are on the GitHub remote; they need rotating, and removing them from history requires a force-push (§22).
 3. **No email verification, password reset, or token revocation** (§4).
 
 None of this is unusual for a project at this stage — but it means "production" is a real project, not a config change.
@@ -115,7 +115,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 | Finding | Severity | File(s) | Why it's a problem | Fix | Block ship? |
 |---|---|---|---|---|---|
 | **[RESOLVED]** ~~Signup TOCTOU race producing an unhandled 500~~ | High | `backend/api/routes_auth.py` | `DuplicateKeyError` from the unique index on `users.email` is now caught and reported as the same 409 conflict. Covered by `test_signup_race_surfaces_duplicate_key_as_409_not_500`. | Done | — |
-| The "local Judge0 bundle" referenced by the README is an empty stub | High | `.local/judge0/judge0-v1.13.1.zip` | The file is a valid but empty zip (0 bytes of actual content, confirmed via `file`/hex inspection) — it is not the real Judge0 release. Anyone following README §8 to stand up local Judge0 from this bundle will fail silently or get a broken extraction | Either commit a real bundle, or (preferred) drop the file and point to the upstream Judge0 release/Docker image directly | Yes, if DSA is part of the shipped feature set |
+| **[WITHDRAWN — this finding was wrong]** ~~The "local Judge0 bundle" is an empty stub~~ | — | `.local/judge0/judge0-v1.13.1.zip` | The zip is the **legitimate** official Judge0 v1.13.1 release: it contains `judge0.conf` (12 KB) and `docker-compose.yml`, which is all a Judge0 CE release ships — the images come from Docker Hub. The original claim came from misreading a `file` output line that described the archive's *directory entry* as "uncompressed size 0", not its contents. Verified by extracting it and diffing against the checked-in copy: byte-identical apart from passwords that ship blank upstream. | No action — do not delete this file | No |
 | `models/*.pth` "research checkpoints" are tiny placeholder files, not real trained models | Medium | `models/job_matcher_model.pth` (136K), `models/parser_model.pth` (40K), `models/t5_model.pth` (4K) | These are legitimate pickled PyTorch state dicts but far too small to be the fine-tuned models the notebooks in `notebooks/` describe training. If anyone tries to load and use them at runtime expecting real weights, results will be meaningless. README does say they're "not executed by the live interview runtime," so this is currently inert, but it's misleading if kept for a portfolio/demo audience | Either regenerate real checkpoints or clearly label these as placeholder/demo stubs; do not let them silently look legitimate | No (currently unused at runtime) |
 | No app-level readiness/liveness distinction; Mongo connection is only established lazily on first repository access | Medium | `backend/database/mongo_client.py:810-816`, `backend/main.py` lifespan | `get_repository()` is a lazy singleton — the app can report `/health: ok` and accept traffic before ever confirming MongoDB is reachable, and the first real request pays the connection-establishment cost (and fails opaquely if Mongo is down) | Establish (and healthcheck) the Mongo connection during the FastAPI `lifespan` startup, and add Mongo status to `/health` | Yes |
 | Debug `print()` leaking into a request path instead of structured logging | Low | `backend/api/routes_dsa.py:332` (`print("!!! JUDGE0 ERROR:", str(exc))`) | Bypasses whatever logging/observability pipeline is configured in production (stdout capture, log levels, redaction) | Replace with `logging.getLogger(__name__).error(...)` | No, but trivial to fix |
@@ -140,7 +140,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 
 | Finding | Severity | File(s) | Why it's a problem | Fix | Block ship? |
 |---|---|---|---|---|---|
-| **[RESOLVED for `/auth/*`; still open elsewhere]** ~~No rate limiting anywhere in the app~~ | High | `backend/api/rate_limit.py` (new), `backend/api/routes_auth.py` | `/auth/signup` and `/auth/login` now enforce a per-IP request budget plus a per-account backoff after consecutive failures, both returning `429` with `Retry-After`. **Still open:** no throttling on the Groq- or Judge0-backed routes, so a single user can still drive unbounded LLM spend (§8). | Extend the same primitives to the Groq/Judge0 routes | Partially — the LLM-spend half is still a blocker |
+| **[RESOLVED]** ~~No rate limiting anywhere in the app~~ | High | `backend/api/rate_limit.py`, `backend/api/routes_auth.py`, `backend/api/quotas.py` | `/auth/signup` and `/auth/login` enforce a per-IP request budget plus a per-account backoff after consecutive failures. Separately, per-user hourly quotas now bound spend on every Groq- and Judge0-backed route (§21). **Still open:** the interview WebSocket also drives Groq calls and is not yet metered. | Extend `quotas.py` into the WebSocket message loop | No — the REST spend surface is closed; the WebSocket gap is a smaller residual risk |
 | **[RESOLVED]** ~~No password policy~~ | Medium | `backend/api/routes_auth.py`, `backend/config.py` | Signup now enforces a configurable minimum length and a maximum **UTF-8 byte** length. The byte limit closed a latent 500: bcrypt 5.0 raises `ValueError` above 72 bytes, so a long password — or a 30-character emoji/CJK password (120 bytes) — previously crashed signup. The policy is deliberately not applied at sign-in, to avoid locking out pre-policy accounts and disclosing the policy to anonymous callers. | Done | — |
 | **[RESOLVED]** ~~User enumeration via sign-in~~ | Medium | `backend/api/routes_auth.py` | Unknown-address and wrong-password now return an identical status and detail, a dummy bcrypt comparison equalises response timing when no account exists, and the lockout is keyed on the *submitted* address so attempts against non-existent accounts throttle identically. Keying it on a resolved account would have turned the lockout itself into an enumeration oracle. | Done | — |
 | No email verification | Medium | `backend/api/routes_auth.py:45-66` | Signup issues a valid session token immediately with no confirmation that the email address is owned by the requester | Add an email-verification flow before granting full access, or explicitly accept this as a deliberate trade-off for a low-stakes demo app | Depends on threat model — flag for a decision, not silently skip |
@@ -238,7 +238,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 |---|---|---|---|---|---|
 | No Dockerfile for the backend or frontend anywhere in the repo | High | (absent — confirmed via repo-wide search) | The only Docker artifacts are for the *Judge0 dependency*, not the application itself. There is no reproducible, portable way to build and run this app in any environment other than "clone repo, set up Python venv + Node by hand on Windows" | Add a backend Dockerfile (Python slim base, install `backend/requirements.txt`, run via gunicorn/uvicorn workers) and a frontend Dockerfile or static-hosting build step (`npm run build` → serve `dist/` via nginx/CDN) | Yes |
 | No CI/CD pipeline | High | `.github/` (no `workflows/`) | No automated build, test, lint, or deploy pipeline exists. Every release today is a manual, undocumented process | Add GitHub Actions for test/build on PR, and a deploy workflow once hosting is decided | Yes |
-| Judge0 bundle checked into git is a broken/empty stub (see §2) | High | `.local/judge0/judge0-v1.13.1.zip` | — | — | — |
+| **[WITHDRAWN]** ~~Judge0 bundle checked into git is a broken/empty stub~~ | — | `.local/judge0/judge0-v1.13.1.zip` | Incorrect finding; see §2. The archive is the genuine upstream release. | No action | No |
 | `scripts/start_backend.ps1` is Windows/PowerShell-only | Medium | `scripts/start_backend.ps1` | If production hosting is Linux (likely, for cost and container-friendliness), this script is unusable as-is and there's no equivalent shell script | Add a POSIX equivalent (`scripts/start_backend.sh`) or fold the logic into the Dockerfile `CMD`/`entrypoint.sh` | Yes, if targeting Linux hosting |
 | No environment separation (`ENV=development/staging/production`) concept anywhere in config | Medium | `backend/config.py` | A single flat `.env` drives all behavior; CORS origins, log verbosity, and debug behaviors can't differ between environments without editing code | Add an `APP_ENV` setting and branch relevant behavior (CORS origin list, log level, etc.) on it | Recommended |
 | No health-check/readiness distinction for orchestration (Kubernetes/ECS-style liveness vs. readiness) | Low | `backend/main.py:54-70` | Single `/health` endpoint conflates "process is up" with "all dependencies (Mongo, Groq, semantic model) are ready" | Split into `/healthz` (liveness) and `/readyz` (readiness, checking Mongo connectivity and model warmup) if deploying behind an orchestrator that uses these | No, until an orchestrator is chosen |
@@ -287,7 +287,7 @@ Per your instruction not to modify anything yet, here is what I'd recommend dele
 | Path | Why it's a candidate for deletion |
 |---|---|
 | `cleanup_unused_files.py` | Dead migration script; references files that no longer exist in the repo. Its only value is historical context, which belongs in a changelog/commit message, not a live script. |
-| `.local/judge0/judge0-v1.13.1.zip` | Confirmed to be an empty/broken stub zip, not a real Judge0 release — misleading if kept, and it's a binary blob in git either way. Replace the README instructions with a link to the official Judge0 release/Docker Hub image instead of bundling a (broken) copy. |
+| ~~`.local/judge0/judge0-v1.13.1.zip`~~ **— DO NOT DELETE, this recommendation was based on a wrong finding** | It is the genuine upstream Judge0 v1.13.1 release, and it is now the reference copy of the pristine `judge0.conf` (which has been untracked because the working copy carries real passwords). See the withdrawal note in §2. |
 | `.kilo/` directory | An unrelated IDE-agent tool config (Kilo Code's "Data" agent definition) with no relationship to this project's runtime, build, or deployment. Harmless, but it's noise in a repo meant to represent the shipped product — worth removing or moving to a personal dotfiles location if it's not something the team intentionally standardized on. |
 
 Not recommending deletion of (despite being large/unusual) because they're referenced by working code or the README's stated demo path:
@@ -695,3 +695,84 @@ The interview WebSocket (`/interview/ws/...`) also drives Groq calls for answer
 evaluation and feedback, but it is a long-lived connection rather than a
 per-request route, so the same dependency does not apply. Per-message metering
 inside the socket loop is a sensible follow-up and is not covered here.
+
+---
+
+## 22. Change log — secret rotation and Judge0 hardening
+
+### 22.1 Secret rotation
+
+`AUTH_JWT_SECRET` was rotated in place (32 bytes of `secrets.token_hex`), and
+the rotation was verified rather than assumed: a token signed with the previous
+secret is now rejected with 401. Existing sessions are invalidated, which is the
+intended effect.
+
+Confirmed the repository's own `.env` was **never committed** to any reachable
+history, so despite the GitHub remote these values were never pushed. Exposure
+is limited to the local filesystem.
+
+**Still requires the account owner** — cannot be done from here:
+`GROQ_API_KEY`, `ELEVENLABS_API_KEY`, and `QUIZ_API_KEY` must be revoked and
+reissued in their respective vendor dashboards. (`QUIZ_API_KEY` is real and used
+by `scripts/import_questions_from_apis.py`, not dead config.)
+
+### 22.2 A finding the original assessment got wrong
+
+The assessment claimed `.local/judge0/judge0-v1.13.1.zip` was "an empty stub
+zip", repeated it in three places, and recommended deleting it. **That was
+wrong.** The archive is the legitimate upstream Judge0 v1.13.1 release: it
+contains `judge0.conf` (12 KB) and `docker-compose.yml`, which is everything a
+Judge0 CE release ships — the images come from Docker Hub. The error came from
+reading a `file` output line describing the archive's *directory entry* as
+"uncompressed size 0" and taking it to describe the archive. Verified by
+extracting and diffing against the checked-in copy. Those three claims are now
+marked withdrawn.
+
+### 22.3 A finding the original assessment missed
+
+While checking the above, a genuine leak surfaced that earlier passes did not
+catch: **`.local/judge0/judge0-v1.13.1/judge0.conf` is tracked in git and
+contains real credentials** — specifically non-empty `REDIS_PASSWORD` and
+`POSTGRES_PASSWORD` values (deliberately not reproduced here; read them from the
+file itself or from commit `1f249f5`).
+
+Both ship blank upstream and were filled in locally. The file is present in the
+Initial commit (`1f249f5`), which is what `origin/main` points at — so unlike
+`.env`, **these are on the GitHub remote.**
+
+Fixed going forward: the file is untracked (`git rm --cached`) and gitignored,
+with the pristine template still available inside the release zip. The local
+copy is left intact so the running Judge0 is unaffected.
+
+**Not fixed, needs a decision:** the credentials remain in commit `1f249f5`.
+Removing them requires rewriting the Initial commit and force-pushing, which
+affects anyone who has cloned the repository. Rotating the two passwords is
+worthwhile regardless, since history rewriting does not un-publish anything
+already fetched.
+
+### 22.4 Judge0 stack hardening
+
+`docker-compose.judge0.yml` previously ran with authentication switched off
+outright (`AUTHN_HEADER=`, `AUTHN_TOKEN=`, commented "Disable authentication for
+local dev"), meaning anything that could reach the port could execute arbitrary
+code on the host.
+
+- Authentication is now **on by default**, via `AUTHN_HEADER=X-Auth-Token` and a
+  required `JUDGE0_AUTH_TOKEN`. The stack refuses to start if it is unset,
+  rather than silently coming up open.
+- The hardcoded `judge0password` / `judge0redispassword` values are replaced by
+  required environment variables.
+- The compose project is explicitly named `judge0`, so it can no longer collide
+  with the application stack (the same class of bug fixed in §19).
+- `privileged: true` is **kept, deliberately**, with the reasoning documented in
+  the file: Judge0 sandboxes runs with `isolate`, which needs cgroup and
+  namespace control unavailable otherwise. Removing it does not harden the
+  stack, it breaks execution. The correct mitigation is network isolation.
+
+The backend now sends the token: `JUDGE0_AUTH_HEADER` / `JUDGE0_AUTH_TOKEN` were
+added to `Judge0Settings` and are applied in `_open_json_request`. The token is
+**optional on the backend side** on purpose — an existing local Judge0 running
+without authentication keeps working, verified by re-running the DSA integration
+tests against the currently-running unauthenticated instance (2 passed).
+
+Suite: 171 passing throughout.

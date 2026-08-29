@@ -158,6 +158,11 @@ class Judge0Settings:
 	"""Settings for the self-hosted Judge0 execution service."""
 
 	api_base_url: str
+	# Authentication for the Judge0 instance. The header name must match
+	# AUTHN_HEADER in docker-compose.judge0.yml. Optional so an existing local
+	# Judge0 running without authentication keeps working.
+	auth_header: str
+	auth_token: str
 	python_language_id: int
 	cpp_language_id: int
 	java_language_id: int
@@ -265,6 +270,10 @@ class AppSettings:
 				.strip()
 				.rstrip("/")
 			),
+			auth_header=(
+				(source.get("JUDGE0_AUTH_HEADER") or "X-Auth-Token").strip()
+			),
+			auth_token=(source.get("JUDGE0_AUTH_TOKEN") or "").strip(),
 			python_language_id=_read_int(
 				source,
 				"JUDGE0_PYTHON_LANGUAGE_ID",
