@@ -1,24 +1,45 @@
-# Backend runtime dependencies
-accelerate>=0.31.0
-datasets
-edge-tts>=6.1.12
+# Backend runtime dependencies.
+#
+# Training-only packages (datasets, accelerate, peft) are NOT here — they are in
+# requirements-notebooks.txt. Nothing under backend/, tests/, or scripts/ imports
+# them, and they pull large transitive trees into the production image.
+#
+# Note on torch: sentence-transformers requires it. On Linux the default PyPI
+# wheel is the CUDA build (~2.5 GB). The Dockerfile installs the CPU-only wheel
+# from the PyTorch CPU index instead — see backend/Dockerfile.
+
+# Web framework
 fastapi==0.136.0
-faster-whisper==1.2.1
-groq==1.2.0
-huggingface_hub>=0.23.0
-numpy==2.4.4
-peft>=0.10.0
+uvicorn==0.45.0
+python-multipart==0.0.26
 pydantic==2.13.3
 email-validator>=2.0.0
+
+# Auth
 PyJWT==2.12.1
-PyMuPDF==1.27.2.2
+bcrypt>=4.0.0
+
+# Database
+pymongo>=4.6.0
+
+# Configuration
 python-dotenv==1.2.2
-python-multipart==0.0.26
+
+# LLM
+groq==1.2.0
+
+# Resume parsing
+PyMuPDF==1.27.2.2
+
+# Role matching / NLP
+sentence-transformers==5.4.1
+transformers>=4.44.2
+huggingface_hub>=0.23.0
 rank-bm25==0.2.2
 scikit-learn==1.8.0
-sentence-transformers==5.4.1
-bcrypt>=4.0.0
-transformers>=4.44.2
-uvicorn==0.45.0
+numpy==2.4.4
 vaderSentiment==3.3.2
-pymongo>=4.6.0
+
+# Voice
+faster-whisper==1.2.1
+edge-tts>=6.1.12

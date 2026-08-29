@@ -1,0 +1,84 @@
+# Full application stack: MongoDB + backend + frontend.
+#
+# Judge0 is a separate stack (docker-compose.judge0.yml) because it is optional
+# and only needed for the DSA round.
+#
+# Usage:
+#   cp .env.example .env      # then fill in AUTH_JWT_SECRET and GROQ_API_KEY
+#   docker compose up -d --build
+#
+# The frontend is served at http://127.0.0.1:5173 and the API at :8000.
+
+# Explicit project name. Without it, Compose derives the project from the
+# directory name — which docker-compose.judge0.yml also does, putting both
+# stacks in the same project. `docker compose down` here would then tear down a
+# running Judge0 as well. Naming this stack keeps the two independent.
+name: interview-simulator-app
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    # Not published to the host by default — only the backend needs to reach it.
+    # Uncomment to inspect with a local client during development.
+    # ports:
+    #   - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-interview_simulator}
+      # Required — compose fails fast with a clear message if it is unset,
+      # rather than letting the container start and crash on config validation.
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set in .env}
+      AUTH_JWT_EXPIRY_HOURS: ${AUTH_JWT_EXPIRY_HOURS:-24}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Deliberately NOT inheriting JUDGE0_API_BASE_URL from .env. That value is
+      # written for running the backend directly on the host, where Judge0 is at
+      # 127.0.0.1 — but inside this container 127.0.0.1 is the container itself,
+      # so Judge0 would be unreachable and the DSA round would fail.
+      #
+      # host.docker.internal resolves to the host (Docker Desktop natively, and
+      # on Linux via the extra_hosts entry below). Port 2359 matches the host
+      # mapping in docker-compose.judge0.yml ("2359:2358").
+      #
+      # Override with JUDGE0_URL_FROM_CONTAINER, not JUDGE0_API_BASE_URL.
+      JUDGE0_API_BASE_URL: ${JUDGE0_URL_FROM_CONTAINER:-http://host.docker.internal:2359}
+      TTS_PROVIDER: ${TTS_PROVIDER:-piper}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked in at build time — the browser calls the API directly, so this
+        # must be an address reachable from the BROWSER, not from inside the
+        # compose network.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8000}
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo-data:

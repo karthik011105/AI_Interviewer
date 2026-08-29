@@ -565,10 +565,29 @@ def is_non_technical_hr_question(question_text: str) -> bool:
 
 
 def has_valid_non_technical_hr_questions(questions_json: Mapping[str, Any] | None) -> bool:
+	"""Return True when a cached HR batch can be reused as-is.
+
+	This checks the *content* of the cached questions, not merely their shape.
+	A batch that has drifted technical — for example a cached round containing
+	"What is the difference between SQL and NoSQL databases?" — must be
+	regenerated, otherwise the candidate keeps being asked database trivia in
+	the HR round for the rest of the session.
+
+	The bar is ``is_non_technical_hr_question``, which is the same standard
+	generation already satisfies, so a properly generated batch is never
+	needlessly regenerated.
+	"""
+
 	if not isinstance(questions_json, Mapping):
 		return False
 	questions = questions_json.get("questions") or []
-	return bool(isinstance(questions, list) and len(questions) > 0)
+	if not isinstance(questions, list) or not questions:
+		return False
+	return all(
+		isinstance(item, Mapping)
+		and is_non_technical_hr_question(str(item.get("question") or ""))
+		for item in questions
+	)
 
 
 def _build_default_hr_questions(

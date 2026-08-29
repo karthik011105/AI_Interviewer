@@ -34,10 +34,18 @@ class TTSProviderTests(TestCase):
 	def test_elevenlabs_failure_falls_back_to_piper_for_streaming_chunks(self) -> None:
 		pcm_bytes = b"\x01\x00\x02\x00" * 16
 
+		# The provider chain for "elevenlabs" is (elevenlabs, edge, piper), so
+		# reaching piper requires edge to fail too. Before edge-tts was installed
+		# it failed implicitly with TTSUnavailableError, which is why this test
+		# previously passed while asserting a two-provider chain.
 		with patch.object(tts, "_TTS_PROVIDER", "elevenlabs"), patch.object(
 			tts,
 			"_synthesize_with_elevenlabs_audio",
 			side_effect=tts.TTSSynthesisError("elevenlabs failed"),
+		), patch.object(
+			tts,
+			"_synthesize_with_edge_audio",
+			side_effect=tts.TTSSynthesisError("edge failed"),
 		), patch.object(
 			tts,
 			"_synthesize_with_piper_audio",
@@ -62,6 +70,16 @@ class TTSProviderTests(TestCase):
 			},
 			clear=False,
 		), patch.object(tts, "_PIPER_EXE", "piper.exe"), patch.object(
+			# The module-level constants are frozen at import from the ambient
+			# environment (including a real .env). Config resolution does
+			# `os.environ.get(NAME) or _CONST`, so blanking the env var above is
+			# NOT enough to disable ElevenLabs — the falsy empty string falls
+			# through to the import-time value. Patch the constant directly so
+			# this test behaves the same with or without a populated .env.
+			tts,
+			"_ELEVENLABS_API_KEY",
+			"",
+		), patch.object(
 			tts,
 			"_resolve_model_path",
 			return_value=(Path("voice.onnx"), Path("voice.onnx.json")),

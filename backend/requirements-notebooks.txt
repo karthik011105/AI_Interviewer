@@ -1,0 +1,14 @@
+# Training / research dependencies for the Jupyter notebooks under notebooks/.
+#
+# These are deliberately NOT in requirements.txt: nothing under backend/, tests/,
+# or scripts/ imports them, and they pull large transitive trees that would bloat
+# the production image for no runtime benefit.
+#
+# Install alongside the runtime requirements when working on the notebooks:
+#   pip install -r backend/requirements.txt -r backend/requirements-notebooks.txt
+
+-r requirements.txt
+
+accelerate>=0.31.0
+datasets
+peft>=0.10.0

@@ -58,7 +58,7 @@ from backend.nlp.question_generator import (
 	has_valid_conceptual_technical_questions,
 )
 from backend.voice.stt import STTTranscriptionError, STTUnavailableError, transcribe_audio
-from backend.voice.tts import TTSSynthesisError, synthesize_chunks
+from backend.voice.tts import TTSSynthesisError, synthesize
 from backend.voice.vad import EnergyVAD
 
 router = APIRouter(prefix="/interview", tags=["interview"])

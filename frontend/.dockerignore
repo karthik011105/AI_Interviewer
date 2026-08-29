@@ -1,0 +1,17 @@
+# Build context excludes for the frontend image.
+# node_modules is rebuilt inside the image via `npm ci`, and copying the host
+# copy would both slow the build and risk platform-specific binaries leaking in.
+
+node_modules/
+dist/
+build/
+
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+*.md
+Dockerfile
+.dockerignore

@@ -1,0 +1,42 @@
+# Build context excludes for the backend image (built from the repo root).
+# Keeping these out matters for both speed and safety: .env holds live secrets
+# and must never be baked into a layer.
+#
+# Leading slashes pin these to the repository root on purpose. A bare `data/`
+# would be ambiguous, and backend/data/ MUST be kept — it holds the assessment
+# question bank, the certified DSA problem bank, and the Piper voice model, all
+# of which are read at runtime.
+
+.env
+.env.*
+!.env.example
+
+/.git
+/.gitignore
+/.github
+
+/.venv/
+venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.code-review-graph/
+
+/frontend/
+/notebooks/
+/models/
+/scripts/
+/tests/
+/data/
+/.local/
+/.kilo/
+/.claude/
+/.vscode/
+
+*.md
+!backend/README.md
+
+/sample_resume.pdf
+/docker-compose*.yml
+/cleanup_unused_files.py
+/smoke_test.py
