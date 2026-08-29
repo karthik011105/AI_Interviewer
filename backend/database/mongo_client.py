@@ -60,6 +60,13 @@ class MongoRepository:
 		)
 		self.db.dsa_sessions.create_index("session_id")
 		self.db.final_reports.create_index("session_id", unique=True)
+		# Revoked access tokens, keyed by the JWT's jti claim. expires_at carries
+		# the token's own exp, and the TTL index below lets MongoDB drop each
+		# entry once the token would have expired anyway — so the collection
+		# stays bounded without a cleanup job. expireAfterSeconds=0 means "expire
+		# at the time stored in this field".
+		self.db.revoked_tokens.create_index("jti", unique=True)
+		self.db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
 		self.db.interview_round_sessions.create_index(
 			[("session_id", 1), ("round", 1)], unique=True
 		)
@@ -156,6 +163,34 @@ class MongoRepository:
 		"""Delete matching records."""
 		result = self.db[collection_name].delete_many(self._map_filters(filters))
 		return result.deleted_count
+
+	def revoke_token(self, *, jti: str, user_id: str, expires_at: Any) -> None:
+		"""Record an access token as revoked.
+
+		Idempotent: revoking an already-revoked token is a no-op rather than an
+		error, so a client retrying a logout does not get a 500.
+		"""
+		self.db.revoked_tokens.update_one(
+			{"jti": jti},
+			{
+				"$set": {
+					"jti": jti,
+					"user_id": user_id,
+					"expires_at": expires_at,
+					"revoked_at": _utcnow_iso(),
+				}
+			},
+			upsert=True,
+		)
+
+	def is_token_revoked(self, *, jti: str) -> bool:
+		"""Return True when this token has been revoked.
+
+		MongoDB's TTL monitor only runs about once a minute, so an entry can
+		outlive its expires_at briefly. That direction is harmless — a token
+		past its own exp is already rejected by signature verification.
+		"""
+		return self.db.revoked_tokens.find_one({"jti": jti}, {"_id": 1}) is not None
 
 	def create_session(
 		self,

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NoReturn
 
 import bcrypt
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pymongo.errors import DuplicateKeyError
 
@@ -163,6 +165,9 @@ def _create_jwt(user_id: str, email: str) -> str:
 		"email": email,
 		"iat": now,
 		"exp": now + timedelta(hours=auth_settings.jwt_expiry_hours),
+		# Unique token id, so an individual token can be revoked on logout
+		# without invalidating the user's other sessions.
+		"jti": uuid.uuid4().hex,
 	}
 	return jwt.encode(
 		payload,
@@ -262,6 +267,68 @@ def login(request: LoginRequest, http_request: Request) -> dict[str, str]:
 
 	failure_tracker.reset(email)
 	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
+
+
+@router.post("/logout")
+def logout(
+	credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer(auto_error=False)),
+	current_user: AuthenticatedUser = Depends(require_current_user),
+) -> dict[str, object]:
+	"""Revoke the presented access token.
+
+	Before this existed, signing out only cleared the client's copy of the token
+	— the token itself stayed valid until it expired, so a stolen one could not
+	be invalidated. Revocation is recorded server-side and checked on every
+	subsequent request.
+
+	Only the presented token is revoked, so signing out on one device leaves the
+	user's other sessions alone.
+	"""
+
+	token = credentials.credentials if credentials else ""
+	auth_settings = get_settings().auth
+	try:
+		payload = jwt.decode(
+			token,
+			auth_settings.jwt_secret,
+			algorithms=[auth_settings.jwt_algorithm],
+		)
+	except jwt.InvalidTokenError:
+		# require_current_user already validated this token, so reaching here
+		# means something raced. Nothing to revoke.
+		return {"revoked": False, "detail": "Token could not be read."}
+
+	token_id = str(payload.get("jti") or "").strip()
+	if not token_id:
+		# Issued before revocation support existed. It stays valid until it
+		# expires; there is no id to revoke it by.
+		return {
+			"revoked": False,
+			"detail": "This token predates revocation support and will expire on its own.",
+		}
+
+	expires_at = payload.get("exp")
+	try:
+		expiry = (
+			datetime.fromtimestamp(int(expires_at), tz=timezone.utc)
+			if expires_at is not None
+			else datetime.now(timezone.utc) + timedelta(hours=auth_settings.jwt_expiry_hours)
+		)
+		get_repository().revoke_token(
+			jti=token_id,
+			user_id=current_user.user_id,
+			expires_at=expiry,
+		)
+	except Exception as exc:
+		# Failing to record the revocation must be visible, not silently
+		# swallowed — the caller believes they are signed out.
+		_LOGGER.exception("Failed to revoke token for user %s.", current_user.user_id)
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Could not complete sign-out. Please try again.",
+		) from exc
+
+	return {"revoked": True}
 
 
 @router.get("/status")

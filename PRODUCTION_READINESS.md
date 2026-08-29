@@ -66,7 +66,7 @@ wrong backing services, ten test modules failing to import, three scripts broken
 and — most seriously — an auth client that only worked under the Vite dev proxy.
 All of this is fixed; see §17.
 
-**[RESOLVED] Authentication has been hardened** — rate limiting, per-account lockout, a password policy, the signup race, user-enumeration resistance, and a 48-test suite where there was previously none (§18). What remains open in auth is email verification, password reset, and token revocation.
+**[RESOLVED] Authentication has been hardened** — rate limiting, per-account lockout, a password policy, the signup race, user-enumeration resistance, and a test suite where there was previously none (§18), plus server-side token revocation so signing out actually invalidates a token (§24). What remains open in auth is email verification and password reset, both of which need an email provider to be chosen first.
 
 **[RESOLVED] A deployment story now exists** — Dockerfiles for both services, a compose stack, a POSIX startup script, and a CI pipeline (§19). Both images build (847 MB backend, 74.7 MB frontend) and the full stack was exercised end to end: health checks, a signup/login round-trip against containerised MongoDB, Judge0 reachable from the backend container, rate limiting returning 429 with `Retry-After`, and secrets confirmed absent from the image. Running it turned up three further bugs that syntax checking could not have found (§19). CI itself has not yet run.
 
@@ -76,7 +76,7 @@ The largest remaining risks are:
 
 1. **Secrets still need rotating** (§0) — unchanged, and the only item outstanding since the first assessment.
 2. **[RESOLVED] Judge0 hardening** — authentication is now enabled and all hardcoded infrastructure passwords are parameterised (§22). **Still open:** Judge0 credentials were committed to the repository and are on the GitHub remote; they need rotating, and removing them from history requires a force-push (§22).
-3. **No email verification, password reset, or token revocation** (§4).
+3. **No email verification or password reset** (§4) — both blocked on choosing an email provider. Token revocation is done (§24).
 
 None of this is unusual for a project at this stage — but it means "production" is a real project, not a config change.
 
@@ -822,3 +822,47 @@ well-formed `quota_exceeded` frame once spent, and leaves the runtime in
 `LISTENING`. The same mutation now fails 2 tests.
 
 Suite: 171 -> 178 passing.
+
+---
+
+## 24. Change log — token revocation
+
+Signing out previously only cleared the browser's copy of the JWT. The token
+itself stayed valid for its full 24-hour life, so a captured token could not be
+invalidated by any means short of rotating the signing secret and thereby
+signing out every user at once.
+
+Implemented as a MongoDB denylist:
+
+- Issued tokens now carry a `jti` claim (a unique token id).
+- `POST /auth/logout` decodes the presented token and records its `jti` in a
+  `revoked_tokens` collection, along with the token's own `exp`.
+- `authenticate_access_token` checks that denylist on every request.
+- A TTL index on `expires_at` (`expireAfterSeconds=0`) lets MongoDB drop each
+  entry exactly when the token would have expired anyway, so the collection
+  stays bounded with no cleanup job.
+- The frontend now awaits a real `/auth/logout` call before clearing local
+  state, and swallows network failures so a user is never trapped in a
+  signed-in UI.
+
+Only the presented token is revoked, so signing out on one device leaves the
+user's other sessions intact.
+
+### Deliberate trade-offs
+
+- **Tokens without a `jti` still authenticate.** Rejecting them would sign out
+  every existing session the moment this deploys. They simply cannot be revoked
+  individually until reissued at next sign-in.
+- **A revocation-lookup failure allows the request.** If MongoDB is unreachable,
+  the check returns "not revoked" rather than denying. Failing closed would lock
+  every authenticated user out of the entire application on any database blip;
+  the exposure window is bounded by the token's own expiry, and any route that
+  touches data needs the database anyway and will fail there instead. Covered by
+  a test so the behaviour is intentional rather than incidental.
+- **A failed revocation returns 503, not success.** The user believes they are
+  signed out, so a storage failure must be visible rather than swallowed.
+
+Both protections were mutation-tested: bypassing the revocation check, and
+removing the `jti` from issued tokens, each fail the suite.
+
+Suite: 178 -> 185 passing.

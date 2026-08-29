@@ -714,3 +714,120 @@ class AuthHttpLayerTests(_AuthTestBase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertFalse(response.json()["authenticated"])
+
+
+class TokenRevocationTests(_AuthTestBase):
+	"""Signing out must actually invalidate the token server-side.
+
+	Before revocation existed, logout only cleared the client's copy: a captured
+	token stayed valid until it expired and could not be invalidated at all.
+	"""
+
+	def _token(self, **overrides: object) -> tuple[str, str]:
+		"""Return (encoded token, its jti)."""
+		import uuid as _uuid
+
+		now = datetime.now(timezone.utc)
+		token_id = _uuid.uuid4().hex
+		payload: dict[str, object] = {
+			"sub": "user-1",
+			"email": "user@example.com",
+			"iat": now,
+			"exp": now + timedelta(hours=1),
+			"jti": token_id,
+		}
+		payload.update(overrides)
+		return jwt.encode(payload, _TEST_SECRET, algorithm="HS256"), token_id
+
+	def test_issued_tokens_carry_a_unique_jti(self) -> None:
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = None
+		repo.insert_one.return_value = {"id": "user-1", "email": "user@example.com"}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			first = routes_auth.signup(
+				routes_auth.SignupRequest(email="a@example.com", password="password123"),
+				_make_request(),
+			)["access_token"]
+			second = routes_auth.signup(
+				routes_auth.SignupRequest(email="b@example.com", password="password123"),
+				_make_request(),
+			)["access_token"]
+
+		jti_a = jwt.decode(first, _TEST_SECRET, algorithms=["HS256"])["jti"]
+		jti_b = jwt.decode(second, _TEST_SECRET, algorithms=["HS256"])["jti"]
+		self.assertTrue(jti_a and jti_b)
+		self.assertNotEqual(jti_a, jti_b, "each token needs its own id to be revocable")
+
+	def test_a_revoked_token_is_rejected(self) -> None:
+		token, _ = self._token()
+		with patch("backend.api.auth._is_token_revoked", return_value=True):
+			with self.assertRaises(HTTPException) as context:
+				authenticate_access_token(token)
+
+		self.assertEqual(context.exception.status_code, 401)
+		self.assertIn("signed out", context.exception.detail)
+
+	def test_a_live_token_is_still_accepted(self) -> None:
+		token, _ = self._token()
+		with patch("backend.api.auth._is_token_revoked", return_value=False):
+			user = authenticate_access_token(token)
+
+		self.assertEqual(user.user_id, "user-1")
+
+	def test_logout_records_the_revocation(self) -> None:
+		token, token_id = self._token()
+		repo = MagicMock()
+		credentials = MagicMock()
+		credentials.credentials = token
+		user = AuthenticatedUser(user_id="user-1", email="u@example.com", raw_user={})
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			result = routes_auth.logout(credentials, user)
+
+		self.assertTrue(result["revoked"])
+		repo.revoke_token.assert_called_once()
+		kwargs = repo.revoke_token.call_args.kwargs
+		self.assertEqual(kwargs["jti"], token_id)
+		self.assertEqual(kwargs["user_id"], "user-1")
+		# expires_at must be the token's own exp, so the TTL index can drop the
+		# row exactly when the token would have died anyway.
+		self.assertIsInstance(kwargs["expires_at"], datetime)
+
+	def test_logout_surfaces_a_storage_failure(self) -> None:
+		"""A failed revocation must not report success -- the user believes they are out."""
+		token, _ = self._token()
+		repo = MagicMock()
+		repo.revoke_token.side_effect = RuntimeError("mongo down")
+		credentials = MagicMock()
+		credentials.credentials = token
+		user = AuthenticatedUser(user_id="user-1", email="u@example.com", raw_user={})
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			with self.assertRaises(HTTPException) as context:
+				routes_auth.logout(credentials, user)
+
+		self.assertEqual(context.exception.status_code, 503)
+
+	def test_tokens_without_a_jti_still_authenticate(self) -> None:
+		"""Tokens issued before revocation existed must not be invalidated on deploy."""
+		now = datetime.now(timezone.utc)
+		legacy = jwt.encode(
+			{"sub": "user-1", "email": "u@example.com", "iat": now, "exp": now + timedelta(hours=1)},
+			_TEST_SECRET,
+			algorithm="HS256",
+		)
+
+		user = authenticate_access_token(legacy)
+		self.assertEqual(user.user_id, "user-1")
+
+	def test_revocation_lookup_failure_does_not_lock_everyone_out(self) -> None:
+		"""A database blip must not deny every authenticated request."""
+		token, _ = self._token()
+		with patch(
+			"backend.database.mongo_client.get_repository",
+			side_effect=RuntimeError("mongo down"),
+		):
+			user = authenticate_access_token(token)
+
+		self.assertEqual(user.user_id, "user-1")

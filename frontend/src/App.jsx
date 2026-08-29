@@ -676,7 +676,10 @@ export default function App() {
 			busyAction: "sign-out",
 			errorMessage: "",
 		}));
-		authClient.logout();
+		// Awaited so the server-side revocation is issued before the UI clears
+		// local state; authClient.logout swallows network failures itself, so
+		// this cannot leave the user stuck on the signing-out state.
+		await authClient.logout();
 		setWorkflowState((current) => ({
 			...current,
 			sessionId: "",

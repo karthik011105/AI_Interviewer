@@ -7,6 +7,7 @@ verification, the bearer-token dependencies, and session-ownership checks.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ import jwt
 from backend.config import get_settings
 from backend.database.db_errors import DatabaseClientError
 
+_LOGGER = logging.getLogger(__name__)
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -65,6 +67,30 @@ def serialize_authenticated_user(current_user: AuthenticatedUser) -> dict[str, A
 	}
 
 
+def _is_token_revoked(token_id: str) -> bool:
+	"""Return True when this token id appears in the revocation denylist.
+
+	Imported lazily to keep this module importable without a database — several
+	helpers here (and their tests) do pure token work with no Mongo available.
+
+	A database failure is treated as "not revoked" rather than failing the
+	request. That is a deliberate availability trade-off: the alternative locks
+	every authenticated user out of the application whenever MongoDB blips. The
+	exposure window is bounded by the token's own expiry, and every route that
+	touches data needs the database anyway, so it will fail there instead.
+	"""
+
+	try:
+		from backend.database.mongo_client import get_repository
+
+		return get_repository().is_token_revoked(jti=token_id)
+	except Exception:
+		_LOGGER.exception(
+			"Could not check the token revocation list; allowing the request."
+		)
+		return False
+
+
 def authenticate_access_token(access_token: str) -> AuthenticatedUser:
 	trimmed = str(access_token or "").strip()
 	if not trimmed:
@@ -85,6 +111,17 @@ def authenticate_access_token(access_token: str) -> AuthenticatedUser:
 		if not user_id:
 			raise ValueError("Invalid JWT payload: missing sub")
 
+		# Reject tokens that have been explicitly revoked (logout). Tokens issued
+		# before revocation existed carry no jti; those are still accepted, since
+		# refusing them would sign out every existing session on deploy. They
+		# simply cannot be revoked individually until reissued at next sign-in.
+		token_id = str(payload.get("jti") or "").strip()
+		if token_id and _is_token_revoked(token_id):
+			raise HTTPException(
+				status_code=status.HTTP_401_UNAUTHORIZED,
+				detail="This session has been signed out.",
+			)
+
 		email = str(payload.get("email") or "").strip() or None
 		
 		# Build a payload that matches what the rest of the code expects
@@ -99,6 +136,11 @@ def authenticate_access_token(access_token: str) -> AuthenticatedUser:
 		
 		return AuthenticatedUser(user_id=user_id, email=email, raw_user=user_payload)
 		
+	except HTTPException:
+		# Already a considered auth failure (e.g. a revoked token). Let it through
+		# rather than letting the catch-all below flatten it into a generic
+		# message that hides why the token was refused.
+		raise
 	except jwt.ExpiredSignatureError as exc:
 		raise HTTPException(
 			status_code=status.HTTP_401_UNAUTHORIZED,

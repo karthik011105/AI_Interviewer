@@ -46,7 +46,22 @@ export const authClient = {
     return data;
   },
 
-  logout: () => {
+  logout: async () => {
+    const token = authClient.getToken();
+    // Tell the server to revoke this token, so it cannot be reused if it was
+    // captured. Clearing it locally alone leaves it valid until it expires.
+    if (token) {
+      try {
+        await fetch(`${API_BASE_URL}/auth/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // Network failure must not trap the user in a signed-in UI. The local
+        // token is cleared regardless; it stays valid server-side until it
+        // expires, which is the same exposure as before revocation existed.
+      }
+    }
     authClient.clearToken();
   },
 
