@@ -142,10 +142,42 @@ class MongoSettings:
 
 @dataclass(frozen=True, slots=True)
 class AuthSettings:
-	"""Authentication settings."""
+	"""Authentication, password-policy, and abuse-protection settings."""
+
 	jwt_secret: str
 	jwt_algorithm: str
 	jwt_expiry_hours: int
+	# Password policy. The maximum is a byte length, not a character count,
+	# because bcrypt rejects secrets longer than 72 bytes outright — a 30
+	# character emoji or CJK password already exceeds that.
+	password_min_length: int
+	password_max_bytes: int
+	# Per-client-IP request budget applied across the auth routes.
+	rate_limit_max_attempts: int
+	rate_limit_window_seconds: int
+	# Per-account backoff applied after consecutive failed sign-in attempts.
+	login_max_failures: int
+	login_lockout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaSettings:
+	"""Per-user spend caps on the routes that cost real money.
+
+	These exist to bound cost, not to stop abuse in the security sense — the auth
+	throttles in AuthSettings do that. Every route below either calls a paid LLM
+	API or consumes sandboxed compute, so an unbounded caller can run up a bill
+	without doing anything that looks like an attack.
+
+	All windows are one hour. Counters are per-process, with the same scaling
+	caveat as the auth throttles (see backend/api/rate_limit.py).
+	"""
+
+	resume_parse_max_per_hour: int
+	role_match_max_per_hour: int
+	dsa_execution_max_per_hour: int
+	voice_max_per_hour: int
+	quota_window_seconds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +189,7 @@ class AppSettings:
 	judge0: Judge0Settings
 	mongo: MongoSettings
 	auth: AuthSettings
+	quotas: QuotaSettings
 	allow_local_resume_path_api: bool
 
 	@classmethod
@@ -311,6 +344,86 @@ class AppSettings:
 			jwt_secret=auth_jwt_secret,
 			jwt_algorithm=(source.get("AUTH_JWT_ALGORITHM") or "HS256").strip(),
 			jwt_expiry_hours=_read_int(source, "AUTH_JWT_EXPIRY_HOURS", 24, minimum=1),
+			password_min_length=_read_int(
+				source,
+				"AUTH_PASSWORD_MIN_LENGTH",
+				8,
+				minimum=8,
+			),
+			password_max_bytes=_read_int(
+				source,
+				"AUTH_PASSWORD_MAX_BYTES",
+				72,
+				minimum=8,
+			),
+			rate_limit_max_attempts=_read_int(
+				source,
+				"AUTH_RATE_LIMIT_MAX_ATTEMPTS",
+				10,
+				minimum=1,
+			),
+			rate_limit_window_seconds=_read_int(
+				source,
+				"AUTH_RATE_LIMIT_WINDOW_SECONDS",
+				60,
+				minimum=1,
+			),
+			login_max_failures=_read_int(
+				source,
+				"AUTH_LOGIN_MAX_FAILURES",
+				5,
+				minimum=1,
+			),
+			login_lockout_seconds=_read_int(
+				source,
+				"AUTH_LOGIN_LOCKOUT_SECONDS",
+				300,
+				minimum=1,
+			),
+		)
+
+		if auth_settings.password_max_bytes > 72:
+			raise ConfigurationError(
+				"AUTH_PASSWORD_MAX_BYTES cannot exceed 72 because bcrypt rejects "
+				"longer secrets."
+			)
+		if auth_settings.password_min_length > auth_settings.password_max_bytes:
+			raise ConfigurationError(
+				"AUTH_PASSWORD_MIN_LENGTH must be less than or equal to "
+				"AUTH_PASSWORD_MAX_BYTES."
+			)
+
+		quota_settings = QuotaSettings(
+			resume_parse_max_per_hour=_read_int(
+				source,
+				"QUOTA_RESUME_PARSE_PER_HOUR",
+				10,
+				minimum=1,
+			),
+			role_match_max_per_hour=_read_int(
+				source,
+				"QUOTA_ROLE_MATCH_PER_HOUR",
+				20,
+				minimum=1,
+			),
+			dsa_execution_max_per_hour=_read_int(
+				source,
+				"QUOTA_DSA_EXECUTION_PER_HOUR",
+				60,
+				minimum=1,
+			),
+			voice_max_per_hour=_read_int(
+				source,
+				"QUOTA_VOICE_PER_HOUR",
+				200,
+				minimum=1,
+			),
+			quota_window_seconds=_read_int(
+				source,
+				"QUOTA_WINDOW_SECONDS",
+				3600,
+				minimum=1,
+			),
 		)
 
 		return cls(
@@ -319,6 +432,7 @@ class AppSettings:
 			judge0=judge0_settings,
 			mongo=mongo_settings,
 			auth=auth_settings,
+			quotas=quota_settings,
 			allow_local_resume_path_api=_read_bool(
 				source,
 				"ENABLE_LOCAL_RESUME_PATH_API",
