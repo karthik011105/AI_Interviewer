@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
+from backend.api.quotas import DSA_EXECUTION, quota_dependency
 from backend.database.queries import (
 	append_dsa_submission,
 	complete_dsa_session,
@@ -303,7 +304,8 @@ def get_dsa_session_route(
 @router.post("/run")
 def run_dsa_code(
 	request: DSARunRequest,
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: each call compiles and runs untrusted code in Judge0.
+	current_user: AuthenticatedUser = Depends(quota_dependency(DSA_EXECUTION)),
 ) -> dict[str, Any]:
 	record, problem = _require_dsa_record(
 		session_id=request.session_id,
@@ -365,7 +367,8 @@ def run_dsa_code(
 @router.post("/submit")
 def submit_dsa_code(
 	request: DSASubmitRequest,
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: runs the full hidden-test suite through Judge0.
+	current_user: AuthenticatedUser = Depends(quota_dependency(DSA_EXECUTION)),
 ) -> dict[str, Any]:
 	record, problem = _require_dsa_record(
 		session_id=request.session_id,

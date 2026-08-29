@@ -18,6 +18,7 @@ from backend.api.auth import (
 	require_current_user,
 	resolve_authenticated_user_id,
 )
+from backend.api.quotas import RESUME_PARSE, ROLE_MATCH, quota_dependency
 from backend.assessment import normalize_assessment_role_key
 from backend.config import ConfigurationError, get_settings
 from backend.database.queries import (
@@ -108,7 +109,9 @@ async def parse_resume_upload(
 	persist_role_matches: bool = Form(True),
 	max_roles: int = Form(5),
 	persist_interview_contexts: bool = Form(True),
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: this route runs a full-resume Groq extraction, the most expensive
+	# single LLM call in the application.
+	current_user: AuthenticatedUser = Depends(quota_dependency(RESUME_PARSE)),
 ) -> dict[str, object]:
 	filename = (resume_file.filename or "resume.pdf").strip()
 	if not filename.lower().endswith(".pdf"):
@@ -303,7 +306,7 @@ def _parse_resume_request(
 	response["role_selection_required"] = bool(response.get("related_job_roles")) and not bool(request.role_selected)
 	response["role_selection_endpoint"] = "/resume/select-role"
 
-	# Persist contexts to Supabase when the resume itself is being persisted.
+	# Persist contexts to MongoDB when the resume itself is being persisted.
 	if request.persist_resume and request.persist_interview_contexts:
 		try:
 			save_interview_contexts(session_id, round_contexts)
@@ -340,7 +343,8 @@ def _parse_resume_request(
 @router.post("/match-roles")
 def match_roles(
 	request: RoleMatchRequest,
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: role matching optionally builds Groq-backed role profiles.
+	current_user: AuthenticatedUser = Depends(quota_dependency(ROLE_MATCH)),
 ) -> dict[str, object]:
 	_require_accessible_session(request.session_id, current_user)
 	try:

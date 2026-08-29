@@ -20,7 +20,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from backend.api.auth import AuthenticatedUser, require_current_user
+from backend.api.auth import AuthenticatedUser
+from backend.api.quotas import VOICE, quota_dependency
 from backend.voice.stt import STTTranscriptionError, STTUnavailableError, TranscribeResult, stt_health, transcribe_audio
 from backend.voice.tts import TTSSynthesisError, synthesize, tts_health
 
@@ -70,7 +71,8 @@ def voice_health() -> dict[str, Any]:
 @router.post("/tts", response_model=TTSResponse)
 def text_to_speech(
 	request: TTSRequest,
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: ElevenLabs is billed per character when it is the active provider.
+	current_user: AuthenticatedUser = Depends(quota_dependency(VOICE)),
 ) -> TTSResponse:
 	"""Synthesize text to WAV audio.
 
@@ -98,7 +100,8 @@ def text_to_speech(
 @router.post("/stt", response_model=STTResponse)
 def speech_to_text(
 	request: STTRequest,
-	current_user: AuthenticatedUser = Depends(require_current_user),
+	# Metered: transcription is CPU-bound work on the server.
+	current_user: AuthenticatedUser = Depends(quota_dependency(VOICE)),
 ) -> STTResponse:
 	"""Transcribe an audio blob to text using faster-whisper.
 
