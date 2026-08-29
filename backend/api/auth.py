@@ -1,4 +1,9 @@
-"""Supabase Auth helpers for FastAPI routes."""
+"""Authentication helpers for FastAPI routes.
+
+Tokens are self-issued HS256 JWTs signed with ``AUTH_JWT_SECRET`` (see
+``backend/api/routes_auth.py`` for signup/login issuance). This module handles
+verification, the bearer-token dependencies, and session-ownership checks.
+"""
 
 from __future__ import annotations
 

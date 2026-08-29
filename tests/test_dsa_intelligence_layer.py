@@ -4,7 +4,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from backend.api import routes_dsa
-from backend.database.supabase_client import DSAStage, build_default_candidate_model, build_default_dsa_state
+from backend.database.db_errors import DSAStage, build_default_candidate_model, build_default_dsa_state
 from backend.dsa.code_analyzer import analyze_submission_code
 from backend.dsa.interview_brain import apply_message_intelligence
 from backend.dsa.problem_selector import CertifiedProblem, HiddenTestCase, ProblemExample

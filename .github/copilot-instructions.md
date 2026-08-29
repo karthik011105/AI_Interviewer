@@ -42,7 +42,7 @@ Code Exec : Judge0 self-hosted via Docker in WSL2
 
 ## Technology Stack
 Backend         : FastAPI (async orchestration)
-Database        : Supabase (authoritative state, storage, auth-ready)
+Database        : MongoDB (authoritative state and storage)
 Resume parsing  : PyMuPDF text extraction + Groq structured JSON extraction
 Role matching   : SBERT all-MiniLM-L6-v2
 LLM calls       : Groq free tier with batching, retry, and backoff
@@ -62,7 +62,7 @@ Recommended minimum machine for full local mode:
 - 16 GB RAM
 - 6 logical CPU cores
 - SSD
-- Stable internet for Groq and Supabase
+- Stable internet for Groq (and for MongoDB Atlas, if not running Mongo locally)
 
 Operational capacity in MVP:
 - 1 active interview session per machine
@@ -73,7 +73,7 @@ Operational capacity in MVP:
 Runtime layout:
 - Windows host: browser, VS Code, microphone, speaker
 - WSL2 Ubuntu: FastAPI, STT worker, TTS worker, Judge0 Docker stack
-- Supabase cloud: session persistence and reports
+- MongoDB: session persistence and reports
 - Groq API: question generation and evaluation
 
 Resource policy:
@@ -89,7 +89,7 @@ User uploads PDF resume
 -> Text extraction with PyMuPDF
 -> Validation gate for encrypted, scanned, or low-text PDFs
 -> Groq structured JSON extraction
--> Parsed resume JSON saved to Supabase
+-> Parsed resume JSON saved to MongoDB
 -> Role matching using SBERT + Groq-generated role profiles
 -> Assessment round with backend-scored MCQs
 -> HR interview round (turn-based voice)
@@ -108,7 +108,7 @@ Voice round interaction flow:
 - Next prompt prepared
 
 DSA round interaction flow:
-- Problem state loaded from Supabase
+- Problem state loaded from MongoDB
 - Prompt displayed immediately
 - Optional TTS playback for instructions only
 - User discusses approach
@@ -160,7 +160,7 @@ PDF uploaded by user
    - extraction succeeds -> continue
 -> Groq prompt requests strict JSON only
 -> JSON cleanup and schema validation
--> Parsed resume JSON saved to Supabase with session_id
+-> Parsed resume JSON saved to MongoDB with session_id
 -> Data reused in role matching, question generation, project discussion, and final report
 
 ### Extraction Schema
@@ -216,7 +216,7 @@ Every Groq response that is expected to be JSON must go through a common cleanup
 ## Module 2 - Role Matching
 
 ### Flow
-Resume JSON fetched from Supabase
+Resume JSON fetched from MongoDB
 -> Candidate text built from summary, skills, technologies, projects, and certifications
 -> Groq generates a small set of candidate-fit role profiles
 -> SBERT encodes candidate text and role descriptions
@@ -225,7 +225,7 @@ Resume JSON fetched from Supabase
    - semantic_match: 35%
    - project_relevance: 15%
    - bonus_skills: 10%
--> Roles ranked and saved to Supabase
+-> Roles ranked and saved to MongoDB
 
 ### Feasibility Rules
 - Role generation should happen in one Groq call, not one call per role
@@ -283,7 +283,7 @@ User speaks
 -> SBERT compares user answer to ideal answer points
 -> Lightweight communication metrics run locally
 -> final score = Groq rubric 70% + SBERT similarity 20% + communication 10%
--> score and feedback saved to Supabase
+-> score and feedback saved to MongoDB
 
 ### Voice Reality Rules
 - HR and Technical answers capped at 20 seconds
@@ -367,7 +367,7 @@ User submits code
 -> code harness builder wraps the user solution and all test cases
 -> one Judge0 submission executes the full harness and returns per-test JSON
 -> result parser stores pass/fail counts, timing, memory, and visible failure details
--> all results persisted to Supabase
+-> all results persisted to MongoDB
 
 #### Execution Rules
 - Never send one Judge0 job per hidden test case
@@ -380,7 +380,7 @@ User submits code
 #### Single Source of Truth
 The backend state machine is authoritative.
 WebSocket is transport only.
-State must persist to Supabase after every meaningful transition.
+State must persist to MongoDB after every meaningful transition.
 
 #### Persisted State Requirements
 Store in `dsa_sessions.state_json`:
@@ -639,7 +639,7 @@ interview_simulator/
 │   │   └── tts.py
 │   ├── database/
 │   │   ├── __init__.py
-│   │   ├── supabase_client.py
+│   │   ├── mongo_client.py
 │   │   └── queries.py
 │   └── data/
 │       └── problems/
@@ -685,7 +685,7 @@ All current module files are scaffolds only.
 No runtime logic should be assumed complete until each subsystem is built and validated.
 
 ### Immediate Build Order
-1. backend/database/supabase_client.py
+1. backend/database/mongo_client.py
 2. backend/nlp/resume_parser.py
 3. backend/nlp/role_matcher.py
 4. backend/nlp/question_generator.py
@@ -707,10 +707,10 @@ Resume parsing  : PyMuPDF + Groq LLM, not custom NER
 Voice STT       : faster-whisper, not standard Whisper CPU flow
 Voice TTS       : Piper TTS, not gTTS
 Runtime         : WSL2 backend on Windows host
-Database        : Supabase from the start, not SQLite-first migration
+Database        : MongoDB via pymongo (migrated from an earlier Supabase build)
 Code execution  : Judge0 self-hosted, sandboxed
 DSA languages   : Python only in MVP
-DSA state       : Supabase-backed authoritative state machine
+DSA state       : MongoDB-backed authoritative state machine
 Problem validation: Judge0 sandbox, never backend `exec()` on generated code
 DSA evaluation  : 5 separate Groq calls in parallel, not one big prompt
 

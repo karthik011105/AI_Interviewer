@@ -1282,7 +1282,7 @@ def get_or_generate_questions(
 		round: One of ``"hr"``, ``"technical"``, or ``"project_discussion"``.
 		context: The round-specific context dict from ``interview_context.py``.
 		settings: Groq settings; resolved from env when omitted.
-		cached_questions_json: Existing ``questions_json`` from Supabase (may be None).
+		cached_questions_json: Existing ``questions_json`` from MongoDB (may be None).
 		difficulty_signal: Used only for the technical round.
 
 	Returns:

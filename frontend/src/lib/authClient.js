@@ -1,10 +1,15 @@
+// Resolved the same way as every page-level request (see App.jsx), so auth works
+// in a production build too. A relative "/api/..." path would only resolve via the
+// Vite dev-server proxy and would 404 once the frontend is served as static files.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
 export const authClient = {
   getToken: () => localStorage.getItem("jwt_token"),
   setToken: (token) => localStorage.setItem("jwt_token", token),
   clearToken: () => localStorage.removeItem("jwt_token"),
 
   signup: async (email, password) => {
-    const response = await fetch("/api/auth/signup", {
+    const response = await fetch(`${API_BASE_URL}/auth/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -23,7 +28,7 @@ export const authClient = {
   },
 
   login: async (email, password) => {
-    const response = await fetch("/api/auth/login", {
+    const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -50,7 +55,7 @@ export const authClient = {
     if (!token) return { data: { session: null } };
 
     try {
-      const response = await fetch("/api/auth/status", {
+      const response = await fetch(`${API_BASE_URL}/auth/status`, {
         headers: {
           Authorization: `Bearer ${token}`
         }

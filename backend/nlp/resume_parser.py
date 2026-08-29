@@ -250,7 +250,7 @@ def _enrich_with_ner(raw_text: str, parsed_resume: dict[str, Any]) -> dict[str, 
 
 	The results are added under ``ner_extraction`` and ``skill_validation`` keys
 	in the parsed resume dict and stored alongside the Groq-extracted fields in
-	Supabase.  Extraction never overwrites the main skills/technologies lists so
+	MongoDB.  Extraction never overwrites the main skills/technologies lists so
 	the Groq output remains authoritative.
 	"""
 	import logging

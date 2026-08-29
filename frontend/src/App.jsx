@@ -506,7 +506,6 @@ export default function App() {
 		status: "loading",
 		user: null,
 		accessToken: "",
-		supabaseConfigured: true,
 		busyAction: "idle",
 		infoMessage: "",
 		errorMessage: "",
@@ -643,20 +642,6 @@ export default function App() {
 		}
 	}
 
-	async function handleEmailContinue({ email }) {
-		setAuthState((current) => ({
-			...current,
-			errorMessage: "Email Link (passwordless) login is not supported in custom MongoDB auth.",
-		}));
-	}
-
-	async function handleForgotPassword({ email }) {
-		setAuthState((current) => ({
-			...current,
-			errorMessage: "Password recovery is not implemented in custom MongoDB auth.",
-		}));
-	}
-
 	async function handleSignUp(credentials) {
 		setAuthState((current) => ({
 			...current,
@@ -720,7 +705,6 @@ export default function App() {
 			status: "anonymous",
 			user: null,
 			accessToken: "",
-			passwordRecoveryReady: false,
 			busyAction: "idle",
 			errorMessage: "",
 			infoMessage: "Signed out. Sign back in before starting another interview if you want that session owned by your account.",
@@ -740,8 +724,6 @@ export default function App() {
 				<div className="app-entry__auth">
 					<AuthPanel
 						authState={authState}
-						onEmailContinue={handleEmailContinue}
-						onForgotPassword={handleForgotPassword}
 						onSignIn={handleSignIn}
 						onSignUp={handleSignUp}
 						onSignOut={handleSignOut}
@@ -841,8 +823,6 @@ export default function App() {
 								<div className="app-sidebar__auth">
 									<AuthPanel
 										authState={authState}
-										onEmailContinue={handleEmailContinue}
-										onForgotPassword={handleForgotPassword}
 										onSignIn={handleSignIn}
 										onSignUp={handleSignUp}
 										onSignOut={handleSignOut}
@@ -852,12 +832,8 @@ export default function App() {
 							) : (
 								<section className="app-sidebar__guest">
 									<p className="section-kicker">Account</p>
-									<strong>{authState.supabaseConfigured ? "Guest preview" : "Auth unavailable"}</strong>
-									<p>
-										{authState.supabaseConfigured
-											? "Sign in to own sessions and reports."
-											: "Configure Supabase to unlock saved sessions."}
-									</p>
+									<strong>Guest preview</strong>
+									<p>Sign in to own sessions and reports.</p>
 								</section>
 							)}
 						</div>

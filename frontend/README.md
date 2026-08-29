@@ -25,11 +25,11 @@ Use `frontend/.env.example` as the template and create `frontend/.env.local`.
 Required values:
 
 ```env
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-public-anon-key
 VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_SUPABASE_EMAIL_REDIRECT_TO=http://127.0.0.1:5173
 ```
+
+This is the only variable the frontend reads. Sign-in goes through the
+backend's own `/auth` routes, so no third-party client keys belong here.
 
 Restart the frontend dev server after changing the file.
 
@@ -60,7 +60,7 @@ This is the main non-interactive check to confirm the frontend compiles successf
 1. Start the backend first.
 2. Start the frontend with `npm run dev`.
 3. Open the app in the browser.
-4. Sign in with Supabase auth.
+4. Sign in with email and password (first signup creates the account).
 5. Upload a resume.
 6. Continue through the available stages.
 7. Open the Report page to verify persisted results.

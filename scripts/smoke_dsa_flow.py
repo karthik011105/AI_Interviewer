@@ -26,7 +26,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
 
 from backend.api.auth import AuthenticatedUser, require_current_user
 from backend.database.queries import create_session
-from backend.database.supabase_client import SupabaseClientError
+from backend.database.db_errors import DatabaseClientError
 from backend.dsa.code_executor import judge0_health_check
 from backend.dsa.problem_selector import get_certified_problem
 from backend.main import app
@@ -88,7 +88,7 @@ def main() -> int:
 
 	try:
 		parent_session = create_session(user_id=user_id, role_selected=role_key, status="dsa_smoke_test")
-	except SupabaseClientError as exc:
+	except DatabaseClientError as exc:
 		return _skip(str(exc))
 
 	app.dependency_overrides[require_current_user] = lambda: current_user

@@ -1,7 +1,7 @@
 """Round-level and session-level feedback aggregation.
 
 This module consumes the per-answer EvaluationResult records already stored in
-Supabase and produces:
+MongoDB and produces:
 
 1. ``RoundFeedback`` — coaching summary for one round (hr / technical / project_discussion).
 2. ``SessionFeedback`` — cross-round summary for the final report.
@@ -651,7 +651,7 @@ def generate_round_feedback(
 
 	Args:
 		round_name: One of "hr", "technical", "project_discussion".
-		evaluation_records: List of EvaluationResult dicts (or Supabase rows shaped similarly).
+		evaluation_records: List of EvaluationResult dicts (or MongoDB documents shaped similarly).
 		settings: Groq settings; resolved from env when omitted.
 
 	Returns:

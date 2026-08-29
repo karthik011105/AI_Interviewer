@@ -13,7 +13,8 @@ from backend import config
 from backend.api.auth import AuthenticatedUser
 from backend.api import routes_resume
 from backend.assessment.question_bank import build_assessment_batch, normalize_assessment_role_key
-from backend.database.supabase_client import SupabaseClientError, SupabaseRepository
+from backend.database.db_errors import DatabaseClientError
+from backend.database.mongo_client import MongoRepository
 from backend.nlp.resume_parser import ResumeParseResult
 
 
@@ -74,10 +75,10 @@ class ResumeUploadValidationTests(IsolatedAsyncioTestCase):
 
 class SessionOwnerInvariantTests(TestCase):
     def test_repository_rejects_missing_user_id(self) -> None:
-        repository = object.__new__(SupabaseRepository)
+        repository = object.__new__(MongoRepository)
 
-        with self.assertRaises(SupabaseClientError) as context:
-            SupabaseRepository.create_session(repository, user_id="", role_selected=None)
+        with self.assertRaises(DatabaseClientError) as context:
+            MongoRepository.create_session(repository, user_id="", role_selected=None)
 
         self.assertEqual(
             str(context.exception),
@@ -85,10 +86,10 @@ class SessionOwnerInvariantTests(TestCase):
         )
 
     def test_repository_normalizes_user_id_before_insert(self) -> None:
-        repository = object.__new__(SupabaseRepository)
+        repository = object.__new__(MongoRepository)
         repository.insert_one = MagicMock(return_value={"id": "session-1"})
 
-        result = SupabaseRepository.create_session(
+        result = MongoRepository.create_session(
             repository,
             user_id=" user-123 ",
             role_selected="machine_learning_engineer",
@@ -102,24 +103,6 @@ class SessionOwnerInvariantTests(TestCase):
 
 
 class InterviewContextPersistenceTests(TestCase):
-    def test_repository_wraps_save_interview_contexts_sdk_failure(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        query = MagicMock()
-        query.upsert.return_value.execute.side_effect = RuntimeError("boom")
-        repository.table = MagicMock(return_value=query)
-
-        with self.assertRaises(SupabaseClientError) as context:
-            SupabaseRepository.save_interview_contexts(
-                repository,
-                session_id="session-123",
-                contexts={"technical": {"question_focus": ["APIs"]}},
-            )
-
-        self.assertEqual(
-            str(context.exception),
-            "Supabase upsert on 'interview_round_contexts' failed: boom",
-        )
-
     def test_parse_resume_request_treats_context_persistence_failure_as_non_fatal(self) -> None:
         current_user = AuthenticatedUser(
             user_id="user-123",
@@ -144,7 +127,7 @@ class InterviewContextPersistenceTests(TestCase):
         with patch("backend.api.routes_resume._resolve_session", return_value=("session-123", False)), \
              patch("backend.api.routes_resume.ResumeParser", return_value=mock_parser), \
              patch("backend.api.routes_resume.build_interview_round_contexts", return_value={"technical": {"skill_gaps": []}}), \
-             patch("backend.api.routes_resume.save_interview_contexts", side_effect=SupabaseClientError("wrapped failure")), \
+             patch("backend.api.routes_resume.save_interview_contexts", side_effect=DatabaseClientError("wrapped failure")), \
              patch("backend.api.routes_resume.score_resume_as_dict", return_value={"overall_score": 0.5}), \
              patch("backend.api.routes_resume._LOGGER") as mock_logger:
             response = routes_resume._parse_resume_request(
@@ -158,107 +141,6 @@ class InterviewContextPersistenceTests(TestCase):
         self.assertFalse(response["persisted_interview_contexts"])
         self.assertEqual(response["interview_contexts"], {"technical": {"skill_gaps": []}})
         mock_logger.warning.assert_called_once()
-
-
-class RepositoryExecuteWrappingTests(TestCase):
-    def test_repository_wraps_get_all_interview_contexts_sdk_failure(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        select_query = MagicMock()
-        select_query.eq.return_value = select_query
-        select_query.execute.side_effect = RuntimeError("select failure")
-        table_query = MagicMock()
-        table_query.select.return_value = select_query
-        repository.table = MagicMock(return_value=table_query)
-
-        with self.assertRaises(SupabaseClientError) as context:
-            SupabaseRepository.get_all_interview_contexts(
-                repository,
-                session_id="session-123",
-            )
-
-        self.assertEqual(
-            str(context.exception),
-            "Supabase select on 'interview_round_contexts' failed: select failure",
-        )
-
-    def test_repository_wraps_assessment_session_upsert_failure(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        upsert_query = MagicMock()
-        upsert_query.execute.side_effect = RuntimeError("upsert failure")
-        table_query = MagicMock()
-        table_query.upsert.return_value = upsert_query
-        repository.table = MagicMock(return_value=table_query)
-
-        with self.assertRaises(SupabaseClientError) as context:
-            SupabaseRepository.create_assessment_session(
-                repository,
-                session_id="session-123",
-                role_key="backend_python_developer",
-                total_questions=4,
-                batch_json={"questions": []},
-                state_json={"answers": {}},
-            )
-
-        self.assertEqual(
-            str(context.exception),
-            "Supabase upsert on 'assessment_sessions' failed: upsert failure",
-        )
-
-    def test_repository_wraps_interview_round_update_failure(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        update_query = MagicMock()
-        update_query.eq.return_value = update_query
-        update_query.execute.side_effect = RuntimeError("update failure")
-        table_query = MagicMock()
-        table_query.update.return_value = update_query
-        repository.table = MagicMock(return_value=table_query)
-
-        with self.assertRaises(SupabaseClientError) as context:
-            SupabaseRepository.advance_interview_question(
-                repository,
-                session_id="session-123",
-                round="technical",
-                new_index=1,
-                difficulty_signal=0.6,
-                questions_json={"questions": []},
-                expected_state_version=4,
-            )
-
-        self.assertEqual(
-            str(context.exception),
-            "Supabase update on 'interview_round_sessions' failed: update failure",
-        )
-
-    def test_delete_interview_responses_returns_zero_when_table_is_missing(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        repository.delete_many = MagicMock(
-            side_effect=SupabaseClientError(
-                "Supabase table 'interview_responses' is missing. Apply the required schema or enable the compatibility fallback."
-            )
-        )
-
-        deleted_count = SupabaseRepository.delete_interview_responses(
-            repository,
-            session_id="session-123",
-            round="technical",
-        )
-
-        self.assertEqual(deleted_count, 0)
-
-    def test_delete_final_report_returns_zero_when_table_is_missing(self) -> None:
-        repository = object.__new__(SupabaseRepository)
-        repository.delete_many = MagicMock(
-            side_effect=SupabaseClientError(
-                "Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback."
-            )
-        )
-
-        deleted_count = SupabaseRepository.delete_final_report(
-            repository,
-            session_id="session-123",
-        )
-
-        self.assertEqual(deleted_count, 0)
 
 
 class AssessmentBatchTests(TestCase):

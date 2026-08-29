@@ -34,7 +34,7 @@ This checks:
 
 This does not require:
 
-- a real Supabase project
+- a running MongoDB instance
 - a Groq API key
 - Judge0
 
@@ -44,9 +44,9 @@ This path runs the full browser application with live parsing, authentication, p
 
 This requires:
 
-- a real Supabase project
+- a reachable MongoDB instance (local `mongodb://` or Atlas `mongodb+srv://`)
 - a valid Groq API key
-- frontend Supabase configuration
+- an `AUTH_JWT_SECRET` for signing session tokens
 - microphone access for voice features
 - Judge0 only if DSA code execution must be demonstrated
 
@@ -54,7 +54,8 @@ This requires:
 
 - Backend: FastAPI
 - Frontend: React + Vite
-- Database: Supabase
+- Database: MongoDB (via pymongo)
+- Auth: self-issued HS256 JWTs with bcrypt password hashing
 - Resume parsing: PyMuPDF + Groq
 - Role matching: sentence-transformers + BM25
 - STT: faster-whisper
@@ -209,9 +210,9 @@ Follow these steps to run the complete application in the browser.
 
 For the full live flow, the evaluator needs:
 
-- a Supabase project
+- a reachable MongoDB instance
 - a Groq API key
-- frontend Supabase anon key
+- an `AUTH_JWT_SECRET` value for signing session tokens
 - optional Judge0 instance for DSA code execution
 
 ### 7.2 Backend `.env` configuration
@@ -221,8 +222,19 @@ Create or update the root `.env` file.
 Example:
 
 ```env
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB_NAME=interview_simulator
+
+AUTH_JWT_SECRET=replace-with-a-long-random-secret
+AUTH_JWT_ALGORITHM=HS256
+AUTH_JWT_EXPIRY_HOURS=24
+
+AUTH_PASSWORD_MIN_LENGTH=8
+AUTH_PASSWORD_MAX_BYTES=72
+AUTH_RATE_LIMIT_MAX_ATTEMPTS=10
+AUTH_RATE_LIMIT_WINDOW_SECONDS=60
+AUTH_LOGIN_MAX_FAILURES=5
+AUTH_LOGIN_LOCKOUT_SECONDS=300
 
 GROQ_API_KEY=your-groq-api-key
 GROQ_RESUME_MODEL=llama-3.3-70b-versatile
@@ -239,11 +251,21 @@ ENABLE_LOCAL_RESUME_PATH_API=false
 
 Meaning of the main variables:
 
-- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` enable persisted backend flows
+- `MONGO_URI` and `MONGO_DB_NAME` point the backend at its database
+- `AUTH_JWT_SECRET` signs and verifies session tokens — the backend refuses to
+  start without it. Use a long random value and never reuse the sample above.
+- `AUTH_PASSWORD_*` set the signup password policy. `AUTH_PASSWORD_MAX_BYTES` is
+  a UTF-8 byte length capped at 72, because bcrypt rejects longer secrets.
+- `AUTH_RATE_LIMIT_*` and `AUTH_LOGIN_*` throttle the auth routes: a per-IP
+  request budget plus a per-account backoff after repeated failed sign-ins.
+  These counters live in process memory — see §7.7 before scaling out.
 - `GROQ_API_KEY` enables live resume parsing and live question generation
 - `JUDGE0_API_BASE_URL` enables DSA execution
 - `TTS_PROVIDER` defaults to Piper; ElevenLabs is optional, not required
 - after changing `.env`, restart the backend because settings are cached at startup
+
+The exact variable names above are what `backend/config.py` reads. Copying
+names from an older Supabase-era config will fail at startup.
 
 ### 7.3 Frontend `.env.local` configuration
 
@@ -252,22 +274,22 @@ Create `frontend/.env.local` using `frontend/.env.example` as the template.
 Example:
 
 ```env
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-public-anon-key
 VITE_API_BASE_URL=http://127.0.0.1:8000
-VITE_SUPABASE_EMAIL_REDIRECT_TO=http://127.0.0.1:5173
 ```
+
+`VITE_API_BASE_URL` is the only variable the frontend reads. Authentication is
+handled by the backend's own `/auth` routes, so no third-party client keys are
+needed in the browser.
 
 After changing this file, restart the frontend dev server.
 
-### 7.4 Supabase schema requirement
+### 7.4 Database setup
 
-Important note:
+MongoDB is schemaless, so there is no migration step. Collections are created
+on first write, and `MongoRepository._ensure_indexes()` creates the required
+indexes automatically the first time the backend touches the database.
 
-- the full live product expects a Supabase project that already contains the main application tables
-- this repository includes SQL for later-stage tables and security helpers, but it does not include a complete fresh-project SQL rollout for every base table
-
-The live application expects these core tables to exist in the target Supabase project:
+The application uses these collections:
 
 - `users`
 - `sessions`
@@ -275,25 +297,18 @@ The live application expects these core tables to exist in the target Supabase p
 - `role_matches`
 - `interview_round_contexts`
 - `interview_responses`
+- `interview_round_sessions`
 - `assessment_sessions`
 - `dsa_sessions`
 - `final_reports`
 
-SQL files included in this repository:
+Indexes created automatically include a unique index on `users.email`, a unique
+`session_id` on `resume_data` / `assessment_sessions` / `final_reports`, and a
+unique compound index on `(session_id, round)` for round contexts and round
+sessions.
 
-- `backend/database/assessment_sessions.sql`
-- `backend/database/dsa_sessions.sql`
-- `backend/database/final_reports.sql`
-- `backend/database/supabase_auth_rls.sql`
-- `backend/database/sessions_owner_required.sql`
-- `backend/database/cleanup_ownerless_sessions.sql`
-- `backend/database/cleanup_and_enforce_sessions_owner.sql`
-
-How to use them:
-
-- for an existing compatible Supabase project, apply the included SQL files that are missing
-- for a completely new Supabase project, create the base application schema first, then apply the included assessment, DSA, report, and RLS SQL files
-- the cleanup scripts are migration helpers and are not part of a normal fresh setup
+To point at a local MongoDB, leave `MONGO_URI=mongodb://localhost:27017`. To use
+Atlas, replace it with the `mongodb+srv://` connection string for your cluster.
 
 ### 7.5 Start the backend and frontend
 
@@ -320,7 +335,7 @@ http://127.0.0.1:5173
 ### 7.6 Full live demo steps
 
 1. Open the frontend in the browser.
-2. Sign in with Supabase authentication.
+2. Sign in with email and password (creates an account on first signup).
 3. Upload `sample_resume.pdf` or another valid PDF resume.
 4. Wait for structured parsing and role suggestions.
 5. Select a suggested role.
@@ -330,6 +345,86 @@ http://127.0.0.1:5173
 9. Complete the Project Discussion round.
 10. Complete the HR round.
 11. Open the Report page.
+
+### 7.7 Authentication behaviour and scaling notes
+
+Accounts are created and verified by the backend itself; there is no third-party
+identity provider.
+
+- Passwords are hashed with bcrypt. The signup policy enforces a minimum
+  character count and a maximum **UTF-8 byte** length (72, bcrypt's hard limit).
+  The policy is deliberately *not* applied at sign-in, so accounts created under
+  an earlier policy keep working and the policy is not disclosed to anonymous
+  callers.
+- Email addresses are stored and matched lowercased, so `User@example.com` and
+  `user@example.com` are the same account. **If you have existing user documents
+  with mixed-case emails, lowercase them before deploying this change**, or those
+  users will not be found at sign-in:
+
+  ```javascript
+  // mongosh
+  db.users.find({}).forEach(u => db.users.updateOne(
+    { _id: u._id }, { $set: { email: u.email.toLowerCase() } }
+  ));
+  ```
+
+  Resolve any duplicates that differ only by case first, since `users.email` is
+  a unique index.
+- Sign-in failures are throttled two ways: a per-IP request budget across the
+  auth routes, and a per-account backoff after consecutive failures. The
+  account-level backoff is keyed on the submitted address rather than a resolved
+  account, so attempts against addresses with no account are throttled the same
+  way and the lockout cannot be used to enumerate users. Both return `429` with a
+  `Retry-After` header.
+- **These counters live in the process's memory.** With several uvicorn workers
+  each worker keeps its own counters, so the real limit is multiplied by the
+  worker count; across separate instances nothing is shared. Before scaling out,
+  either enforce the limits at the reverse proxy / API gateway or back
+  `backend/api/rate_limit.py` with Redis — its classes take an injectable clock
+  and a narrow interface specifically to keep that swap cheap.
+- The rate limiter uses the direct peer address and ignores `X-Forwarded-For`,
+  because that header is attacker-controlled unless a trusted proxy overwrites
+  it. Behind a proxy, run uvicorn with `--proxy-headers` and an explicit
+  `--forwarded-allow-ips` so the peer address is rewritten safely upstream.
+
+Still missing, and tracked in `PRODUCTION_READINESS.md`: email verification,
+password reset, and token revocation.
+
+## 7.8 Running with Docker
+
+The fastest way to get the whole stack up:
+
+```bash
+cp .env.example .env      # then set AUTH_JWT_SECRET and GROQ_API_KEY
+docker compose up -d --build
+```
+
+- Frontend: <http://127.0.0.1:5173>
+- API: <http://127.0.0.1:8000>
+
+MongoDB runs as a compose service with a named volume, so no local install is
+needed. Judge0 stays a separate optional stack (`docker-compose.judge0.yml`).
+
+Notes worth knowing before you deploy these images:
+
+- **`VITE_API_BASE_URL` is baked in at build time**, not read at runtime — Vite
+  substitutes it during the build. Pointing the frontend at a different API host
+  requires rebuilding:
+  `docker build --build-arg VITE_API_BASE_URL=https://api.example.com ./frontend`
+- **The backend image pre-downloads both ML models** (the `all-MiniLM-L6-v2`
+  role-matching encoder and the `base.en` speech-to-text model) at build time and
+  then runs with `HF_HUB_OFFLINE=1`. Cold starts are fast and a HuggingFace
+  outage cannot affect a running deployment. If you change either model name,
+  update the pre-fetch step in `backend/Dockerfile` or startup will fail rather
+  than silently download.
+- **torch is installed from the PyTorch CPU index.** The default Linux wheel is
+  the CUDA build (~2.5 GB) that this project never uses.
+- **`UVICORN_WORKERS` defaults to 1.** Raising it multiplies the auth rate limit
+  by the worker count (see §7.7) and loads a separate copy of both ML models per
+  worker. Read both notes before increasing it.
+
+`scripts/start_backend.sh` is the POSIX counterpart to `start_backend.ps1`, for
+Linux/macOS and containers. `MODE=production` runs without autoreload.
 
 ## 8. Optional Judge0 Setup For DSA Execution
 
@@ -448,7 +543,7 @@ Set-Location E:\interview_simulator
 
 Requirements for the full DSA integration smoke:
 
-- real Supabase credentials in `.env`
+- real MongoDB credentials in `.env`
 - `DSA_SMOKE_USER_ID`
 - running Judge0
 - `dsa_sessions` table applied
@@ -469,7 +564,7 @@ You should see:
 
 You should see:
 
-- sign-in works through Supabase
+- sign-in works through the backend `/auth` routes
 - resume upload and parsing work with a valid Groq key
 - role matching returns suggestions
 - assessment and interview stages progress in the UI
@@ -537,7 +632,7 @@ Before sharing the folder, verify the following:
 4. The frontend builds with `npm run build`.
 5. The backend tests run with `unittest`.
 6. Secrets are not shared in `.env` or `frontend/.env.local`.
-7. If a full live demo is expected, the target Supabase project and Groq key are ready.
+7. If a full live demo is expected, MongoDB is reachable and the Groq key is set.
 8. If a DSA demo is expected, Judge0 is running.
 
 ## 14. Final Note

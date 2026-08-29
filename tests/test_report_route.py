@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from backend.api.auth import AuthenticatedUser
 from backend.api import routes_report
-from backend.database.supabase_client import SupabaseClientError
+from backend.database.db_errors import DatabaseClientError
 
 
 class ReportRouteTests(TestCase):
@@ -173,7 +173,7 @@ class ReportRouteTests(TestCase):
 		}
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=SupabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value={
 				 "status": "completed",
 				 "total_questions": 8,
@@ -310,7 +310,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=SupabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -343,7 +343,7 @@ class ReportRouteTests(TestCase):
 		}
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=SupabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[technical_record, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -413,7 +413,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=SupabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -465,7 +465,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "dsa_active", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=SupabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \

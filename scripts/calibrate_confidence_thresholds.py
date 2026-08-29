@@ -12,12 +12,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.database.supabase_client import (
-	SupabaseClientError,
-	SupabaseConfigurationError,
-	SupabaseDependencyError,
-	get_supabase_repository,
+from backend.database.db_errors import (
+	DatabaseClientError,
+	DatabaseConfigurationError,
+	DatabaseDependencyError,
 )
+from backend.database.mongo_client import get_repository
 from backend.nlp.feedback_generator import (
 	calibrate_confidence_thresholds,
 	summarize_confidence_signal,
@@ -41,9 +41,12 @@ def _row_matches_rounds(row: dict[str, Any], rounds: set[str]) -> bool:
 
 
 def _fetch_rows_from_round_sessions(rounds: set[str]) -> list[dict[str, Any]]:
-	repo = get_supabase_repository()
-	response = repo.table("interview_round_sessions").select("session_id,round,questions_json,created_at").order("created_at").execute()
-	data = getattr(response, "data", None) or []
+	repo = get_repository()
+	data = list(
+		repo.db["interview_round_sessions"]
+		.find({}, {"session_id": 1, "round": 1, "questions_json": 1, "created_at": 1})
+		.sort("created_at", 1)
+	)
 	rows: list[dict[str, Any]] = []
 	for row in data:
 		if not isinstance(row, dict):
@@ -67,14 +70,13 @@ def _fetch_rows_from_round_sessions(rounds: set[str]) -> list[dict[str, Any]]:
 
 
 def _fetch_rows(rounds: set[str]) -> list[dict[str, Any]]:
-	repo = get_supabase_repository()
+	repo = get_repository()
 	try:
-		response = repo.table("interview_responses").select("*").order("created_at").execute()
+		data = list(repo.db["interview_responses"].find({}).sort("created_at", 1))
 	except Exception as exc:
 		if _is_missing_table_error(exc, "interview_responses"):
 			return _fetch_rows_from_round_sessions(rounds)
 		raise
-	data = getattr(response, "data", None) or []
 	rows: list[dict[str, Any]] = []
 	for row in data:
 		if not isinstance(row, dict):
@@ -145,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 	rounds = tuple(args.rounds or SUPPORTED_ROUNDS)
 	try:
 		summary = _build_summary(rounds=rounds, min_samples=max(1, int(args.min_samples)))
-	except (SupabaseConfigurationError, SupabaseDependencyError, SupabaseClientError) as exc:
+	except (DatabaseConfigurationError, DatabaseDependencyError, DatabaseClientError) as exc:
 		print(f"Confidence calibration failed: {exc}", file=sys.stderr)
 		return 1
 

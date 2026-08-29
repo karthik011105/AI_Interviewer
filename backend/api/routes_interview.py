@@ -546,7 +546,7 @@ class InterviewCompleteRequest(BaseModel):
 
 
 def _get_parsed_resume(session_id: str) -> dict[str, Any]:
-	"""Fetch parsed resume from Supabase; raise 404 if not found."""
+	"""Fetch parsed resume from MongoDB; raise 404 if not found."""
 	try:
 		resume_row = get_resume_data(session_id)
 	except DatabaseClientError as exc:
@@ -627,7 +627,7 @@ def _total_question_count(questions_json: dict[str, Any], round_name: str) -> in
 
 
 def _fetch_round_responses(session_id: str, round_name: str) -> list[dict[str, Any]]:
-	"""Fetch all persisted responses for a round from Supabase."""
+	"""Fetch all persisted responses for a round from MongoDB."""
 	try:
 		return list_interview_responses(session_id=session_id, round=round_name)
 	except DatabaseClientError as exc:

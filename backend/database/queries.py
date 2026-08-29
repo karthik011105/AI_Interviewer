@@ -1,8 +1,8 @@
 """Domain-level query helpers for interview simulator persistence.
 
-This module provides a thin abstraction over SupabaseRepository, exposing
+This module provides a thin abstraction over MongoRepository, exposing
 domain-specific functions for use by service and API layers. All functions
-should use the process-wide repository instance from get_supabase_repository().
+should use the process-wide repository instance from get_repository().
 """
 
 from typing import Any, Mapping, Sequence

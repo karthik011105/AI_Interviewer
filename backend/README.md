@@ -8,7 +8,7 @@ This folder contains the FastAPI backend for the AI Interview Simulator.
 - `nlp/` resume parsing, question generation, answer evaluation, feedback, role matching
 - `dsa/` problem selection, execution, analysis, scoring, reports
 - `voice/` STT and TTS integration
-- `database/` Supabase helpers and SQL files
+- `database/` MongoDB repository, domain query helpers, shared error types
 - `main.py` FastAPI entrypoint
 - `config.py` environment-backed runtime settings
 
@@ -45,8 +45,9 @@ The backend reads the root `.env` file.
 
 Required for persisted live flows:
 
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `MONGO_URI`
+- `MONGO_DB_NAME`
+- `AUTH_JWT_SECRET` (the backend refuses to start without it)
 - `GROQ_API_KEY`
 
 Needed for DSA execution:
@@ -129,16 +130,15 @@ Set-Location E:\interview_simulator
 - STT: `voice/stt.py`
 - TTS: `voice/tts.py`
 
-## 8. SQL Assets
+## 8. Database Schema
 
-SQL files under `database/` support persisted flows:
+MongoDB is schemaless, so there are no SQL migrations to apply. Collections are
+created on first write, and the required indexes are created automatically by
+`MongoRepository._ensure_indexes()` the first time the backend connects.
 
-- `assessment_sessions.sql`
-- `dsa_sessions.sql`
-- `final_reports.sql`
-- RLS and owner-policy helpers
-
-Apply the relevant SQL files to the target Supabase project before expecting persisted live flows to work end-to-end.
+Access ownership is enforced in the application layer rather than by database
+policies: every session-scoped route resolves the parent session and calls
+`ensure_session_access()` (see `api/auth.py`) before reading or writing.
 
 ## 9. Notes for Reviewers
 

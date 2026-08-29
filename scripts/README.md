@@ -26,10 +26,9 @@ Purpose:
 
 Requirements:
 
-- real Supabase credentials
-- `DSA_SMOKE_USER_ID`
+- a reachable MongoDB instance (`MONGO_URI`)
+- `DSA_SMOKE_USER_ID` set to a real user `_id` from the `users` collection
 - working Judge0
-- `dsa_sessions` table applied
 
 Run:
 

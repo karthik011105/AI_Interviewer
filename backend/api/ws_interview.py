@@ -176,7 +176,7 @@ def _extract_websocket_access_token(websocket: WebSocket) -> str:
 		return token.strip()
 
 	raise WebSocketInterviewError(
-		"Missing access token. Connect with ?access_token=<supabase_access_token>."
+		"Missing access token. Connect with ?access_token=<jwt_access_token>."
 	)
 
 
