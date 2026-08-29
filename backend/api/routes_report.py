@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -21,6 +22,7 @@ from backend.database.db_errors import DatabaseClientError
 from backend.dsa.report_engine import build_dsa_round_report
 
 router = APIRouter(prefix="/report", tags=["report"])
+_LOGGER = logging.getLogger(__name__)
 
 INTERVIEW_ROUNDS = ("technical", "project_discussion", "hr")
 ROUND_ORDER = ("assessment", "technical", "dsa", "project_discussion", "hr")
@@ -55,10 +57,6 @@ def _coerce_numeric_score(value: Any) -> float | None:
 		return float(value)
 	except (TypeError, ValueError):
 		return None
-
-
-def _is_missing_final_reports_error(exc: Exception) -> bool:
-	return "Supabase table 'final_reports' is missing" in str(exc)
 
 
 def _average(values: list[float]) -> float | None:
@@ -970,8 +968,8 @@ def _build_recommendations(round_summaries: list[dict[str, Any]], persistence_de
 			continue
 		if score is not None and score < 0.6:
 			recommendations.append(LOW_SCORE_GUIDANCE.get(str(entry.get("key")) or "", "Revisit this stage before the next mock session."))
-	if persistence_detail and _is_missing_final_reports_error(DatabaseClientError(persistence_detail)):
-		recommendations.append("Apply the final_reports schema in Supabase so generated report snapshots persist across sessions.")
+	if persistence_detail:
+		recommendations.append("This report was generated but could not be saved. Check the database connection so report snapshots persist across sessions.")
 	if not recommendations:
 		recommendations.append("No critical gaps were flagged from the currently persisted stages.")
 	unique_recommendations: list[str] = []
@@ -993,11 +991,16 @@ def _compute_overall_score(round_scores: Mapping[str, Any]) -> float | None:
 
 
 def _load_persisted_report(session_id: str) -> tuple[dict[str, Any] | None, bool, str | None]:
+	"""Read the saved report snapshot, if one exists.
+
+	A session with no saved report yet is not an error: MongoDB simply returns no
+	document and ``get_final_report`` yields ``None``, and the caller rebuilds the
+	snapshot from the round collections. A raised ``DatabaseClientError`` therefore
+	means the database itself is unreachable, which is a genuine outage.
+	"""
 	try:
 		return get_final_report(session_id), True, None
 	except DatabaseClientError as exc:
-		if _is_missing_final_reports_error(exc):
-			return None, False, str(exc)
 		raise HTTPException(
 			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
 			detail=str(exc),
@@ -1083,6 +1086,13 @@ def _build_report_snapshot(
 
 
 def _persist_report_snapshot(snapshot: Mapping[str, Any]) -> tuple[dict[str, Any], bool, bool, str | None]:
+	"""Save the report snapshot, degrading gracefully when the write fails.
+
+	The snapshot is derived from the round collections that were just read, so a
+	failure to *store* it must not block *showing* it. The caller receives the
+	computed snapshot with ``persisted=False`` plus the failure detail, which is
+	surfaced to the user as a recommendation rather than as a 5xx.
+	"""
 	try:
 		persisted = upsert_final_report(
 			session_id=str(snapshot.get("session_id") or ""),
@@ -1093,12 +1103,12 @@ def _persist_report_snapshot(snapshot: Mapping[str, Any]) -> tuple[dict[str, Any
 		)
 		return persisted, True, True, None
 	except DatabaseClientError as exc:
-		if _is_missing_final_reports_error(exc):
-			return dict(snapshot), False, False, str(exc)
-		raise HTTPException(
-			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-			detail=str(exc),
-		) from exc
+		_LOGGER.warning(
+			"Failed to persist final report for session %s: %s",
+			snapshot.get("session_id"),
+			exc,
+		)
+		return dict(snapshot), False, False, str(exc)
 
 
 def _require_parent_session(

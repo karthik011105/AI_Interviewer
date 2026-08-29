@@ -3,6 +3,8 @@ from __future__ import annotations
 from unittest import TestCase
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from backend.api.auth import AuthenticatedUser
 from backend.api import routes_report
 from backend.database.db_errors import DatabaseClientError
@@ -145,7 +147,7 @@ class ReportRouteTests(TestCase):
 			},
 		]
 
-	def test_get_report_session_returns_snapshot_when_final_reports_table_is_missing(self) -> None:
+	def test_get_report_session_returns_snapshot_when_no_report_is_saved_yet(self) -> None:
 		technical_questions_json = {
 			"skill_profile_summary": {
 				"strong_count": 2,
@@ -173,7 +175,7 @@ class ReportRouteTests(TestCase):
 		}
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", return_value=None), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value={
 				 "status": "completed",
 				 "total_questions": 8,
@@ -205,7 +207,9 @@ class ReportRouteTests(TestCase):
 			result = routes_report.get_report_session("session-123", self.current_user)
 
 		self.assertFalse(result["report_exists"])
-		self.assertFalse(result["persistence_supported"])
+		# No report has been saved for this session yet, but persistence itself is
+		# healthy — the snapshot is rebuilt from the round collections on read.
+		self.assertTrue(result["persistence_supported"])
 		snapshot = result["snapshot"]
 		self.assertAlmostEqual(snapshot["round_scores"]["assessment"], 0.75, places=4)
 		self.assertAlmostEqual(snapshot["round_scores"]["dsa"], 0.855, places=4)
@@ -310,7 +314,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", return_value=None), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -343,7 +347,7 @@ class ReportRouteTests(TestCase):
 		}
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", return_value=None), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[technical_record, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -413,7 +417,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "hr_complete", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", return_value=None), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -465,7 +469,7 @@ class ReportRouteTests(TestCase):
 		]
 
 		with patch("backend.api.routes_report._require_parent_session", return_value={"status": "dsa_active", "role_selected": "backend_python_developer"}), \
-			 patch("backend.api.routes_report.get_final_report", side_effect=DatabaseClientError("Supabase table 'final_reports' is missing. Apply the required schema or enable the compatibility fallback.")), \
+			 patch("backend.api.routes_report.get_final_report", return_value=None), \
 			 patch("backend.api.routes_report.get_assessment_session", return_value=None), \
 			 patch("backend.api.routes_report.get_interview_round_session", side_effect=[None, None, None]), \
 			 patch("backend.api.routes_report.list_interview_responses", side_effect=[[], [], []]), \
@@ -480,3 +484,61 @@ class ReportRouteTests(TestCase):
 		self.assertEqual(dsa_section["question_reports"][0]["problem_title"], "DSAQuestion1")
 		self.assertAlmostEqual(dsa_section["question_reports"][0]["score"], 1.0, places=4)
 		self.assertAlmostEqual(dsa_section["question_reports"][0]["dimension_scores"]["approach_quality"], 0.92, places=4)
+
+class ReportPersistenceBehaviourTests(TestCase):
+	"""Covers how the report route reacts to database read/write failures.
+
+	Reads and writes are treated differently on purpose. A read failure means the
+	database is unreachable and is surfaced as a 503. A write failure only means
+	the snapshot could not be saved, so the computed report is still returned.
+	"""
+
+	def _snapshot(self) -> dict[str, object]:
+		return {
+			"session_id": "session-123",
+			"overall_score": 0.75,
+			"round_scores": {"technical": 0.75},
+			"dimension_scores": {},
+			"report_json": {"overview": {}},
+		}
+
+	def test_persist_snapshot_degrades_gracefully_when_write_fails(self) -> None:
+		with patch(
+			"backend.api.routes_report.upsert_final_report",
+			side_effect=DatabaseClientError("connection refused"),
+		):
+			payload, persisted, stored, detail = routes_report._persist_report_snapshot(
+				self._snapshot()
+			)
+
+		self.assertEqual(payload["session_id"], "session-123")
+		self.assertAlmostEqual(payload["overall_score"], 0.75, places=4)
+		self.assertFalse(persisted)
+		self.assertFalse(stored)
+		self.assertIn("connection refused", str(detail))
+
+	def test_load_persisted_report_raises_503_when_database_is_unreachable(self) -> None:
+		with patch(
+			"backend.api.routes_report.get_final_report",
+			side_effect=DatabaseClientError("connection refused"),
+		):
+			with self.assertRaises(HTTPException) as context:
+				routes_report._load_persisted_report("session-123")
+
+		self.assertEqual(context.exception.status_code, 503)
+
+	def test_load_persisted_report_returns_none_when_no_report_saved(self) -> None:
+		with patch("backend.api.routes_report.get_final_report", return_value=None):
+			report, available, detail = routes_report._load_persisted_report("session-123")
+
+		self.assertIsNone(report)
+		self.assertTrue(available)
+		self.assertIsNone(detail)
+
+	def test_recommendations_surface_a_persistence_failure(self) -> None:
+		recommendations = routes_report._build_recommendations([], "connection refused")
+
+		self.assertTrue(
+			any("could not be saved" in item for item in recommendations),
+			msg=f"expected a persistence warning, got {recommendations}",
+		)
