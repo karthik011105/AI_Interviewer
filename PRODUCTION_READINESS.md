@@ -286,9 +286,9 @@ Per your instruction not to modify anything yet, here is what I'd recommend dele
 
 | Path | Why it's a candidate for deletion |
 |---|---|
-| `cleanup_unused_files.py` | Dead migration script; references files that no longer exist in the repo. Its only value is historical context, which belongs in a changelog/commit message, not a live script. |
+| **[DONE — deleted]** ~~`cleanup_unused_files.py`~~ | Verified dead before removal: all four files it targeted are gone, and nothing referenced it. Deleted in §25. |
 | ~~`.local/judge0/judge0-v1.13.1.zip`~~ **— DO NOT DELETE, this recommendation was based on a wrong finding** | It is the genuine upstream Judge0 v1.13.1 release, and it is now the reference copy of the pristine `judge0.conf` (which has been untracked because the working copy carries real passwords). See the withdrawal note in §2. |
-| `.kilo/` directory | An unrelated IDE-agent tool config (Kilo Code's "Data" agent definition) with no relationship to this project's runtime, build, or deployment. Harmless, but it's noise in a repo meant to represent the shipped product — worth removing or moving to a personal dotfiles location if it's not something the team intentionally standardized on. |
+| **[DONE — untracked, not deleted]** ~~`.kilo/` directory~~ | Only `.kilo/agents/data.md` was tracked; the rest is developer-local tooling (`node_modules/`, `package.json`). Removed from the repository and gitignored, with the on-disk files left intact so the developer's Kilo Code setup still works. Deleting the directory outright would have destroyed local tooling for no repository benefit. |
 
 Not recommending deletion of (despite being large/unusual) because they're referenced by working code or the README's stated demo path:
 - `models/*.pth`, `notebooks/*.ipynb` — explicitly documented in README §11 as intentional research/portfolio assets, indexed by `backend/research_assets.py` and surfaced in `/health`. Flagged above (§2) as *misleadingly small*, but that's a "relabel or regenerate" issue, not a "delete" issue — your call.
@@ -379,9 +379,9 @@ eight backend modules.
 
 ### Still outstanding from §16 housekeeping
 
-`cleanup_unused_files.py`, the empty `.local/judge0/judge0-v1.13.1.zip` stub, and
-the unrelated `.kilo/` directory were flagged for deletion but **not** deleted,
-pending confirmation.
+All resolved in §25. `cleanup_unused_files.py` was deleted, `.kilo/` was
+untracked but left on disk, and the Judge0 zip recommendation was **withdrawn**
+— that finding was wrong and the archive is the genuine upstream release (§22.2).
 
 ---
 
@@ -866,3 +866,28 @@ Both protections were mutation-tested: bypassing the revocation check, and
 removing the `jti` from issued tokens, each fail the suite.
 
 Suite: 178 -> 185 passing.
+
+---
+
+## 25. Change log — housekeeping
+
+The deletions flagged in §16 are resolved, after verifying each rather than
+taking the original flag at face value.
+
+**Deleted: `cleanup_unused_files.py`.** Confirmed genuinely dead first — all
+four paths it targeted (`VoiceInterface.jsx`, `ResetPasswordPage.jsx`,
+`supabaseClient.js`, `data/problems/core_bank.json`) no longer exist, so running
+it was a no-op, and nothing in the repository referenced it.
+
+**Untracked, not deleted: `.kilo/`.** Only `.kilo/agents/data.md` was ever
+tracked; the rest is developer-local Kilo Code tooling (`node_modules/`,
+`package.json`). It is now removed from the repository and gitignored, with the
+on-disk files untouched. Deleting the directory as originally suggested would
+have destroyed a working local setup for no repository benefit — the goal was to
+stop shipping unrelated tooling, not to uninstall it.
+
+**Withdrawn: the Judge0 zip.** §16 recommended deleting
+`.local/judge0/judge0-v1.13.1.zip` on the basis that it was an empty stub. That
+finding was wrong (§22.2) — it is the genuine upstream Judge0 v1.13.1 release,
+and it is now the reference copy of the pristine `judge0.conf` after that file
+was untracked. It stays.

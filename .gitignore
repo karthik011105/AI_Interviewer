@@ -32,3 +32,6 @@ Thumbs.db
 # filled in per machine. The pristine upstream template is inside
 # .local/judge0/judge0-v1.13.1.zip; extract it and set your own values.
 .local/judge0/judge0-v1.13.1/judge0.conf
+
+# Kilo Code IDE agent tooling — developer-local, not part of the application
+.kilo/
