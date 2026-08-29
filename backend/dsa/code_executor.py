@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 import json
 import re
 import time
@@ -560,7 +562,7 @@ string escape_json(const string& value) {{
 	for (unsigned char ch : value) {{
 		switch (ch) {{
 			case '\\\\': escaped << "\\\\\\\\"; break;
-			case '\"': escaped << "\\\\\""; break;
+			case '\"': escaped << "\\\\\\""; break;
 			case '\\b': escaped << "\\\\b"; break;
 			case '\\f': escaped << "\\\\f"; break;
 			case '\\n': escaped << "\\\\n"; break;
@@ -619,6 +621,7 @@ int main() {{
 		}}
 		results << "}}";
 	}}
+	results << "]";
 	cout << "{_HARNESS_START_MARKER}\\n";
 	cout << results.str() << "\\n";
 	cout << "{_HARNESS_END_MARKER}\\n";
@@ -662,7 +665,7 @@ public class Main {{
 			char ch = value.charAt(index);
 			switch (ch) {{
 				case '\\\\': escaped.append("\\\\\\\\"); break;
-				case '\"': escaped.append("\\\\\""); break;
+				case '\"': escaped.append("\\\\\\""); break;
 				case '\\b': escaped.append("\\\\b"); break;
 				case '\\f': escaped.append("\\\\f"); break;
 				case '\\n': escaped.append("\\\\n"); break;
@@ -726,6 +729,7 @@ public class Main {{
 			}}
 			results.append("}}");
 		}}
+		results.append(']');
 
 		System.out.println(HARNESS_START_MARKER);
 		System.out.println(results.toString());
@@ -817,6 +821,29 @@ def _get_judge0_status_id(response: Mapping[str, Any]) -> int | None:
 	return None
 
 
+_BASE64_RESULT_FIELDS: tuple[str, ...] = ("stdout", "stderr", "compile_output", "message")
+
+
+def _decode_base64_result_fields(response: Mapping[str, Any]) -> dict[str, Any]:
+	"""Decode the base64-encoded text fields of a Judge0 submission result.
+
+	Judge0 returns these fields base64-encoded when the request asks for
+	base64_encoded=true. Everything downstream (parse_judge0_result, the harness
+	marker extraction) expects plain strings, so normalise them back here.
+	"""
+	decoded = dict(response)
+	for field in _BASE64_RESULT_FIELDS:
+		raw_value = decoded.get(field)
+		if not isinstance(raw_value, str) or not raw_value:
+			continue
+		try:
+			decoded[field] = base64.b64decode(raw_value, validate=False).decode("utf-8", errors="replace")
+		except (ValueError, binascii.Error):
+			# Leave the value untouched if Judge0 ever hands back plain text.
+			continue
+	return decoded
+
+
 def _poll_submission(token: str) -> dict[str, Any]:
 	"""Poll GET /submissions/{token} until Judge0 reports a terminal status.
 
@@ -827,7 +854,15 @@ def _poll_submission(token: str) -> dict[str, Any]:
 	full result once the worker writes it to the database.
 	"""
 	settings = get_settings().judge0
-	poll_url = f"{settings.api_base_url}/submissions/{urllib_parse.quote(token, safe='')}?base64_encoded=false"
+	# Poll with base64_encoded=true. With base64_encoded=false, Judge0 CE rejects the
+	# whole GET with HTTP 400 ("some attributes for this submission cannot be converted
+	# to UTF-8") whenever stdout/stderr/compile_output contain bytes it will not serialise
+	# as plain text -- which happens routinely for compile errors, because GCC quotes
+	# identifiers with U+2018/U+2019. That 400 was being swallowed by the retry loop below,
+	# so a compile error that Judge0 reported in ~1s surfaced as a 30s "did not finish
+	# executing" timeout. Requesting base64 always succeeds; we decode back to text here so
+	# callers still see plain strings.
+	poll_url = f"{settings.api_base_url}/submissions/{urllib_parse.quote(token, safe='')}?base64_encoded=true"
 	last_result: dict[str, Any] = {}
 	for _ in range(_POLL_MAX_ATTEMPTS):
 		time.sleep(_POLL_INTERVAL_SECONDS)
@@ -837,7 +872,7 @@ def _poll_submission(token: str) -> dict[str, Any]:
 			continue
 		if not isinstance(response, Mapping):
 			continue
-		last_result = dict(response)
+		last_result = _decode_base64_result_fields(response)
 		if _get_judge0_status_id(last_result) in _JUDGE0_TERMINAL_STATUS_IDS:
 			return last_result
 	if not last_result:

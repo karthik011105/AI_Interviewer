@@ -8,15 +8,51 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 
-# Load .env from the project root (two levels up from this file: backend/config.py)
-try:
-	from dotenv import load_dotenv as _load_dotenv
+# .env lives at the project root (two levels up from this file: backend/config.py)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
-	_env_path = Path(__file__).resolve().parent.parent / ".env"
-	# In local development, prefer .env values over inherited shell vars.
-	_load_dotenv(dotenv_path=_env_path, override=True)
-except ModuleNotFoundError:
-	pass  # python-dotenv not installed; fall back to raw os.environ
+# Opt-in escape hatch for the old "the .env file wins" behaviour. Read from the
+# real process environment *before* the .env file is loaded, so a .env file can
+# never switch on its own override.
+DOTENV_OVERRIDE_ENV_VAR = "DOTENV_OVERRIDE"
+_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def dotenv_override_enabled(env: Mapping[str, str] | None = None) -> bool:
+	"""Return True when the real environment asks .env to beat inherited vars."""
+
+	source = os.environ if env is None else env
+	return (source.get(DOTENV_OVERRIDE_ENV_VAR) or "").strip().casefold() in _TRUTHY_VALUES
+
+
+def load_project_dotenv() -> bool:
+	"""Load the project-root ``.env`` into ``os.environ``.
+
+	Real environment variables win by default. This is the precedence every
+	deployment target assumes (Kubernetes, ECS, Heroku, docker-compose
+	``environment:``): a ``.env`` file that ships alongside the application must
+	never silently beat platform-supplied configuration.
+
+	Set ``DOTENV_OVERRIDE=true`` in the shell to restore the previous local-dev
+	behaviour, where ``.env`` overwrites already-set variables — useful when a
+	stale value is stuck in your shell session.
+
+	Returns True if a ``.env`` file was found and read. Safe to call repeatedly;
+	this is the single place that decides .env precedence for the whole backend.
+	"""
+
+	try:
+		from dotenv import load_dotenv as _load_dotenv
+	except ModuleNotFoundError:
+		return False  # python-dotenv not installed; fall back to raw os.environ
+
+	return bool(
+		_load_dotenv(dotenv_path=_ENV_FILE, override=dotenv_override_enabled())
+	)
+
+
+load_project_dotenv()
 
 
 class ConfigurationError(RuntimeError):
@@ -460,6 +496,9 @@ __all__ = [
 	"AppSettings",
 	"AuthSettings",
 	"ConfigurationError",
+	"DOTENV_OVERRIDE_ENV_VAR",
+	"dotenv_override_enabled",
+	"load_project_dotenv",
 	"GroqSettings",
 	"Judge0Settings",
 	"MongoSettings",

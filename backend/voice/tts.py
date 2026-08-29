@@ -45,13 +45,15 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-try:
-    from dotenv import load_dotenv as _load_dotenv
+# This module reads its configuration straight from os.environ at import time,
+# so the project .env has to be loaded first. Delegate to backend.config so
+# there is exactly one place that decides .env-vs-real-environment precedence
+# (real environment wins unless DOTENV_OVERRIDE is set). Loading it here with
+# override=True, as this module used to, would silently undo that policy for
+# any process that imports the voice stack.
+from backend.config import load_project_dotenv as _load_project_dotenv
 
-    _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-    _load_dotenv(dotenv_path=_env_path, override=True)
-except ModuleNotFoundError:
-    pass
+_load_project_dotenv()
 
 
 class TTSUnavailableError(RuntimeError):
