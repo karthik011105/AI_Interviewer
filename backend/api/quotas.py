@@ -41,6 +41,10 @@ RESUME_PARSE = "resume_parse"
 ROLE_MATCH = "role_match"
 DSA_EXECUTION = "dsa_execution"
 VOICE = "voice"
+# One "turn" is a single answer evaluated by Groq during a live interview round.
+# Metered separately from the REST quotas because it is driven by WebSocket
+# messages rather than requests, and a client can send those in a tight loop.
+INTERVIEW_TURN = "interview_turn"
 
 _lock = threading.Lock()
 _limiters: dict[str, FixedWindowRateLimiter] = {}
@@ -56,6 +60,8 @@ def _max_events_for(quota_name: str) -> int:
 		return quotas.dsa_execution_max_per_hour
 	if quota_name == VOICE:
 		return quotas.voice_max_per_hour
+	if quota_name == INTERVIEW_TURN:
+		return quotas.interview_turn_max_per_hour
 	raise ValueError(f"Unknown quota name: {quota_name!r}")
 
 
@@ -81,8 +87,15 @@ def reset_quotas() -> None:
 		_limiters.clear()
 
 
-def enforce_quota(quota_name: str, user_id: str) -> None:
-	"""Consume one unit of ``quota_name`` for ``user_id``; raise 429 if exhausted."""
+def try_consume_quota(quota_name: str, user_id: str) -> int | None:
+	"""Consume one unit of ``quota_name`` for ``user_id``.
+
+	Returns ``None`` when the call is allowed, or the number of seconds to wait
+	when the allowance is exhausted. This non-raising form exists for callers
+	that cannot use an HTTP exception — notably the interview WebSocket, which
+	must report the refusal as a message frame and keep the socket open rather
+	than tearing down a live interview.
+	"""
 
 	try:
 		_get_limiter(quota_name).check(f"{quota_name}:{user_id}")
@@ -93,14 +106,25 @@ def enforce_quota(quota_name: str, user_id: str) -> None:
 			user_id,
 			exc.retry_after_seconds,
 		)
-		raise HTTPException(
-			status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-			detail=(
-				"You have reached the hourly limit for this operation. "
-				f"Try again in {exc.retry_after_seconds} seconds."
-			),
-			headers={"Retry-After": str(exc.retry_after_seconds)},
-		) from exc
+		return exc.retry_after_seconds
+	return None
+
+
+def enforce_quota(quota_name: str, user_id: str) -> None:
+	"""Consume one unit of ``quota_name`` for ``user_id``; raise 429 if exhausted."""
+
+	retry_after_seconds = try_consume_quota(quota_name, user_id)
+	if retry_after_seconds is None:
+		return
+
+	raise HTTPException(
+		status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+		detail=(
+			"You have reached the hourly limit for this operation. "
+			f"Try again in {retry_after_seconds} seconds."
+		),
+		headers={"Retry-After": str(retry_after_seconds)},
+	)
 
 
 def quota_dependency(quota_name: str) -> Callable[..., AuthenticatedUser]:
@@ -123,10 +147,12 @@ def quota_dependency(quota_name: str) -> Callable[..., AuthenticatedUser]:
 
 __all__ = [
 	"DSA_EXECUTION",
+	"INTERVIEW_TURN",
 	"RESUME_PARSE",
 	"ROLE_MATCH",
 	"VOICE",
 	"enforce_quota",
 	"quota_dependency",
 	"reset_quotas",
+	"try_consume_quota",
 ]

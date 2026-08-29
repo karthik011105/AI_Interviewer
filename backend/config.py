@@ -218,6 +218,9 @@ class QuotaSettings:
 	role_match_max_per_hour: int
 	dsa_execution_max_per_hour: int
 	voice_max_per_hour: int
+	# Answer evaluations during a live interview round. Driven by WebSocket
+	# messages rather than requests, so a client can send them in a tight loop.
+	interview_turn_max_per_hour: int
 	quota_window_seconds: int
 
 
@@ -461,6 +464,12 @@ class AppSettings:
 				source,
 				"QUOTA_VOICE_PER_HOUR",
 				200,
+				minimum=1,
+			),
+			interview_turn_max_per_hour=_read_int(
+				source,
+				"QUOTA_INTERVIEW_TURN_PER_HOUR",
+				120,
 				minimum=1,
 			),
 			quota_window_seconds=_read_int(

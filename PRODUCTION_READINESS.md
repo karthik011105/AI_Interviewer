@@ -70,7 +70,7 @@ All of this is fixed; see §17.
 
 **[RESOLVED] A deployment story now exists** — Dockerfiles for both services, a compose stack, a POSIX startup script, and a CI pipeline (§19). Both images build (847 MB backend, 74.7 MB frontend) and the full stack was exercised end to end: health checks, a signup/login round-trip against containerised MongoDB, Judge0 reachable from the backend container, rate limiting returning 429 with `Retry-After`, and secrets confirmed absent from the image. Running it turned up three further bugs that syntax checking could not have found (§19). CI itself has not yet run.
 
-**[RESOLVED] LLM and compute spend is now bounded** — per-user hourly quotas on resume parsing, role matching, DSA execution, and voice, returning 429 with `Retry-After` (§21). The interview WebSocket is not yet metered.
+**[RESOLVED] LLM and compute spend is now bounded** — per-user hourly quotas on resume parsing, role matching, DSA execution, and voice (§21), extended to the interview WebSocket (§23). Every path that spends money on Groq, ElevenLabs, or Judge0 is now metered per account.
 
 The largest remaining risks are:
 
@@ -140,7 +140,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 
 | Finding | Severity | File(s) | Why it's a problem | Fix | Block ship? |
 |---|---|---|---|---|---|
-| **[RESOLVED]** ~~No rate limiting anywhere in the app~~ | High | `backend/api/rate_limit.py`, `backend/api/routes_auth.py`, `backend/api/quotas.py` | `/auth/signup` and `/auth/login` enforce a per-IP request budget plus a per-account backoff after consecutive failures. Separately, per-user hourly quotas now bound spend on every Groq- and Judge0-backed route (§21). **Still open:** the interview WebSocket also drives Groq calls and is not yet metered. | Extend `quotas.py` into the WebSocket message loop | No — the REST spend surface is closed; the WebSocket gap is a smaller residual risk |
+| **[RESOLVED]** ~~No rate limiting anywhere in the app~~ | High | `backend/api/rate_limit.py`, `backend/api/routes_auth.py`, `backend/api/quotas.py` | `/auth/signup` and `/auth/login` enforce a per-IP request budget plus a per-account backoff after consecutive failures. Separately, per-user hourly quotas now bound spend on every Groq- and Judge0-backed route (§21). The interview WebSocket is metered too (§23). | Done | — |
 | **[RESOLVED]** ~~No password policy~~ | Medium | `backend/api/routes_auth.py`, `backend/config.py` | Signup now enforces a configurable minimum length and a maximum **UTF-8 byte** length. The byte limit closed a latent 500: bcrypt 5.0 raises `ValueError` above 72 bytes, so a long password — or a 30-character emoji/CJK password (120 bytes) — previously crashed signup. The policy is deliberately not applied at sign-in, to avoid locking out pre-policy accounts and disclosing the policy to anonymous callers. | Done | — |
 | **[RESOLVED]** ~~User enumeration via sign-in~~ | Medium | `backend/api/routes_auth.py` | Unknown-address and wrong-password now return an identical status and detail, a dummy bcrypt comparison equalises response timing when no account exists, and the lockout is keyed on the *submitted* address so attempts against non-existent accounts throttle identically. Keying it on a resolved account would have turned the lockout itself into an enumeration oracle. | Done | — |
 | No email verification | Medium | `backend/api/routes_auth.py:45-66` | Signup issues a valid session token immediately with no confirmation that the email address is owned by the requester | Add an email-verification flow before granting full access, or explicitly accept this as a deliberate trade-off for a low-stakes demo app | Depends on threat model — flag for a decision, not silently skip |
@@ -776,3 +776,49 @@ without authentication keeps working, verified by re-running the DSA integration
 tests against the currently-running unauthenticated instance (2 passed).
 
 Suite: 171 passing throughout.
+
+---
+
+## 23. Change log — metering the interview WebSocket
+
+§21 bounded spend on the REST routes but left the interview WebSocket open, and
+that was the larger hole: it drives a Groq call per answer, and those arrive as
+socket messages a client can send in a tight loop rather than as rate-limitable
+HTTP requests.
+
+Three paid calls inside the socket are now charged:
+
+| Call | Quota | Why |
+|---|---|---|
+| `evaluate_answer` | `INTERVIEW_TURN` (120/hr) | A Groq call per submitted answer |
+| `transcribe_audio` | `VOICE` | CPU-bound transcription, shares the REST voice budget |
+| `synthesize` | `VOICE` | ElevenLabs bills per character when active |
+
+`InterviewRuntime` now carries `user_id` so quotas are charged per account,
+matching the REST routes.
+
+### Refusals must not drop the socket
+
+`quotas.py` gained `try_consume_quota()`, a non-raising form returning the
+retry-after seconds. The REST `enforce_quota()` is now a thin wrapper that turns
+that into a 429. The WebSocket needs the non-raising form because an exhausted
+quota mid-interview must not tear down a connection carrying state that is
+expensive to rebuild — the refusal is sent as a `quota_exceeded` error frame and
+the runtime returns to `LISTENING`, so the round resumes when the window rolls
+over. Speech specifically degrades to silence rather than stalling, since the
+question text is already on screen.
+
+### The first version of these tests was vacuous
+
+Worth recording, because the failure mode is easy to repeat. The initial tests
+covered `try_consume_quota` directly plus a source-inspection check that each
+call site still references the gate. Mutation testing — gutting `_quota_blocked`
+so it never consults the quota — **passed all 13 tests**. The source-inspection
+test still saw the right text, and nothing exercised the gate's actual behaviour.
+
+`QuotaBlockedBehaviourTests` was added to close that: it drives `_quota_blocked`
+against a fake runtime and asserts it allows calls under the allowance, emits a
+well-formed `quota_exceeded` frame once spent, and leaves the runtime in
+`LISTENING`. The same mutation now fails 2 tests.
+
+Suite: 171 -> 178 passing.

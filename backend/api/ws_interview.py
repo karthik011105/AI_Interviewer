@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.api.auth import AuthenticatedUser, authenticate_access_token, ensure_session_access
+from backend.api.quotas import INTERVIEW_TURN, VOICE, try_consume_quota
 from backend.api.routes_interview import (
 	_build_round_context,
 	_fetch_round_responses,
@@ -93,6 +94,10 @@ class InterviewRuntime:
 	websocket: WebSocket
 	session_id: str
 	round_type: str
+	# The authenticated owner of this session. Carried on the runtime so the
+	# spend quotas below can be charged per account, matching how the REST
+	# routes meter (see backend/api/quotas.py).
+	user_id: str
 	parent_session: dict[str, Any]
 	round_record: dict[str, Any]
 	questions_json: dict[str, Any]
@@ -135,6 +140,37 @@ class InterviewRuntime:
 		self.pending_pcm_frames.clear()
 		self.speech_active = False
 		self.vad.reset()
+
+
+async def _quota_blocked(runtime: "InterviewRuntime", quota_name: str) -> bool:
+	"""Charge one unit of a spend quota; report and refuse if it is exhausted.
+
+	Unlike the REST routes, an exhausted quota here must not tear down the
+	socket: the candidate is mid-interview and the connection carries state that
+	is expensive to rebuild. The refusal is sent as an error frame and the
+	runtime is returned to LISTENING so the round can continue once the window
+	rolls over.
+	"""
+
+	retry_after_seconds = try_consume_quota(quota_name, runtime.user_id)
+	if retry_after_seconds is None:
+		return False
+
+	await runtime.send_json(
+		{
+			"type": "error",
+			"code": "quota_exceeded",
+			"quota": quota_name,
+			"retry_after_seconds": retry_after_seconds,
+			"message": (
+				"You have reached the hourly limit for this operation. "
+				f"Try again in {retry_after_seconds} seconds."
+			),
+		}
+	)
+	if runtime.state not in {"COMPLETE"}:
+		await runtime.set_state("LISTENING")
+	return True
 
 
 def _pcm16le_to_wav_bytes(pcm_bytes: bytes, *, sample_rate: int = _MIC_SAMPLE_RATE) -> bytes:
@@ -301,6 +337,15 @@ def _schedule_turn_commit(runtime: InterviewRuntime) -> None:
 
 async def _stream_tts(runtime: InterviewRuntime, spoken_text: str) -> None:
 	stream_started = False
+	# ElevenLabs bills per character when it is the active provider, so charge
+	# the same VOICE budget the REST /voice/tts route uses. Speech is a prompt,
+	# not an answer: when the allowance is gone the round continues silently
+	# rather than stalling, since the question text is already on screen.
+	if await _quota_blocked(runtime, VOICE):
+		runtime.prompt_phase = "idle"
+		runtime.tts_task = None
+		return
+
 	try:
 		audio_bytes = await asyncio.to_thread(
 			synthesize,
@@ -423,6 +468,11 @@ async def _evaluate_answer_text(runtime: InterviewRuntime, answer_text: str) -> 
 	question = _get_question_at_index(runtime.questions_json, runtime.round_type, runtime.current_index)
 	if question is None:
 		raise WebSocketInterviewError(f"No question at index {runtime.current_index}.")
+
+	# Each evaluation is a Groq call, and a client can send typed_answer frames
+	# in a tight loop, so charge the turn quota before spending.
+	if await _quota_blocked(runtime, INTERVIEW_TURN):
+		return
 
 	question_text = str(question.get("question") or "")
 	ideal_points = list(question.get("ideal_points") or [])
@@ -606,6 +656,11 @@ async def _transcribe_captured_audio(runtime: InterviewRuntime) -> None:
 			}
 		)
 		await runtime.set_state("LISTENING")
+		return
+
+	# Transcription is CPU-bound server work; share the VOICE budget with the
+	# equivalent REST route so both paths draw on one allowance.
+	if await _quota_blocked(runtime, VOICE):
 		return
 
 	await runtime.set_state("TRANSCRIBING")
@@ -844,6 +899,7 @@ async def interview_websocket(
 			websocket=websocket,
 			session_id=session_id,
 			round_type=round_type,
+			user_id=current_user.user_id,
 			parent_session=parent_session,
 			round_record=round_record,
 			questions_json=questions_json,
