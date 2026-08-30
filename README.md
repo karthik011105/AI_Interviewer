@@ -180,7 +180,7 @@ Expected result:
 
 ```powershell
 Set-Location E:\interview_simulator
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+.\.venv\Scripts\python.exe -m unittest discover -t . -s tests -p "test_*.py"
 ```
 
 ### Step 9: Run the quick smoke snapshot
@@ -510,7 +510,7 @@ npm run build
 
 ```powershell
 Set-Location E:\interview_simulator
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+.\.venv\Scripts\python.exe -m unittest discover -t . -s tests -p "test_*.py"
 ```
 
 ### Focused DSA test suites
