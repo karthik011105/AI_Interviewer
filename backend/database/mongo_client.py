@@ -217,6 +217,16 @@ class MongoRepository:
 	def get_session(self, session_id: str) -> dict[str, Any] | None:
 		return self.fetch_one("sessions", filters={"id": session_id})
 
+	def list_sessions_for_user(self, *, user_id: str) -> list[dict[str, Any]]:
+		"""Return every session owned by a user, newest first.
+
+		Used by the cross-session interview analytics, which aggregates a
+		candidate's results across all of their sessions.
+		"""
+
+		cursor = self.db["sessions"].find({"user_id": user_id}).sort("created_at", -1)
+		return [self._map_id(doc) for doc in cursor]
+
 	def update_session_status(
 		self,
 		*,

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -430,6 +431,10 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
 def get_semantic_encoder() -> Any | None:
 	"""Return a process-wide SBERT encoder instance when available."""
 
+	if os.getenv("DISABLE_SEMANTIC_ENCODER", "").strip().lower() in {"1", "true", "yes"}:
+		_LOGGER.info("Semantic encoder disabled via DISABLE_SEMANTIC_ENCODER.")
+		return None
+
 	try:
 		sentence_transformers = import_module("sentence_transformers")
 	except ModuleNotFoundError:
@@ -818,15 +823,21 @@ def match_and_store_roles(
 	parsed_resume: Mapping[str, Any],
 	role_profiles: Sequence[Mapping[str, Any] | RoleProfile] | None = None,
 	max_roles: int = 5,
+	use_groq_profiles: bool | None = None,
 ) -> RoleMatchResult:
-	"""Convenience wrapper that persists ranked role matches."""
+	"""Convenience wrapper that persists ranked role matches.
+
+	`use_groq_profiles` is forwarded from the caller when supplied; explicit
+	role_profiles still suppress Groq generation by default.
+	"""
 
 	matcher = RoleMatcher(role_profiles=role_profiles)
+	resolved_use_groq = (role_profiles is None) if use_groq_profiles is None else bool(use_groq_profiles)
 	return matcher.match_and_store_roles(
 		session_id=session_id,
 		parsed_resume=parsed_resume,
 		max_roles=max_roles,
-		use_groq_profiles=(role_profiles is None),
+		use_groq_profiles=resolved_use_groq,
 	)
 
 
