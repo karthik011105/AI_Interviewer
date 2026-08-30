@@ -15,12 +15,23 @@ export function useAudioPlayback({ onError } = {}) {
 	const activeRef = useRef(false);
 	const sourcesRef = useRef(new Set());
 
-	const ensureContext = useCallback(async () => {
+	/** Nudge a suspended context awake without ever blocking the caller.
+	 *
+	 * `resume()` does not settle at all when there is no output device, so it
+	 * must never be awaited on the path that decodes and schedules audio -
+	 * doing that silently swallows every chunk. Anything scheduled while the
+	 * context is still suspended simply starts playing once it wakes.
+	 */
+	const nudgeResume = useCallback((context) => {
+		if (context && context.state === "suspended") {
+			Promise.resolve(context.resume()).catch(() => {});
+		}
+	}, []);
+
+	const ensureContext = useCallback(() => {
 		const existing = contextRef.current;
 		if (existing && existing.state !== "closed") {
-			if (existing.state === "suspended") {
-				await existing.resume().catch(() => {});
-			}
+			nudgeResume(existing);
 			return existing;
 		}
 
@@ -43,18 +54,9 @@ export function useAudioPlayback({ onError } = {}) {
 
 		contextRef.current = context;
 		cursorRef.current = context.currentTime;
-		if (context.state === "suspended") {
-			// resume() can never settle when there is no output device, so cap it
-			// rather than leaving the caller awaiting forever.
-			await Promise.race([
-				context.resume().catch(() => {}),
-				new Promise((resolve) => {
-					setTimeout(resolve, 1500);
-				}),
-			]);
-		}
+		nudgeResume(context);
 		return context;
-	}, [onError]);
+	}, [nudgeResume, onError]);
 
 	const stop = useCallback(() => {
 		sourcesRef.current.forEach((source) => {
@@ -93,7 +95,7 @@ export function useAudioPlayback({ onError } = {}) {
 		async (arrayBuffer) => {
 			if (!arrayBuffer || arrayBuffer.byteLength === 0) return;
 
-			const context = await ensureContext();
+			const context = ensureContext();
 			if (!context) return;
 
 			let audioBuffer;

@@ -63,9 +63,18 @@ export default function ConversationalInterview({
 		else playback.endTurn();
 	}, [state.tts.playing, playback]);
 
+	// Deliberately NOT tied to the phase. The server moves to LISTENING as soon
+	// as it has *sent* the last audio chunk, while the client still has seconds
+	// of it scheduled ahead on the audio clock - stopping there cut the
+	// interviewer off mid-sentence. Audio is only ever stopped by a real
+	// barge-in, by the round ending, or on unmount.
 	useEffect(() => {
-		if (state.phase === "listening" || state.phase === "complete") playback.stop();
-	}, [state.phase, playback]);
+		if (state.interruptSeq > 0) playback.stop();
+	}, [state.interruptSeq, playback]);
+
+	useEffect(() => {
+		if (state.round.done) playback.stop();
+	}, [state.round.done, playback]);
 
 	const micEnabled = state.connection === "open" && !state.round.done;
 
@@ -128,7 +137,7 @@ export default function ConversationalInterview({
 				// With no output device `resume()` can hang indefinitely, and the
 				// interview must not be held hostage to that: the thread is
 				// readable without sound, and the first audio chunk re-primes.
-				playback.ensureContext().catch(() => null);
+				playback.ensureContext();
 				socket.connect(
 					resolveInterviewSocketUrl(apiBaseUrl, sessionId, forcedRound, accessToken),
 				);

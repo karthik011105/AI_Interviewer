@@ -33,6 +33,9 @@ export const INITIAL_STATE = {
 	},
 
 	tts: { playing: false, encoding: null },
+	// Bumped on every barge-in. The component watches this rather than a phase,
+	// because "stop the audio" is an event, not a state the phase can express.
+	interruptSeq: 0,
 
 	round: {
 		mode: null, // "dynamic" | "scripted"
@@ -229,7 +232,12 @@ export function interviewReducer(state, action) {
 			return { ...state, tts: { ...state.tts, playing: false } };
 
 		case "INTERRUPTED":
-			return { ...state, tts: { ...state.tts, playing: false }, phase: "listening" };
+			return {
+				...state,
+				tts: { ...state.tts, playing: false },
+				phase: "listening",
+				interruptSeq: state.interruptSeq + 1,
+			};
 
 		case "ROUND_COMPLETE":
 			return {
