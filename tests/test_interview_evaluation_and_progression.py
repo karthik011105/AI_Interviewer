@@ -11,6 +11,7 @@ from backend.api.auth import AuthenticatedUser
 from backend.api import routes_interview
 from backend.main import create_app
 from backend.nlp import answer_evaluator
+from backend.voice import tts as tts_module
 
 
 class AnswerEvaluationTests(TestCase):
@@ -580,10 +581,10 @@ class WebSocketInterviewTests(TestCase):
 			 }), \
 			 patch("backend.api.ws_interview.ensure_session_access"), \
 			 patch("backend.api.ws_interview._load_or_create_round_session", return_value=(round_record, dict(round_questions_json))), \
-			 patch("backend.api.ws_interview.synthesize", return_value=b""), \
-			 patch("backend.api.ws_interview.evaluate_answer", return_value=evaluation), \
-			 patch("backend.api.ws_interview.save_interview_response") as mock_save_response, \
-			 patch("backend.api.ws_interview.advance_interview_question", side_effect=_advance_round) as mock_advance_question:
+			 patch("backend.api.interview_runtime.synthesize_detailed", return_value=tts_module.TTSOutput(b"", "wav", 22050, "piper")), \
+			 patch("backend.api.interview_engines.scripted.evaluate_answer", return_value=evaluation), \
+			 patch("backend.api.interview_engines.scripted.save_interview_response") as mock_save_response, \
+			 patch("backend.api.interview_engines.scripted.advance_interview_question", side_effect=_advance_round) as mock_advance_question:
 			app = create_app()
 			with TestClient(app) as client:
 				with client.websocket_connect("/interview/ws/session-123/technical?access_token=test-token") as websocket:

@@ -941,6 +941,15 @@ def clarify_interview_question(
 			detail="This interview round is already complete.",
 		)
 
+	if str((round_record.get("questions_json") or {}).get("mode") or "") == "dynamic":
+		# A conversational round has no stable question index to answer against:
+		# the interviewer may already have moved on. Accepting an answer here
+		# would silently corrupt the transcript rather than fail loudly.
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="This round runs in conversational mode; answer over the WebSocket.",
+		)
+
 	persisted_index = int(round_record.get("current_question_index") or 0)
 	if request.question_index != persisted_index:
 		raise HTTPException(

@@ -196,13 +196,14 @@ class WebSocketQuotaTests(_QuotaTestBase):
 		"""Guards against a refactor silently dropping a WebSocket quota check."""
 		import inspect
 
-		from backend.api import ws_interview
+		from backend.api import interview_runtime
+		from backend.api.interview_engines import scripted
 
 		# (function, quota constant it must charge)
 		expected = [
-			(ws_interview._evaluate_answer_text, "INTERVIEW_TURN"),
-			(ws_interview._transcribe_captured_audio, "VOICE"),
-			(ws_interview._stream_tts, "VOICE"),
+			(scripted._evaluate_answer_text, "INTERVIEW_TURN"),
+			(interview_runtime._transcribe_captured_audio, "VOICE"),
+			(interview_runtime.speak_stream, "VOICE"),
 		]
 
 		for func, quota_identifier in expected:
@@ -217,7 +218,7 @@ class WebSocketQuotaTests(_QuotaTestBase):
 		"""Quotas are per-account, so the runtime must know who is connected."""
 		import dataclasses
 
-		from backend.api.ws_interview import InterviewRuntime
+		from backend.api.interview_runtime import InterviewRuntime
 
 		field_names = {f.name for f in dataclasses.fields(InterviewRuntime)}
 		self.assertIn("user_id", field_names)
