@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,16 +21,29 @@ from backend.api.routes_voice import router as voice_router
 from backend.api.ws_interview import router as ws_interview_router
 from backend.nlp.role_matcher import get_semantic_backend_status, warmup_semantic_encoder
 from backend.research_assets import get_research_asset_summary, warmup_research_asset_registry
+from backend.voice.stt import warmup_stt
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-	warmup_semantic_encoder()
-	warmup_research_asset_registry()
-	yield
+	# Load Whisper off the event loop so the first candidate to speak does not
+	# pay the model load inside their turn. Startup continues if it fails.
+	warmup_task = asyncio.create_task(asyncio.to_thread(warmup_stt))
+	try:
+		yield
+	finally:
+		warmup_task.cancel()
+		with contextlib.suppress(asyncio.CancelledError, Exception):
+			await warmup_task
 
 
 def create_app() -> FastAPI:
+	# Warm up before the event loop starts: importing sentence-transformers'
+	# native extensions (pyarrow/datasets) while asyncio's loop is already
+	# running triggers an intermittent access violation on Windows.
+	warmup_semantic_encoder()
+	warmup_research_asset_registry()
+
 	app = FastAPI(title="AI Interview Simulator", version="0.1.0", lifespan=_lifespan)
 	app.add_middleware(
 		CORSMiddleware,

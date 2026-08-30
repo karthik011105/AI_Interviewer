@@ -117,6 +117,8 @@ def _normalize_provider(value: str | None) -> str:
     normalized = str(value or "piper").strip().casefold()
     if normalized in {"eleven", "elevenlabs", "11labs"}:
         return "elevenlabs"
+    if normalized in {"edge", "edge-tts", "edgetts"}:
+        return "edge"
     return "piper"
 
 def _resolve_piper_executable() -> str | None:
@@ -567,50 +569,27 @@ def _synthesize_with_elevenlabs_audio(text: str, *, voice: str | None = None) ->
 def _synthesize_with_edge_audio(text: str, *, voice: str | None = None) -> TTSAudioResult:
     effective_voice = (voice or "en-US-JennyNeural").strip()
     try:
-        import edge_tts
         import asyncio
-        
-        async def _run_edge():
+
+        import edge_tts
+
+        async def _run_edge() -> bytes:
             communicate = edge_tts.Communicate(text, effective_voice)
-            audio_data = b""
+            parts: list[bytes] = []
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
-                    audio_data += chunk["data"]
-            return audio_data
-            
-        # Execute async code in a new event loop if necessary, but we are often in an async context already.
-        # Wait, if we are in asyncio.to_thread, we don't have a running loop here.
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        if loop.is_running():
-            import threading
-            def _thread_run():
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(_run_edge())
-            
-            thread_result = []
-            def target():
-                try:
-                    thread_result.append(_thread_run())
-                except Exception as e:
-                    thread_result.append(e)
-            t = threading.Thread(target=target)
-            t.start()
-            t.join()
-            if isinstance(thread_result[0], Exception):
-                raise thread_result[0]
-            audio_bytes = thread_result[0]
-        else:
-            audio_bytes = loop.run_until_complete(_run_edge())
-            
+                    parts.append(chunk["data"])
+            return b"".join(parts)
+
+        # Synthesis always runs in a worker thread (see asyncio.to_thread at the
+        # call sites), so there is no running loop here to reuse. asyncio.run
+        # creates one and — unlike the previous get_event_loop path — always
+        # closes it, instead of leaking a loop per call.
+        audio_bytes = asyncio.run(_run_edge())
+
         if not audio_bytes:
             raise TTSSynthesisError("Edge-TTS returned empty audio.")
-            
+
         return TTSAudioResult(
             provider="edge",
             sample_rate=24000,
@@ -618,8 +597,11 @@ def _synthesize_with_edge_audio(text: str, *, voice: str | None = None) -> TTSAu
         )
     except ImportError:
         raise TTSUnavailableError("edge-tts library is not installed.")
+    except TTSSynthesisError:
+        raise
     except Exception as exc:
         raise TTSSynthesisError(f"Edge-TTS synthesis failed: {exc}") from exc
+
 
 def _provider_order() -> tuple[str, ...]:
     provider = _current_tts_provider()
@@ -655,47 +637,49 @@ def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResul
 # Public synthesis entry point
 # ---------------------------------------------------------------------------
 
-def synthesize(text: str, *, voice: str | None = None) -> bytes:
-    """Synthesize text to WAV/MP3 audio bytes using the selected provider."""
+@dataclass(frozen=True)
+class TTSOutput:
+    """Synthesized audio plus the container metadata a client needs to decode it."""
+
+    audio: bytes
+    encoding: str  # "wav" | "mp3"
+    sample_rate: int
+    provider: str
+
+
+def synthesize_detailed(text: str, *, voice: str | None = None) -> TTSOutput:
+    """Synthesize text and report the container format actually produced.
+
+    Providers do not agree on format: edge-tts returns MP3, Piper and
+    ElevenLabs return PCM that we wrap as WAV. Callers that put the bytes on a
+    wire must advertise the real encoding rather than assume one.
+    """
+
     if not text or not text.strip():
-        return _silent_wav()
+        return TTSOutput(_silent_wav(), "wav", _DEFAULT_SAMPLE_RATE, "silence")
 
     try:
         audio = _generate_tts_audio(text, voice=voice)
     except TTSUnavailableError:
-        return _silent_wav()
+        return TTSOutput(_silent_wav(), "wav", _DEFAULT_SAMPLE_RATE, "silence")
 
     if audio is None or not audio.pcm_bytes:
-        return _silent_wav(sample_rate=audio.sample_rate if audio is not None else _DEFAULT_SAMPLE_RATE)
-        
+        sample_rate = audio.sample_rate if audio is not None else _DEFAULT_SAMPLE_RATE
+        return TTSOutput(_silent_wav(sample_rate=sample_rate), "wav", sample_rate, "silence")
+
     if audio.provider == "edge":
-        return audio.pcm_bytes  # Returns MP3 directly for edge-tts
-    return _pcm16le_to_wav_bytes(audio.pcm_bytes, sample_rate=audio.sample_rate)
+        return TTSOutput(audio.pcm_bytes, "mp3", audio.sample_rate, "edge")
+    return TTSOutput(
+        _pcm16le_to_wav_bytes(audio.pcm_bytes, sample_rate=audio.sample_rate),
+        "wav",
+        audio.sample_rate,
+        audio.provider,
+    )
 
 
-def synthesize_chunks(
-    text: str,
-    *,
-    voice: str | None = None,
-    chunk_ms: int = 100,
-    sample_rate: int = _DEFAULT_SAMPLE_RATE,
-) -> tuple[int, list[bytes]]:
-    """Synthesize text and return PCM chunks suitable for progressive playback."""
-    chunk_ms = max(20, int(chunk_ms))
-    if not text or not text.strip():
-        return sample_rate, []
-
-    audio = _generate_tts_audio(text, voice=voice)
-    if audio is None:
-        return sample_rate, []
-
-    effective_sample_rate = audio.sample_rate or sample_rate
-    chunk_size = max(2, effective_sample_rate * 2 * chunk_ms // 1000)
-    chunks = [
-        audio.pcm_bytes[index:index + chunk_size]
-        for index in range(0, len(audio.pcm_bytes), chunk_size)
-    ]
-    return effective_sample_rate, chunks
+def synthesize(text: str, *, voice: str | None = None) -> bytes:
+    """Synthesize text to WAV/MP3 audio bytes using the selected provider."""
+    return synthesize_detailed(text, voice=voice).audio
 
 
 def tts_health() -> dict[str, object]:
