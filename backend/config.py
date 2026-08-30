@@ -348,15 +348,15 @@ class AppSettings:
 				api_key=groq_api_key,
 				api_base_url=_base,
 				resume_parser_model=(
-					(source.get("GROQ_RESUME_MODEL") or "llama-3.3-70b-versatile")
+					(source.get("GROQ_RESUME_MODEL") or "openai/gpt-oss-120b")
 					.strip()
 				),
 				answer_evaluator_model=(
-					(source.get("GROQ_EVALUATOR_MODEL") or "llama-3.1-8b-instant")
+					(source.get("GROQ_EVALUATOR_MODEL") or "openai/gpt-oss-20b")
 					.strip()
 				),
 				feedback_generator_model=(
-					(source.get("GROQ_FEEDBACK_MODEL") or "llama-3.1-8b-instant")
+					(source.get("GROQ_FEEDBACK_MODEL") or "openai/gpt-oss-20b")
 					.strip()
 				),
 				timeout_seconds=_read_float(
