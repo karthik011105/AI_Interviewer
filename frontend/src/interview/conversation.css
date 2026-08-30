@@ -1,0 +1,475 @@
+/* Conversational interview UI.
+ *
+ * Dark-glass only: every colour is a :root token from styles.css, so this
+ * cannot reintroduce the light-on-dark palette clash the old inline styles had.
+ */
+
+.conversation-shell {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+	gap: 20px;
+	align-items: start;
+}
+
+@media (max-width: 1080px) {
+	.conversation-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.conversation-main {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	min-width: 0;
+}
+
+/* -- thread ---------------------------------------------------------------- */
+
+.interview-thread {
+	border-radius: 30px;
+	border: 1px solid var(--panel-border);
+	background: linear-gradient(180deg, rgba(10, 18, 28, 0.86), rgba(6, 12, 20, 0.94));
+	overflow: hidden;
+}
+
+.interview-thread__scroller {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 22px;
+	max-height: min(58vh, 560px);
+	overflow-y: auto;
+	scroll-behavior: smooth;
+}
+
+.interview-thread__empty,
+.interview-thread__thinking {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.92rem;
+	font-style: italic;
+}
+
+.turn-bubble {
+	max-width: 82%;
+	padding: 14px 16px;
+	border-radius: 20px;
+	border: 1px solid var(--panel-border);
+	background: rgba(9, 16, 26, 0.9);
+}
+
+.turn-bubble--interviewer {
+	align-self: flex-start;
+	border-color: rgba(246, 183, 61, 0.28);
+	background: linear-gradient(180deg, rgba(246, 183, 61, 0.1), rgba(9, 16, 26, 0.92));
+}
+
+.turn-bubble--candidate {
+	align-self: flex-end;
+	border-color: rgba(86, 216, 195, 0.26);
+	background: linear-gradient(180deg, rgba(86, 216, 195, 0.1), rgba(9, 16, 26, 0.92));
+}
+
+.turn-bubble--caption {
+	opacity: 0.72;
+	border-style: dashed;
+}
+
+.turn-bubble__meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.turn-bubble__who {
+	font-family: "Outfit", "Segoe UI", sans-serif;
+	font-size: 0.72rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.turn-bubble__chip {
+	font-size: 0.68rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--panel-border);
+	color: var(--muted);
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.turn-bubble__chip--followup {
+	color: var(--gold);
+	border-color: rgba(255, 209, 102, 0.4);
+}
+
+.turn-bubble__chip--tier {
+	color: var(--sea);
+	border-color: rgba(86, 216, 195, 0.35);
+}
+
+.turn-bubble__chip--pending {
+	color: var(--muted);
+	animation: turn-pulse 1.4s ease-in-out infinite;
+}
+
+.turn-bubble__chip--failed {
+	color: var(--danger);
+	border-color: rgba(255, 107, 107, 0.4);
+}
+
+.turn-bubble__text {
+	margin: 0;
+	white-space: pre-wrap;
+	color: var(--text);
+}
+
+.turn-bubble__cursor {
+	display: inline-block;
+	width: 7px;
+	height: 1em;
+	margin-left: 3px;
+	vertical-align: text-bottom;
+	background: var(--accent);
+	animation: turn-pulse 1s steps(2, start) infinite;
+}
+
+.turn-bubble__score {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-family: "Outfit", "Segoe UI", sans-serif;
+	font-size: 0.78rem;
+	padding: 2px 9px;
+	border-radius: 999px;
+	cursor: pointer;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid var(--panel-border);
+	color: var(--text);
+}
+
+.turn-bubble__score--good {
+	color: var(--sea);
+	border-color: rgba(86, 216, 195, 0.45);
+}
+
+.turn-bubble__score--warn {
+	color: var(--gold);
+	border-color: rgba(255, 209, 102, 0.45);
+}
+
+.turn-bubble__score--bad {
+	color: var(--danger);
+	border-color: rgba(255, 107, 107, 0.42);
+}
+
+.turn-bubble__score-caret {
+	font-size: 0.62rem;
+	opacity: 0.75;
+}
+
+.turn-bubble__detail {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--panel-border);
+	display: grid;
+	gap: 10px;
+}
+
+.turn-bubble__rubric {
+	display: grid;
+	gap: 6px;
+}
+
+.turn-bubble__rubric-row {
+	display: grid;
+	grid-template-columns: 74px minmax(0, 1fr) 28px;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.74rem;
+	color: var(--muted);
+}
+
+.turn-bubble__rubric-track {
+	height: 5px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.07);
+	overflow: hidden;
+}
+
+.turn-bubble__rubric-fill {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, var(--accent), var(--sea));
+}
+
+.turn-bubble__rubric-value {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.turn-bubble__feedback {
+	margin: 0;
+	font-size: 0.88rem;
+	color: var(--muted);
+}
+
+@keyframes turn-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+/* -- mic control bar ------------------------------------------------------- */
+
+.mic-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	padding: 14px 18px;
+	border-radius: 22px;
+	border: 1px solid var(--panel-border);
+	background: linear-gradient(180deg, rgba(12, 20, 30, 0.94), rgba(7, 13, 21, 0.98));
+}
+
+.mic-bar__status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 210px;
+}
+
+.mic-bar__orb {
+	width: 11px;
+	height: 11px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+
+.mic-bar__orb--listening {
+	background: var(--sea);
+	animation: mic-ping 1.8s ease-out infinite;
+}
+
+.mic-bar__orb--speaking {
+	background: var(--accent);
+}
+
+.mic-bar__orb--thinking {
+	background: var(--gold);
+	animation: turn-pulse 1.2s ease-in-out infinite;
+}
+
+.mic-bar__orb--transcribing {
+	background: var(--gold);
+}
+
+.mic-bar__orb--complete {
+	background: var(--sea);
+}
+
+@keyframes mic-ping {
+	0% {
+		box-shadow: 0 0 0 0 rgba(86, 216, 195, 0.45);
+	}
+	70% {
+		box-shadow: 0 0 0 9px rgba(86, 216, 195, 0);
+	}
+	100% {
+		box-shadow: 0 0 0 0 rgba(86, 216, 195, 0);
+	}
+}
+
+.mic-bar__labels {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.25;
+}
+
+.mic-bar__labels strong {
+	font-family: "Outfit", "Segoe UI", sans-serif;
+	font-size: 0.9rem;
+}
+
+.mic-bar__labels small {
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.mic-bar__wave {
+	display: inline-flex;
+	align-items: flex-end;
+	gap: 2px;
+	height: 18px;
+}
+
+.mic-bar__wave span {
+	width: 3px;
+	height: 4px;
+	border-radius: 2px;
+	background: rgba(147, 164, 188, 0.45);
+}
+
+.mic-bar__wave--active span {
+	background: var(--sea);
+	animation: mic-wave 1s ease-in-out infinite;
+}
+
+@keyframes mic-wave {
+	0%,
+	100% {
+		height: 4px;
+	}
+	50% {
+		height: 16px;
+	}
+}
+
+.mic-bar__typed {
+	display: flex;
+	flex: 1 1 320px;
+	gap: 10px;
+	align-items: flex-start;
+}
+
+.mic-bar__textarea {
+	flex: 1;
+	resize: vertical;
+	padding: 9px 12px;
+	border-radius: 14px;
+	border: 1px solid var(--panel-border);
+	background: rgba(6, 12, 20, 0.9);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.9rem;
+}
+
+.mic-bar__textarea:focus {
+	outline: none;
+	border-color: rgba(86, 216, 195, 0.5);
+}
+
+.mic-bar__actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.mic-bar__end {
+	margin-left: auto;
+}
+
+/* -- coverage rail --------------------------------------------------------- */
+
+.coverage-rail {
+	padding: 20px;
+	display: grid;
+	gap: 14px;
+	align-content: start;
+}
+
+.coverage-rail__turns {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.86rem;
+}
+
+.coverage-rail__turns strong {
+	color: var(--text);
+}
+
+.coverage-rail__tiers {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 10px;
+}
+
+.coverage-rail__tier-head {
+	display: flex;
+	justify-content: space-between;
+	font-size: 0.8rem;
+	color: var(--muted);
+	margin-bottom: 4px;
+}
+
+.coverage-rail__count {
+	font-variant-numeric: tabular-nums;
+	color: var(--text);
+}
+
+.coverage-rail__bar {
+	display: block;
+	height: 6px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.06);
+	overflow: hidden;
+}
+
+.coverage-rail__bar span {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--sea);
+}
+
+.coverage-rail__bar--absent span {
+	background: var(--accent);
+}
+
+.coverage-rail__bar--familiar span {
+	background: var(--gold);
+}
+
+.coverage-rail__remaining-label {
+	font-size: 0.7rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.coverage-rail__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.coverage-rail__chip {
+	font-size: 0.74rem;
+	padding: 3px 9px;
+	border-radius: 999px;
+	border: 1px solid var(--panel-border);
+	color: var(--muted);
+	background: rgba(255, 255, 255, 0.03);
+}
+
+.coverage-rail__chip--absent {
+	color: var(--accent);
+	border-color: rgba(246, 183, 61, 0.35);
+}
+
+.coverage-rail__chip--familiar {
+	color: var(--gold);
+	border-color: rgba(255, 209, 102, 0.3);
+}
+
+.coverage-rail__done {
+	margin: 0;
+	color: var(--sea);
+	font-size: 0.85rem;
+}
