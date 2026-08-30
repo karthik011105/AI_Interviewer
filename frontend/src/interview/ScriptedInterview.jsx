@@ -6,8 +6,6 @@ import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
-const TARGET_SAMPLE_RATE = 16000;
-const PCM_FRAME_SAMPLES = 320;
 const MAX_CLARIFICATIONS_PER_QUESTION = 2;
 const INTERVIEW_ROUND_ORDER = ["technical", "project_discussion", "hr"];
 const TECHNICAL_TIER_ORDER = ["strong", "familiar", "mentioned", "absent", "general"];
@@ -278,83 +276,6 @@ function buildPersistedCompletionFeedback(roundType, roundSession) {
 	};
 }
 
-function concatFloat32Arrays(left, right) {
-	if (!left?.length) {
-		return right || new Float32Array(0);
-	}
-	if (!right?.length) {
-		return left;
-	}
-	const merged = new Float32Array(left.length + right.length);
-	merged.set(left, 0);
-	merged.set(right, left.length);
-	return merged;
-}
-
-function concatInt16Arrays(left, right) {
-	if (!left?.length) {
-		return right || new Int16Array(0);
-	}
-	if (!right?.length) {
-		return left;
-	}
-	const merged = new Int16Array(left.length + right.length);
-	merged.set(left, 0);
-	merged.set(right, left.length);
-	return merged;
-}
-
-function downsampleChunk(chunk, inputRate, targetRate, resampleState) {
-	const combined = concatFloat32Arrays(
-		resampleState?.buffer || new Float32Array(0),
-		chunk || new Float32Array(0),
-	);
-	if (!combined.length) {
-		return {
-			output: new Float32Array(0),
-			state: { buffer: new Float32Array(0), position: 0 },
-		};
-	}
-
-	if (!inputRate || inputRate <= 0 || inputRate === targetRate) {
-		return {
-			output: combined,
-			state: { buffer: new Float32Array(0), position: 0 },
-		};
-	}
-
-	const step = inputRate / targetRate;
-	if (step <= 1) {
-		return {
-			output: combined,
-			state: { buffer: new Float32Array(0), position: 0 },
-		};
-	}
-
-	let position = Number(resampleState?.position || 0);
-	const outputValues = [];
-
-	while (position + 1 < combined.length) {
-		const leftIndex = Math.floor(position);
-		const rightIndex = Math.min(leftIndex + 1, combined.length - 1);
-		const fraction = position - leftIndex;
-		const leftSample = combined[leftIndex] || 0;
-		const rightSample = combined[rightIndex] || leftSample;
-		outputValues.push(leftSample + (rightSample - leftSample) * fraction);
-		position += step;
-	}
-
-	const keepFrom = Math.min(combined.length, Math.floor(position));
-
-	return {
-		output: Float32Array.from(outputValues),
-		state: {
-			buffer: combined.slice(keepFrom),
-			position: position - keepFrom,
-		},
-	};
-}
-
 function float32ToInt16(floatChunk) {
 	const pcm = new Int16Array(floatChunk.length);
 	for (let index = 0; index < floatChunk.length; index += 1) {
@@ -362,15 +283,6 @@ function float32ToInt16(floatChunk) {
 		pcm[index] = sample < 0 ? sample * 32768 : sample * 32767;
 	}
 	return pcm;
-}
-
-function pcm16ToFloat32(arrayBuffer) {
-	const input = new Int16Array(arrayBuffer);
-	const output = new Float32Array(input.length);
-	for (let index = 0; index < input.length; index += 1) {
-		output[index] = input[index] / 32768;
-	}
-	return output;
 }
 
 function paletteCard(tone) {
@@ -401,33 +313,6 @@ function buttonStyle({ color = "#2563eb", ghost = false } = {}) {
 		fontWeight: 700,
 		fontSize: 14,
 	};
-}
-
-function ScoreBadge({ score, label }) {
-	const pct = Math.round((Number(score) || 0) * 100);
-	const tone = pct >= 75 ? "good" : pct >= 50 ? "avg" : "poor";
-	const colors = {
-		good: { background: "#dcfce7", color: "#166534" },
-		avg: { background: "#fef3c7", color: "#92400e" },
-		poor: { background: "#fee2e2", color: "#991b1b" },
-	};
-	const style = colors[tone];
-
-	return (
-		<span
-			style={{
-				background: style.background,
-				color: style.color,
-				padding: "3px 10px",
-				borderRadius: 999,
-				fontSize: 12,
-				fontWeight: 700,
-			}}
-		>
-			{label ? `${label} ` : ""}
-			{pct}%
-		</span>
-	);
 }
 
 function StatusPill({ label, tone }) {
@@ -586,23 +471,6 @@ function ProgressBar({ current, total }) {
 			<div style={{ height: 9, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
 				<div style={{ width, height: "100%", borderRadius: 999, background: "linear-gradient(90deg, #2563eb, #06b6d4)" }} />
 			</div>
-		</div>
-	);
-}
-
-function Section({ title, items }) {
-	if (!Array.isArray(items) || items.length === 0) {
-		return null;
-	}
-
-	return (
-		<div style={{ marginBottom: 16 }}>
-			<p style={{ fontWeight: 700, marginBottom: 8 }}>{title}</p>
-			<ul style={{ margin: 0, paddingLeft: 18, color: "#374151", lineHeight: 1.6 }}>
-				{items.map((item, index) => (
-					<li key={`${title}-${index}`}>{item}</li>
-				))}
-			</ul>
 		</div>
 	);
 }
@@ -939,27 +807,6 @@ export default function ScriptedInterview({
 		lastSocketErrorRef.current = "";
 	}
 
-	function handleRoundSelection(nextRound) {
-		const normalized = normalizeInterviewRound(nextRound);
-		const roundIsUnlocked = interviewRoundsDone[normalized] != null || isInterviewRoundUnlocked(normalized, assessmentComplete, interviewRoundsDone);
-		if (!roundIsUnlocked) {
-			const previousRound = INTERVIEW_ROUND_ORDER[INTERVIEW_ROUND_ORDER.indexOf(normalized) - 1];
-			setErrorMessage(
-				assessmentComplete
-					? `Finish the ${formatInterviewRoundLabel(previousRound)} first before opening ${formatInterviewRoundLabel(normalized)}.`
-					: "Complete the assessment first before opening live interview rounds.",
-			);
-			return;
-		}
-
-		resetRoundState();
-		setInfoMessage(`${formatInterviewRoundLabel(normalized)} selected. Start or resume when you are ready.`);
-		onWorkflowStateChange?.((current) => ({
-			...current,
-			activeInterviewRound: normalized,
-		}));
-	}
-
 	function clearCompletedRound(roundType) {
 		onWorkflowStateChange?.((current) => {
 			const nextRoundsDone = { ...(current?.interviewRoundsDone || {}) };
@@ -1105,10 +952,6 @@ export default function ScriptedInterview({
 
 	function clearCaptureBuffers() {
 		// No longer needed with MicVAD
-	}
-
-	function flushCaptureChunk(floatChunk) {
-		// Handled directly by MicVAD's onSpeechEnd
 	}
 
 	async function prepareCapture() {
@@ -1647,13 +1490,6 @@ export default function ScriptedInterview({
 				? `Resume ${currentRoundCopy.title}`
 				: `Start ${currentRoundCopy.title}`;
 	const canShowStart = sessionSyncState !== "loading" && sessionId && accessToken && !currentQuestion && !roundDone && (connectionState === "idle" || connectionState === "closed");
-	const micStatus = !captureReady
-		? { label: "Mic unavailable", tone: "warn" }
-		: useTyped
-			? { label: inClarificationMode ? "Typed clarification" : "Mic paused", tone: inClarificationMode ? "info" : "warn" }
-			: voiceStep === "listening"
-				? { label: inClarificationMode ? "Clarification live" : "Mic live", tone: "good" }
-				: { label: "Mic waiting", tone: "info" };
 	const canEnterClarification = Boolean(currentQuestion)
 		&& connectionState === "open"
 		&& voiceStep === "listening"
