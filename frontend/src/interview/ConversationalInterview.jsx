@@ -101,12 +101,22 @@ export default function ConversationalInterview({
 			[socket],
 		),
 		onReady: useCallback(() => dispatch({ type: "SET_CAPTURE_READY", ready: true }), []),
-		onFailure: useCallback(() => {
+		onFailure: useCallback((error) => {
+			// MicVAD.new() throws for several unrelated reasons (permission denied,
+			// no device present, or its Silero/onnxruntime assets failing to load
+			// from their CDN) and previously all of them looked identical to the
+			// user. Logging the real error is the only way to tell which one
+			// actually happened without reproducing it by hand.
+			console.error("Microphone/VAD initialization failed:", error);
+			const name = error?.name || "";
+			const hint =
+				name === "NotAllowedError" || name === "SecurityError"
+					? "Microphone permission was denied. Allow microphone access for this site and reload."
+					: name === "NotFoundError"
+						? "No microphone was found on this device."
+						: "Microphone unavailable, so answers are typed for this round.";
 			dispatch({ type: "SET_CAPTURE_READY", ready: false });
-			dispatch({
-				type: "NOTICE",
-				info: "Microphone unavailable, so answers are typed for this round.",
-			});
+			dispatch({ type: "NOTICE", info: hint });
 		}, []),
 	});
 

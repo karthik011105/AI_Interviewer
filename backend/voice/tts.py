@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import shutil
 import struct
@@ -44,6 +45,8 @@ from pathlib import Path
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+
+_LOGGER = logging.getLogger(__name__)
 
 # This module reads its configuration straight from os.environ at import time,
 # so the project .env has to be loaded first. Delegate to backend.config so
@@ -622,9 +625,18 @@ def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResul
             if provider == "elevenlabs":
                 return _synthesize_with_elevenlabs_audio(text, voice=voice)
             return _synthesize_with_piper_audio(text, voice=voice)
-        except TTSUnavailableError:
+        except TTSUnavailableError as exc:
+            # Not configured at all (no API key, no binary found, ...) — routine
+            # enough in dev that this stays at debug level.
+            _LOGGER.debug("TTS provider %r unavailable, trying the next one: %s", provider, exc)
             continue
         except TTSSynthesisError as exc:
+            # The provider *was* configured and still failed (bad request,
+            # rejected by the API, quota, ...). Falling through silently here is
+            # how a real failure (e.g. a voice the account's plan can't use)
+            # turns into "the interviewer just sounds worse" with nothing in the
+            # logs to explain why.
+            _LOGGER.warning("TTS provider %r failed, falling back: %s", provider, exc)
             last_error = exc
             continue
 
