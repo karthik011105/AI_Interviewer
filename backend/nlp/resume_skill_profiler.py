@@ -23,6 +23,12 @@ import re
 from typing import Any
 
 from backend.nlp.ner_extractor import extract_entities
+from backend.nlp.question_generator import (
+	_ROLE_TOPIC_ALIASES,
+	_ROLE_TOPIC_FAMILIES,
+	_ROLE_TOPIC_MAP,
+	_tokenize_topic_source,
+)
 from backend.nlp.role_matcher import DEFAULT_ROLE_PROFILES, get_semantic_encoder
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,6 +54,7 @@ class SkillDepthScore:
 	proximity_score: float
 	sbert_score: float
 	evidence: list[str]
+	origin: str = "role"  # "role" | "resume" | "role_and_resume"
 
 	def to_dict(self) -> dict[str, Any]:
 		return asdict(self)
@@ -184,6 +191,42 @@ def _resolve_role_profile(role_key: str) -> Mapping[str, Any]:
 		if normalized_role_key and normalized_role_key in profile_key:
 			return profile
 
+	# Not one of the 16 curated profiles (e.g. a Groq-generated role such as
+	# embedded_systems_engineer). Synthesize a profile from the 24-role topic
+	# map that the scripted question generator already resolves correctly,
+	# rather than silently substituting an unrelated curated role — that
+	# substitution is what made every target skill score as "absent" and the
+	# interview ask textbook questions for the wrong job.
+	role_key_casefold = role_key.strip().casefold()
+	canonical_key = _ROLE_TOPIC_ALIASES.get(role_key_casefold, role_key_casefold)
+	mapped_key = canonical_key if canonical_key in _ROLE_TOPIC_MAP else None
+	if mapped_key is None:
+		role_tokens = _tokenize_topic_source(role_key)
+		for token_group, family_key in _ROLE_TOPIC_FAMILIES:
+			if all(token in role_tokens for token in token_group):
+				mapped_key = family_key
+				break
+
+	if mapped_key is not None:
+		_LOGGER.warning(
+			"No curated skill profile for role '%s'; synthesizing one from role-topic "
+			"map key '%s' instead of substituting '%s'.",
+			role_key,
+			mapped_key,
+			DEFAULT_ROLE_PROFILES[0].get("key"),
+		)
+		return {
+			"key": role_key,
+			"title": role_key.replace("_", " ").title(),
+			"required_skills": list(_ROLE_TOPIC_MAP[mapped_key]),
+			"bonus_skills": [],
+		}
+
+	_LOGGER.warning(
+		"No curated or role-topic profile matched role '%s'; falling back to '%s'.",
+		role_key,
+		DEFAULT_ROLE_PROFILES[0].get("key"),
+	)
 	return DEFAULT_ROLE_PROFILES[0]
 
 
@@ -406,6 +449,22 @@ def _build_priority_focus_areas(
 	]
 
 
+def _resolve_skill_origin(
+	skill: str,
+	*,
+	role_norms: set[str],
+	candidate_norms: set[str],
+) -> str:
+	norm = _normalize_phrase(skill)
+	in_role = norm in role_norms
+	in_candidate = norm in candidate_norms
+	if in_role and in_candidate:
+		return "role_and_resume"
+	if in_role:
+		return "role"
+	return "resume"
+
+
 def profile_resume_skills(
 	parsed_resume: Mapping[str, Any],
 	role_key: str,
@@ -414,10 +473,21 @@ def profile_resume_skills(
 
 	role_profile = _resolve_role_profile(role_key)
 	role_title = str(role_profile.get("title") or role_key.replace("_", " ").title())
-	role_skills = _unique_preserve_order([
+	role_only_skills = _unique_preserve_order([
 		*list(role_profile.get("required_skills") or []),
 		*list(role_profile.get("bonus_skills") or []),
 	])
+	candidate_skills = _unique_preserve_order([
+		*_coerce_text_list(parsed_resume.get("skills")),
+		*_coerce_text_list(parsed_resume.get("technologies")),
+	])
+	# The candidate's own skills must be eligible focus_skill targets too, not
+	# only the evidence used to score the role's required/bonus skills — a
+	# resume-only skill like Verilog was previously ineligible to ever be
+	# asked about, even when it tiered as strong.
+	role_skills = _unique_preserve_order([*role_only_skills, *candidate_skills])
+	role_norms = {_normalize_phrase(s) for s in role_only_skills}
+	candidate_norms = {_normalize_phrase(s) for s in candidate_skills}
 
 	segments, project_segments = _build_candidate_segments(parsed_resume)
 	candidate_text = "\n".join(segment for segment in segments if segment)
@@ -458,6 +528,7 @@ def profile_resume_skills(
 			proximity_score=proximity_score,
 			sbert_score=semantic_score,
 			evidence=evidence,
+			origin=_resolve_skill_origin(skill, role_norms=role_norms, candidate_norms=candidate_norms),
 		)
 		skill_scores[skill] = score
 

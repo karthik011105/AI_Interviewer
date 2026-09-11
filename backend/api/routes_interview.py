@@ -26,6 +26,7 @@ from backend.database.queries import (
 	advance_interview_question,
 	complete_interview_round,
 	create_interview_round_session,
+	get_interview_context,
 	get_interview_round_session,
 	list_interview_responses,
 	list_sessions_for_user,
@@ -568,6 +569,43 @@ def _get_parsed_resume(session_id: str) -> dict[str, Any]:
 	return parsed
 
 
+def _humanize_role_key(role_key: str) -> str:
+	return " ".join(part.capitalize() for part in role_key.split("_") if part)
+
+
+def _resolve_role_match(
+	parent_session: Mapping[str, Any],
+	role_key: str | None,
+) -> dict[str, Any] | None:
+	"""Recover the role title and skill gaps that `/resume/select-role` computed.
+
+	Without this, `role_match` was hardcoded to None, so the technical context
+	always got `selected_role_title=None` and `skill_gaps=[]` even though
+	`/resume/select-role` had already computed and persisted both into
+	`interview_round_contexts` — a collection this module never read from.
+	"""
+	if not role_key:
+		return None
+
+	session_id = str(parent_session.get("id") or "").strip()
+	if session_id:
+		try:
+			stored_context = get_interview_context(session_id=session_id, round="technical")
+		except DatabaseClientError:
+			stored_context = None
+		if isinstance(stored_context, Mapping):
+			title = str(stored_context.get("selected_role_title") or "").strip()
+			if title:
+				skill_gaps = stored_context.get("skill_gaps")
+				return {
+					"role_key": role_key,
+					"title": title,
+					"skill_gaps": skill_gaps if isinstance(skill_gaps, list) else [],
+				}
+
+	return {"role_key": role_key, "title": _humanize_role_key(role_key)}
+
+
 def _build_round_context(
 	round_name: str,
 	parsed_resume: dict[str, Any],
@@ -575,7 +613,7 @@ def _build_round_context(
 ) -> dict[str, Any]:
 	"""Build the round-specific context from a parsed resume and session data."""
 	role_key = str(parent_session.get("role_selected") or "").strip() or None
-	role_match: dict[str, Any] | None = None  # role_match detail not needed here
+	role_match = _resolve_role_match(parent_session, role_key)
 
 	if round_name == "hr":
 		return build_hr_round_context(

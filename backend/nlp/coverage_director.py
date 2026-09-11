@@ -24,7 +24,7 @@ TIER_GUIDANCE: dict[str, str] = {
 	"strong": "verify depth with mechanisms, trade-offs, or failure modes",
 	"familiar": "probe limitations, edge cases, or integration trade-offs",
 	"mentioned": "probe whether the concept is understood beyond name recognition",
-	"absent": "ask fundamentals first: what, why, when, and core purpose",
+	"absent": "ask fundamentals first: what problem it solves in this role's context, why it matters, and when it's used",
 	"general": "keep the question conceptual and role-relevant",
 }
 

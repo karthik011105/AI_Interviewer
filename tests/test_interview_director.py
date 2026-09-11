@@ -63,6 +63,24 @@ class SystemPromptTests(TestCase):
 		prompt = build_director_system_prompt({})
 		self.assertIn("Strong    : none", prompt)
 
+	def test_prompt_carries_role_subject_matter_and_raw_resume_skills(self) -> None:
+		context = {
+			**_CONTEXT,
+			"selected_role_key": "embedded_systems_engineer",
+			"skills": ["Verilog", "ARM7 assembly"],
+			"technologies": ["Vivado", "LTspice"],
+		}
+		prompt = build_director_system_prompt(context, role_title="Embedded Systems Engineer")
+
+		# The role's actual subject matter must be present, not just the
+		# resume-derived tier lists -- otherwise the director has nothing
+		# anchoring it to embedded topics and drifts to generic CS trivia.
+		self.assertIn("Real-time operating systems (RTOS)", prompt)
+		self.assertIn("Microcontroller architecture and peripherals", prompt)
+		self.assertIn("Verilog, ARM7 assembly", prompt)
+		self.assertIn("Vivado, LTspice", prompt)
+		self.assertIn("Anchor every question to one of the ROLE SUBJECT MATTER areas", prompt)
+
 
 class TurnReconciliationTests(TestCase):
 	def test_plan_tier_overrides_a_claimed_tier(self) -> None:

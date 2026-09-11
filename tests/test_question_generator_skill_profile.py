@@ -5,7 +5,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from backend.config import GroqSettings
-from backend.nlp.question_generator import get_or_generate_questions
+from backend.nlp.question_generator import _build_skill_allocation_plan, get_or_generate_questions
 
 
 class QuestionGeneratorSkillProfileTests(TestCase):
@@ -122,3 +122,43 @@ class QuestionGeneratorSkillProfileTests(TestCase):
 		self.assertEqual(result["questions"][3]["question_tier"], "absent")
 		self.assertEqual(result["questions"][3]["focus_skill"], "git")
 		self.assertGreaterEqual(len(result["skill_allocation_plan"]), 5)
+
+
+class SkillAllocationOriginSplitTests(TestCase):
+	"""A candidate tailors their resume to the role they apply for, so the role
+	leads: the allocation plan should hold roughly a 70/30 role-to-resume split,
+	with role-subject skills the resume evidences (higher tiers) spent first.
+	"""
+
+	def test_allocation_plan_splits_roughly_70_30_role_to_resume(self) -> None:
+		role_skills = [f"role_skill_{i}" for i in range(1, 8)]  # 4 strong, 2 familiar, 1 absent
+		resume_skills = [f"resume_skill_{i}" for i in range(1, 5)]  # all strong, role-unrelated
+
+		skill_scores = {
+			**{skill: {"tier": "strong", "origin": "role"} for skill in role_skills[:4]},
+			**{skill: {"tier": "familiar", "origin": "role"} for skill in role_skills[4:6]},
+			role_skills[6]: {"tier": "absent", "origin": "role"},
+			**{skill: {"tier": "strong", "origin": "resume"} for skill in resume_skills},
+		}
+		context = {
+			"skill_profile": {"skill_scores": skill_scores},
+			"strong_skills": [*role_skills[:4], *resume_skills],
+			"familiar_skills": role_skills[4:6],
+			"mentioned_skills": [],
+			"absent_skills": [role_skills[6:7][0]],
+			"soft_gap_skills": [],
+			"priority_focus_areas": [],
+		}
+
+		plan = _build_skill_allocation_plan(context, 10)
+
+		role_count = sum(1 for slot in plan if skill_scores[slot["focus_skill"]]["origin"] == "role")
+		resume_count = sum(1 for slot in plan if skill_scores[slot["focus_skill"]]["origin"] == "resume")
+
+		self.assertEqual(len(plan), 10)
+		self.assertEqual(role_count, 7)
+		self.assertEqual(resume_count, 3)
+		# Evidenced role skills (strong/familiar) are spent before the role's
+		# one absent-tier skill, so depth is prioritized over raw coverage.
+		absent_index = next(i for i, slot in enumerate(plan) if slot["question_tier"] == "absent")
+		self.assertTrue(all(plan[i]["question_tier"] != "absent" for i in range(absent_index)))

@@ -914,24 +914,6 @@ def _normalise_string_list(values: Any) -> list[str]:
 	return result
 
 
-def _append_unique_slots(
-	plan: list[dict[str, str]],
-	*,
-	tier: str,
-	skills: Sequence[str],
-	limit: int,
-	seen: set[str],
-) -> None:
-	for skill in skills:
-		if len([slot for slot in plan if slot["question_tier"] == tier]) >= limit:
-			break
-		normalized = str(skill or "").strip().casefold()
-		if not normalized or normalized in seen:
-			continue
-		seen.add(normalized)
-		plan.append({"question_tier": tier, "focus_skill": str(skill).strip()})
-
-
 def _resolve_skill_tier(context: Mapping[str, Any], skill: str) -> str:
 	skill_profile = context.get("skill_profile")
 	if isinstance(skill_profile, Mapping):
@@ -955,11 +937,41 @@ def _resolve_skill_tier(context: Mapping[str, Any], skill: str) -> str:
 	return "general"
 
 
+def _resolve_skill_origin(context: Mapping[str, Any], skill: str) -> str:
+	"""Where a candidate focus_skill came from: the role profile or the resume.
+
+	Skills the resume profiler could not tag (older cached profiles, tests)
+	default to "role" so the 70/30 split degrades to the previous tier-only
+	allocation rather than starving on an empty resume bucket.
+	"""
+	skill_profile = context.get("skill_profile")
+	if isinstance(skill_profile, Mapping):
+		skill_scores = skill_profile.get("skill_scores")
+		if isinstance(skill_scores, Mapping):
+			entry = skill_scores.get(skill)
+			if isinstance(entry, Mapping):
+				origin = str(entry.get("origin") or "").strip().casefold()
+				if origin in {"role", "resume", "role_and_resume"}:
+					return origin
+	return "role"
+
+
 def _build_skill_allocation_plan(
 	context: Mapping[str, Any],
 	count: int,
 ) -> list[dict[str, str]]:
+	"""Pick which skills the round's questions target, and in what order.
+
+	Two axes drive the pick: tier (evidence depth, unchanged) and origin
+	(role subject matter vs. resume-only skill). A candidate tailors their
+	resume to the role they apply for, so the role leads: 70% of targets come
+	from the role's subject matter, evidenced tiers first so they get probed
+	deeply rather than defined; the remaining 30% come from resume-only
+	skills the role profile never asked about.
+	"""
 	if not isinstance(context.get("skill_profile"), Mapping):
+		return []
+	if count <= 0:
 		return []
 
 	strong_skills = _normalise_string_list(context.get("strong_skills"))
@@ -969,37 +981,55 @@ def _build_skill_allocation_plan(
 	soft_gap_skills = _normalise_string_list(context.get("soft_gap_skills"))
 	priority_focus_areas = _normalise_string_list(context.get("priority_focus_areas"))
 
+	shared_absent_skills = [
+		*absent_skills,
+		*[skill for skill in soft_gap_skills if skill.casefold() not in {s.casefold() for s in absent_skills}],
+	]
+
+	# Evidenced tiers first, so a skill the resume backs is spent before one
+	# it doesn't — that is what lets it be probed deeply rather than defined.
+	ordered_candidates = _normalise_string_list([
+		*strong_skills,
+		*familiar_skills,
+		*mentioned_skills,
+		*priority_focus_areas,
+		*shared_absent_skills,
+	])
+
+	role_bucket: list[str] = []
+	resume_bucket: list[str] = []
+	for skill in ordered_candidates:
+		if _resolve_skill_origin(context, skill) == "resume":
+			resume_bucket.append(skill)
+		else:
+			role_bucket.append(skill)
+
+	role_quota = min(round(count * 0.7), count)
+	resume_quota = count - role_quota
+
 	plan: list[dict[str, str]] = []
 	seen: set[str] = set()
-	shared_absent_skills = [*absent_skills, *[skill for skill in soft_gap_skills if skill.casefold() not in {s.casefold() for s in absent_skills}]]
 
-	base_quota = max(count // 3, 1)
-	extra = max(count - (base_quota * 3), 0)
-	strong_quota = base_quota + (1 if extra > 0 else 0)
-	familiar_quota = base_quota + (1 if extra > 1 else 0)
-	absent_quota = base_quota
+	def _fill(skills: Sequence[str], budget: int) -> None:
+		added = 0
+		for skill in skills:
+			if added >= budget or len(plan) >= count:
+				return
+			normalized = skill.casefold()
+			if normalized in seen:
+				continue
+			seen.add(normalized)
+			plan.append({"question_tier": _resolve_skill_tier(context, skill), "focus_skill": skill})
+			added += 1
 
-	_append_unique_slots(plan, tier="strong", skills=strong_skills, limit=strong_quota, seen=seen)
-	_append_unique_slots(
-		plan,
-		tier="familiar",
-		skills=familiar_skills or mentioned_skills,
-		limit=familiar_quota,
-		seen=seen,
-	)
-	_append_unique_slots(plan, tier="absent", skills=shared_absent_skills, limit=absent_quota, seen=seen)
+	_fill(role_bucket, role_quota)
+	_fill(resume_bucket, resume_quota)
 
-	for skill in priority_focus_areas:
-		if len(plan) >= count:
-			break
-		normalized = skill.casefold()
-		if normalized in seen:
-			continue
-		seen.add(normalized)
-		plan.append({
-			"question_tier": _resolve_skill_tier(context, skill),
-			"focus_skill": skill,
-		})
+	if len(plan) < count:
+		# One bucket ran dry (e.g. no resume-only skills exist) — spend the
+		# leftover budget from whichever bucket still has candidates rather
+		# than under-filling the round.
+		_fill([*role_bucket, *resume_bucket], count - len(plan))
 
 	return plan[:count]
 
@@ -1031,7 +1061,7 @@ def _build_skill_focus_block(
 		guidance = {
 			"strong": "verify depth with mechanisms, trade-offs, or failure modes",
 			"familiar": "probe limitations, edge cases, or integration trade-offs",
-			"absent": "ask fundamentals first: what, why, when, and core purpose",
+			"absent": "ask fundamentals first: what problem it solves in this role's context, why it matters, and when it's used",
 			"mentioned": "probe whether the concept is understood beyond name recognition",
 		}.get(slot["question_tier"], "keep the question conceptual and role-relevant")
 		lines.append(

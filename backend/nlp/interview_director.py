@@ -35,6 +35,7 @@ from backend.nlp.coverage_director import (
 	next_target,
 )
 from backend.nlp.groq_client import GroqClientError, stream_chat_completion
+from backend.nlp.question_generator import _resolve_role_topics
 from backend.nlp.sentence_chunker import SentenceAccumulator
 
 _LOGGER = logging.getLogger(__name__)
@@ -262,6 +263,13 @@ _SYSTEM_TEMPLATE = """You are {interviewer_name}, a senior engineer conducting a
 
 You are speaking out loud and your words are converted to speech. Speak naturally in 1-3 short sentences. No markdown, no bullet points, no numbering, no stage directions, no emoji.
 
+ROLE SUBJECT MATTER (this role's actual technical domain - anchor every question to one of these)
+{role_subjects}
+
+CANDIDATE'S RESUME
+  Skills       : {candidate_skills}
+  Technologies : {candidate_technologies}
+
 CANDIDATE SKILL PROFILE (derived from their resume, for this role)
   Strong    : {strong_skills}
   Familiar  : {familiar_skills}
@@ -284,6 +292,8 @@ CHOOSING YOUR NEXT MOVE
 RULES
 - Ask exactly one question per turn.
 - Every question must be conceptual and explanation-first: what, why, when, how does, explain, describe, compare.
+- Anchor every question to one of the ROLE SUBJECT MATTER areas above, using the candidate's own skills and technologies as the concrete angle into it. Do not drift into a neighbouring role's subjects unless one of them is itself listed above.
+- Pitch the question at the depth the tier guidance calls for. Never ask for a bare definition of something the candidate's resume already evidences as strong or familiar.
 - Never ask the candidate to write code, design a system, design a class, or build anything.
 - Never ask HR-style behavioural questions about teamwork, strengths, or weaknesses.
 - Reference something the candidate actually said when it is natural. This is a conversation, not a quiz.
@@ -315,9 +325,21 @@ def build_director_system_prompt(
 ) -> str:
 	"""Build the director's system prompt from the round context."""
 
+	role_key = str(context.get("selected_role_key") or "").strip() or None
+	role_topics = _resolve_role_topics(
+		role_key,
+		role_title,
+		context.get("skills") or [],
+		context.get("technologies") or [],
+	)
+	role_subjects = "\n".join(f"  - {topic}" for topic in role_topics)
+
 	return _SYSTEM_TEMPLATE.format(
 		interviewer_name=interviewer_name,
 		role_title=str(role_title or "software engineering").strip() or "software engineering",
+		role_subjects=role_subjects,
+		candidate_skills=_skill_list(context, "skills"),
+		candidate_technologies=_skill_list(context, "technologies"),
 		strong_skills=_skill_list(context, "strong_skills"),
 		familiar_skills=_skill_list(context, "familiar_skills"),
 		mentioned_skills=_skill_list(context, "mentioned_skills"),
