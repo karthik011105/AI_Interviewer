@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Moon, Sun } from "lucide-react";
 
 import AuthPanel from "./components/AuthPanel";
 import UploadPage from "./pages/UploadPage";
@@ -39,7 +40,19 @@ const INITIAL_WORKFLOW_STATE = {
 };
 
 const WORKFLOW_STORAGE_KEY = "ai-interview-simulator.workflow";
+const THEME_STORAGE_KEY = "ai-interview-simulator.theme";
 const VALID_ASSESSMENT_STATUSES = new Set(["idle", "active", "complete"]);
+
+function loadPersistedTheme() {
+	if (typeof window === "undefined") {
+		return "light";
+	}
+	try {
+		return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+	} catch {
+		return "light";
+	}
+}
 
 function normalizeDsaQuestionNumber(value) {
 	return Number(value) === 2 ? 2 : 1;
@@ -510,6 +523,22 @@ export default function App() {
 		infoMessage: "",
 		errorMessage: "",
 	});
+	const [theme, setTheme] = useState(loadPersistedTheme);
+
+	useEffect(() => {
+		document.documentElement.dataset.theme = theme;
+		try {
+			window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+		} catch {
+			// Best-effort only — a private window or blocked storage just means
+			// the choice doesn't persist across reloads.
+		}
+	}, [theme]);
+
+	function toggleTheme() {
+		setTheme((current) => (current === "dark" ? "light" : "dark"));
+	}
+
 	const currentPage = resolvePageFromPath(location.pathname);
 	const isStandaloneView = false;
 	const isAuthenticated = authState.status === "authenticated";
@@ -770,9 +799,6 @@ export default function App() {
 
 	return (
 		<div className="app-shell">
-			<div className="ambient ambient-one" />
-			<div className="ambient ambient-two" />
-			<div className="ambient ambient-three" />
 			<div className={`app-frame ${isStandaloneView ? "app-frame--standalone" : ""}`}>
 				{!isStandaloneView ? (
 					<aside className="app-sidebar glass-panel">
@@ -822,6 +848,15 @@ export default function App() {
 						</section>
 
 						<div className="app-sidebar__footer">
+							<button
+								type="button"
+								className="theme-toggle"
+								onClick={toggleTheme}
+								aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+							>
+								{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+								<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+							</button>
 							{isAuthenticated ? (
 								<div className="app-sidebar__auth">
 									<AuthPanel
