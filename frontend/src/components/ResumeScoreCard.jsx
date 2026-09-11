@@ -46,18 +46,17 @@ export default function ResumeScoreCard({ score }) {
 
   const { overall_label, action_verbs, quantification, keyword_density, section_completeness } = score;
 
+  // A small fixed data-viz palette, deliberately not the app's CSS variables:
+  // this ring/badge always needs white text on top of it, and the dark-theme
+  // accent/warning tokens are too light for that contrast. Chosen to match
+  // the light-theme tokens in styles.css so it still reads as one system.
   const ringColor =
-    pct >= 80 ? "#22c55e" :
-    pct >= 65 ? "#3b82f6" :
-    pct >= 45 ? "#f59e0b" : "#ef4444";
-
-  const ringGlow =
-    pct >= 80 ? "0 0 24px rgba(34,197,94,0.35)" :
-    pct >= 65 ? "0 0 24px rgba(59,130,246,0.35)" :
-    pct >= 45 ? "0 0 24px rgba(245,158,11,0.30)" : "0 0 24px rgba(239,68,68,0.30)";
+    pct >= 80 ? "#2e7d5b" :
+    pct >= 65 ? "#33409e" :
+    pct >= 45 ? "#a66a1e" : "#ae3b3b";
 
   function dimColor(p) {
-    return p >= 75 ? "#22c55e" : p >= 55 ? "#3b82f6" : p >= 35 ? "#f59e0b" : "#ef4444";
+    return p >= 75 ? "#2e7d5b" : p >= 55 ? "#33409e" : p >= 35 ? "#a66a1e" : "#ae3b3b";
   }
 
   const R = 52;
@@ -77,31 +76,22 @@ export default function ResumeScoreCard({ score }) {
 
   return (
     <section ref={ref} className="ats-score-card glass-panel" aria-label="ATS resume score">
-      {/* Glowing header strip */}
       <div className="ats-header">
         {/* Animated SVG ring */}
         <div className="ats-ring-wrap">
           <svg width="130" height="130" viewBox="0 0 130 130" aria-hidden="true">
-            {/* Gradient definition */}
-            <defs>
-              <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={ringColor} stopOpacity="1" />
-                <stop offset="100%" stopColor={ringColor} stopOpacity="0.5" />
-              </linearGradient>
-            </defs>
             {/* Track */}
-            <circle cx="65" cy="65" r={R} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" />
+            <circle cx="65" cy="65" r={R} fill="none" stroke="var(--border)" strokeWidth="10" />
             {/* Animated progress arc */}
             <circle
               cx="65" cy="65" r={R} fill="none"
-              stroke="url(#ringGrad)"
+              stroke={ringColor}
               strokeWidth="10"
               strokeLinecap="round"
               strokeDasharray={circumference}
               strokeDashoffset={animatedOffset}
               transform="rotate(-90 65 65)"
-              style={{ transition: revealed ? "stroke-dashoffset 1.2s cubic-bezier(0.34,1.56,0.64,1)" : "none",
-                       filter: revealed ? `drop-shadow(${ringGlow})` : "none" }}
+              style={{ transition: revealed ? "stroke-dashoffset 1.2s cubic-bezier(0.34,1.56,0.64,1)" : "none" }}
             />
           </svg>
           <div className="ats-ring-center">
@@ -128,7 +118,7 @@ export default function ResumeScoreCard({ score }) {
               <span className="ats-stat-card__key">Role keywords</span>
             </div>
             <div className="ats-stat-card">
-              <span className="ats-stat-card__val" style={{ color: "#22c55e" }}>{action_verbs?.strong_count ?? "—"}</span>
+              <span className="ats-stat-card__val" style={{ color: "var(--success)" }}>{action_verbs?.strong_count ?? "—"}</span>
               <span className="ats-stat-card__key">Strong verbs</span>
             </div>
             <div className="ats-stat-card">
@@ -159,9 +149,9 @@ export default function ResumeScoreCard({ score }) {
                   <span className="ats-category__emoji">{d.icon}</span>
                   <span className="ats-category__name">{d.label}</span>
                   <span className="ats-category__badge" style={{
-                    background: pass ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
-                    color: pass ? "#22c55e" : "#ef4444",
-                    border: `1px solid ${pass ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
+                    background: pass ? "var(--success-bg)" : "var(--danger-bg)",
+                    color: pass ? "var(--success)" : "var(--danger)",
+                    border: `1px solid ${pass ? "var(--success)" : "var(--danger)"}`,
                   }}>
                     {pass ? "Passed" : "Improve"}
                   </span>
@@ -173,9 +163,8 @@ export default function ResumeScoreCard({ score }) {
                   className="ats-bar-fill"
                   style={{
                     width: revealed ? `${d.pct}%` : "0%",
-                    background: `linear-gradient(90deg, ${color}cc, ${color})`,
+                    background: color,
                     transition: revealed ? `width 0.9s cubic-bezier(0.34,1.2,0.64,1) ${i * 80}ms` : "none",
-                    boxShadow: revealed ? `0 0 8px ${color}55` : "none",
                   }}
                 />
               </div>
