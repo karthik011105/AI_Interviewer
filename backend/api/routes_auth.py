@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -28,6 +30,7 @@ from backend.api.rate_limit import (
 )
 from backend.config import get_settings
 from backend.database.mongo_client import get_repository
+from backend.email_provider import EmailDeliveryError, send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _LOGGER = logging.getLogger(__name__)
@@ -125,27 +128,33 @@ def _enforce_ip_rate_limit(request: Request, scope: str) -> None:
 		_raise_rate_limited(exc)
 
 
+def _validate_password_policy(value: str) -> str:
+	"""Shared by SignupRequest and ResetPasswordRequest — a new password from
+	either path must meet the same bar."""
+	auth_settings = get_settings().auth
+	if len(value) < auth_settings.password_min_length:
+		raise ValueError(
+			f"Password must be at least {auth_settings.password_min_length} "
+			"characters long."
+		)
+	encoded_length = len(value.encode("utf-8"))
+	if encoded_length > auth_settings.password_max_bytes:
+		raise ValueError(
+			f"Password must be at most {auth_settings.password_max_bytes} bytes "
+			"once UTF-8 encoded. Accented, emoji, and non-Latin characters each "
+			"count as more than one byte."
+		)
+	return value
+
+
 class SignupRequest(BaseModel):
 	email: EmailStr
 	password: str
 
 	@field_validator("password")
 	@classmethod
-	def _validate_password_policy(cls, value: str) -> str:
-		auth_settings = get_settings().auth
-		if len(value) < auth_settings.password_min_length:
-			raise ValueError(
-				f"Password must be at least {auth_settings.password_min_length} "
-				"characters long."
-			)
-		encoded_length = len(value.encode("utf-8"))
-		if encoded_length > auth_settings.password_max_bytes:
-			raise ValueError(
-				f"Password must be at most {auth_settings.password_max_bytes} bytes "
-				"once UTF-8 encoded. Accented, emoji, and non-Latin characters each "
-				"count as more than one byte."
-			)
-		return value
+	def _validate_password(cls, value: str) -> str:
+		return _validate_password_policy(value)
 
 
 class LoginRequest(BaseModel):
@@ -267,6 +276,98 @@ def login(request: LoginRequest, http_request: Request) -> dict[str, str]:
 
 	failure_tracker.reset(email)
 	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
+
+
+class ForgotPasswordRequest(BaseModel):
+	email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+	token: str = Field(min_length=1, max_length=512)
+	new_password: str
+
+	@field_validator("new_password")
+	@classmethod
+	def _validate_new_password(cls, value: str) -> str:
+		return _validate_password_policy(value)
+
+
+_PASSWORD_RESET_EMAIL_SUBJECT = "Reset your password"
+_GENERIC_FORGOT_PASSWORD_DETAIL = (
+	"If an account exists for that address, a password reset link has been sent."
+)
+
+
+def _hash_reset_token(raw_token: str) -> str:
+	# SHA-256 of a 32-byte random token, not bcrypt: this is a lookup key for a
+	# high-entropy single-use secret, not a low-entropy password an attacker
+	# could feasibly brute-force offline — bcrypt's deliberate slowness buys
+	# nothing here and would cost every legitimate reset a real delay.
+	return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+@router.post("/forgot-password")
+def forgot_password(request: ForgotPasswordRequest, http_request: Request) -> dict[str, str]:
+	_enforce_ip_rate_limit(http_request, "forgot_password")
+
+	email = _normalize_email(request.email)
+	repo = get_repository()
+	user = repo.db.users.find_one({"email": email})
+
+	# Identical response whether or not the account exists — the same
+	# enumeration-resistance shape login already has. A response that varied
+	# here would reopen exactly the oracle that hardening closed.
+	if user is not None:
+		auth_settings = get_settings().auth
+		raw_token = secrets.token_urlsafe(32)
+		expires_at = datetime.now(timezone.utc) + timedelta(
+			minutes=auth_settings.password_reset_token_ttl_minutes
+		)
+		repo.create_password_reset_token(
+			token_hash=_hash_reset_token(raw_token),
+			user_id=str(user["_id"]),
+			expires_at=expires_at,
+		)
+		reset_url = f"{auth_settings.password_reset_url_base}?token={raw_token}"
+		try:
+			send_email(
+				to=email,
+				subject=_PASSWORD_RESET_EMAIL_SUBJECT,
+				body=(
+					"A password reset was requested for this account.\n\n"
+					f"Reset it here (expires in "
+					f"{auth_settings.password_reset_token_ttl_minutes} minutes):\n"
+					f"{reset_url}\n\n"
+					"If you did not request this, no action is needed — the link "
+					"expires on its own and your password is unchanged."
+				),
+			)
+		except EmailDeliveryError:
+			# Must not surface to the caller: doing so would disclose that the
+			# address exists (the generic branch below never fails this way).
+			_LOGGER.exception("Failed to send password reset email for user %s.", user["_id"])
+
+	return {"detail": _GENERIC_FORGOT_PASSWORD_DETAIL}
+
+
+@router.post("/reset-password")
+def reset_password(request: ResetPasswordRequest) -> dict[str, str]:
+	repo = get_repository()
+	record = repo.consume_password_reset_token(
+		token_hash=_hash_reset_token(request.token),
+		now=datetime.now(timezone.utc),
+	)
+	if record is None:
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="This password reset link is invalid, expired, or already used.",
+		)
+
+	hashed = bcrypt.hashpw(request.new_password.encode("utf-8"), bcrypt.gensalt())
+	repo.db.users.update_one(
+		{"_id": record["user_id"]}, {"$set": {"password_hash": hashed.decode("utf-8")}}
+	)
+	return {"detail": "Password updated. Sign in with your new password."}
 
 
 @router.post("/logout")

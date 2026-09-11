@@ -229,6 +229,13 @@ class AuthSettings:
 	# Per-account backoff applied after consecutive failed sign-in attempts.
 	login_max_failures: int
 	login_lockout_seconds: int
+	# Password reset. The token is a one-time, single-use secret emailed to the
+	# account holder; the TTL bounds how long a leaked-but-unused email grants
+	# access. url_base is the frontend page that reads ?token=... and submits
+	# it back to POST /auth/reset-password — defaults to the Vite dev server so
+	# local development needs no configuration, same as CorsSettings.
+	password_reset_token_ttl_minutes: int
+	password_reset_url_base: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,6 +465,16 @@ class AppSettings:
 				"AUTH_LOGIN_LOCKOUT_SECONDS",
 				300,
 				minimum=1,
+			),
+			password_reset_token_ttl_minutes=_read_int(
+				source,
+				"AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES",
+				30,
+				minimum=1,
+			),
+			password_reset_url_base=(
+				(source.get("AUTH_PASSWORD_RESET_URL_BASE") or "http://localhost:5173/reset-password")
+				.strip()
 			),
 		)
 

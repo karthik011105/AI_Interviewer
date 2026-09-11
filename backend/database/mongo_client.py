@@ -67,6 +67,10 @@ class MongoRepository:
 		# at the time stored in this field".
 		self.db.revoked_tokens.create_index("jti", unique=True)
 		self.db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
+		# Password reset tokens, keyed by a hash of the one-time secret (never
+		# the secret itself — same reasoning as hashing passwords). The TTL
+		# index bounds the collection the same way revoked_tokens does.
+		self.db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
 		self.db.interview_round_sessions.create_index(
 			[("session_id", 1), ("round", 1)], unique=True
 		)
@@ -191,6 +195,44 @@ class MongoRepository:
 		past its own exp is already rejected by signature verification.
 		"""
 		return self.db.revoked_tokens.find_one({"jti": jti}, {"_id": 1}) is not None
+
+	def create_password_reset_token(
+		self, *, token_hash: str, user_id: str, expires_at: Any
+	) -> None:
+		"""Record a password reset token by the hash of its raw secret.
+
+		``token_hash`` is used as the document's ``_id``, which gives the
+		lookup in ``consume_password_reset_token`` a unique-index guarantee
+		for free rather than needing a second index.
+		"""
+		self.db.password_reset_tokens.insert_one(
+			{
+				"_id": token_hash,
+				"user_id": user_id,
+				"expires_at": expires_at,
+				"used_at": None,
+				"created_at": _utcnow_iso(),
+			}
+		)
+
+	def consume_password_reset_token(
+		self, *, token_hash: str, now: Any
+	) -> dict[str, Any] | None:
+		"""Atomically mark a reset token used and return it, or None.
+
+		Returns None when the token does not exist, has already been used, or
+		has expired — the caller cannot distinguish which, which is the point:
+		telling an attacker "that token was already used" versus "that token
+		never existed" leaks information a generic 400 does not. The update is
+		atomic (find-and-update in one round trip) so two concurrent requests
+		racing the same token cannot both see it as valid.
+		"""
+		doc = self.db.password_reset_tokens.find_one_and_update(
+			{"_id": token_hash, "used_at": None, "expires_at": {"$gt": now}},
+			{"$set": {"used_at": _utcnow_iso()}},
+			return_document=ReturnDocument.AFTER,
+		)
+		return dict(doc) if doc is not None else None
 
 	def create_session(
 		self,

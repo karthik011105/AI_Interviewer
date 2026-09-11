@@ -831,3 +831,126 @@ class TokenRevocationTests(_AuthTestBase):
 			user = authenticate_access_token(token)
 
 		self.assertEqual(user.user_id, "user-1")
+
+
+class ResetTokenHashingTests(TestCase):
+	def test_is_deterministic(self) -> None:
+		self.assertEqual(
+			routes_auth._hash_reset_token("same-token"),
+			routes_auth._hash_reset_token("same-token"),
+		)
+
+	def test_different_tokens_hash_differently(self) -> None:
+		self.assertNotEqual(
+			routes_auth._hash_reset_token("token-a"),
+			routes_auth._hash_reset_token("token-b"),
+		)
+
+	def test_never_returns_the_raw_token(self) -> None:
+		self.assertNotIn("super-secret-token", routes_auth._hash_reset_token("super-secret-token"))
+
+
+class ForgotPasswordTests(_AuthTestBase):
+	def test_an_existing_account_gets_a_token_and_an_email(self) -> None:
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch("backend.api.routes_auth.send_email") as mock_send:
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request()
+			)
+
+		repo.create_password_reset_token.assert_called_once()
+		kwargs = repo.create_password_reset_token.call_args.kwargs
+		self.assertEqual(kwargs["user_id"], "user-1")
+		mock_send.assert_called_once()
+		self.assertEqual(mock_send.call_args.kwargs["to"], "user@example.com")
+		self.assertIn("detail", result)
+
+	def test_an_unknown_address_gets_the_identical_response_and_no_token(self) -> None:
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch("backend.api.routes_auth.send_email") as mock_send:
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="nobody@example.com"), _make_request()
+			)
+
+		repo.create_password_reset_token.assert_not_called()
+		mock_send.assert_not_called()
+		self.assertEqual(result, {"detail": routes_auth._GENERIC_FORGOT_PASSWORD_DETAIL})
+
+	def test_known_and_unknown_addresses_get_byte_identical_responses(self) -> None:
+		"""The response body itself must carry no signal either way."""
+		found_repo = MagicMock()
+		found_repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+		missing_repo = MagicMock()
+		missing_repo.db.users.find_one.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=found_repo), \
+			 patch("backend.api.routes_auth.send_email"):
+			found_result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request("203.0.113.1")
+			)
+		with patch("backend.api.routes_auth.get_repository", return_value=missing_repo), \
+			 patch("backend.api.routes_auth.send_email"):
+			missing_result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="nobody@example.com"), _make_request("203.0.113.2")
+			)
+
+		self.assertEqual(found_result, missing_result)
+
+	def test_an_email_delivery_failure_is_swallowed_not_surfaced(self) -> None:
+		"""Letting delivery failure reach the caller would disclose the address exists."""
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch(
+				 "backend.api.routes_auth.send_email",
+				 side_effect=routes_auth.EmailDeliveryError("smtp down"),
+			 ):
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request()
+			)
+
+		self.assertEqual(result, {"detail": routes_auth._GENERIC_FORGOT_PASSWORD_DETAIL})
+
+
+class ResetPasswordTests(_AuthTestBase):
+	def test_a_valid_token_updates_the_password(self) -> None:
+		repo = MagicMock()
+		repo.consume_password_reset_token.return_value = {
+			"_id": "hash", "user_id": "user-1", "used_at": "now",
+		}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			result = routes_auth.reset_password(
+				routes_auth.ResetPasswordRequest(token="raw-token", new_password="new-password-123")
+			)
+
+		repo.db.users.update_one.assert_called_once()
+		args, _ = repo.db.users.update_one.call_args
+		self.assertEqual(args[0], {"_id": "user-1"})
+		new_hash = args[1]["$set"]["password_hash"]
+		self.assertTrue(bcrypt.checkpw(b"new-password-123", new_hash.encode("utf-8")))
+		self.assertIn("detail", result)
+
+	def test_an_invalid_or_expired_or_reused_token_is_rejected(self) -> None:
+		repo = MagicMock()
+		repo.consume_password_reset_token.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			with self.assertRaises(HTTPException) as context:
+				routes_auth.reset_password(
+					routes_auth.ResetPasswordRequest(token="bad-token", new_password="new-password-123")
+				)
+
+		self.assertEqual(context.exception.status_code, 400)
+		repo.db.users.update_one.assert_not_called()
+
+	def test_the_new_password_is_still_subject_to_the_signup_policy(self) -> None:
+		with self.assertRaises(ValidationError):
+			routes_auth.ResetPasswordRequest(token="raw-token", new_password="short")

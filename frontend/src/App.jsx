@@ -11,6 +11,7 @@ const AssessmentPage = lazy(() => import("./pages/AssessmentPage"));
 const DSAPage = lazy(() => import("./pages/DSAPage"));
 const InterviewPage = lazy(() => import("./pages/InterviewPage"));
 const ReportPage = lazy(() => import("./pages/ReportPage"));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 
 function isLocalDevelopmentHost(hostname) {
 	return hostname === "127.0.0.1" || hostname === "localhost";
@@ -699,6 +700,30 @@ export default function App() {
 		}
 	}
 
+	async function handleForgotPassword(email) {
+		setAuthState((current) => ({
+			...current,
+			busyAction: "forgot-password",
+			errorMessage: "",
+			infoMessage: "",
+		}));
+		try {
+			const data = await authClient.forgotPassword(email);
+			setAuthState((current) => ({
+				...current,
+				busyAction: "idle",
+				infoMessage: data.detail || "If an account exists for that address, a reset link has been sent.",
+			}));
+		} catch (error) {
+			setAuthState((current) => ({
+				...current,
+				busyAction: "idle",
+				errorMessage: error.message,
+				infoMessage: "",
+			}));
+		}
+	}
+
 	async function handleSignOut() {
 		setAuthState((current) => ({
 			...current,
@@ -759,6 +784,7 @@ export default function App() {
 						onSignIn={handleSignIn}
 						onSignUp={handleSignUp}
 						onSignOut={handleSignOut}
+						onForgotPassword={handleForgotPassword}
 					/>
 				</div>
 				<section className="glass-panel app-gate">
@@ -917,6 +943,14 @@ export default function App() {
 					<Routes>
 						<Route path="/" element={<Navigate to={APP_PAGES[0].path} replace />} />
 						<Route path="/interview" element={<Navigate to="/technical-interview" replace />} />
+						<Route
+							path="/reset-password"
+							element={
+								<Suspense fallback={null}>
+									<ResetPasswordPage />
+								</Suspense>
+							}
+						/>
 
 						{APP_PAGES.map((page) => {
 							const PageComponent = page.component;

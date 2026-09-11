@@ -1,7 +1,7 @@
 # Production Readiness Assessment — AI Interview Simulator
 
 Assessment date: 2026-08-28
-Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking, Prometheus metrics, frontend redesign)
+Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking, Prometheus metrics, frontend redesign, password reset)
 Scope: full repository (`backend/`, `frontend/`, `tests/`, config, Docker/Judge0, scripts, data assets).
 Method: direct source inspection (the `code-review-graph` MCP server failed to connect — `CONNECT_TIMEOUT` — so this pass used manual file reads, `git ls-files`, and targeted greps instead of graph queries), followed by running the backend test suite and the frontend build.
 
@@ -100,7 +100,7 @@ The largest remaining risks are:
 
 1. **Secrets still need rotating** (§0) — unchanged, and the only item outstanding since the first assessment.
 2. **[RESOLVED] Judge0 hardening** — authentication is now enabled and all hardcoded infrastructure passwords are parameterised (§22). **Still open:** Judge0 credentials were committed to the repository and are on the GitHub remote; they need rotating, and removing them from history requires a force-push (§22).
-3. **No email verification or password reset** (§4) — both blocked on choosing an email provider. Token revocation is done (§24).
+3. **[RESOLVED] Password reset** (§4, §28) — token-based, end to end, backend and frontend. **No email verification.** Deliberately left open: the original assessment flagged this as depending on threat model rather than an unconditional gap, and that call still belongs to the project owner, not this pass. Token revocation is done (§24).
 4. **CI has still never actually run.** The workflow now has real observability work to validate (§26), and remains unverified on GitHub's own runners — only ever run locally.
 
 None of this is unusual for a project at this stage — but it means "production" is a real project, not a config change.
@@ -169,7 +169,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 | **[RESOLVED]** ~~No password policy~~ | Medium | `backend/api/routes_auth.py`, `backend/config.py` | Signup now enforces a configurable minimum length and a maximum **UTF-8 byte** length. The byte limit closed a latent 500: bcrypt 5.0 raises `ValueError` above 72 bytes, so a long password — or a 30-character emoji/CJK password (120 bytes) — previously crashed signup. The policy is deliberately not applied at sign-in, to avoid locking out pre-policy accounts and disclosing the policy to anonymous callers. | Done | — |
 | **[RESOLVED]** ~~User enumeration via sign-in~~ | Medium | `backend/api/routes_auth.py` | Unknown-address and wrong-password now return an identical status and detail, a dummy bcrypt comparison equalises response timing when no account exists, and the lockout is keyed on the *submitted* address so attempts against non-existent accounts throttle identically. Keying it on a resolved account would have turned the lockout itself into an enumeration oracle. | Done | — |
 | No email verification | Medium | `backend/api/routes_auth.py:45-66` | Signup issues a valid session token immediately with no confirmation that the email address is owned by the requester | Add an email-verification flow before granting full access, or explicitly accept this as a deliberate trade-off for a low-stakes demo app | Depends on threat model — flag for a decision, not silently skip |
-| No password reset / account recovery, despite the frontend routing to it | Medium | `frontend/src/App.jsx:653-658` (`handleForgotPassword` — hardcoded "not implemented in custom MongoDB auth" error) | Users who forget their password have no recovery path; this was clearly a working Supabase feature before the auth migration that was never rebuilt | Implement a token-based reset flow (email + time-limited reset token) | Yes, for real users |
+| **[RESOLVED]** ~~No password reset / account recovery, despite the frontend routing to it~~ | Medium | `backend/api/routes_auth.py`, `frontend/src/pages/ResetPasswordPage.jsx` | A token-based reset flow now exists end to end: `POST /auth/forgot-password` (enumeration-resistant, identical response either way), a one-time hashed token with a TTL, `POST /auth/reset-password`, and a frontend "Forgot password?" link plus a `/reset-password?token=...` page (§28). | Done | — |
 | **[RESOLVED, with a scaling caveat]** ~~No brute-force lockout / backoff~~ | Medium | `backend/api/rate_limit.py`, `backend/api/routes_auth.py` | A per-account lockout now applies after `AUTH_LOGIN_MAX_FAILURES` consecutive failures, and follows the account rather than the source address so rotating IPs does not reset the streak. **Caveat:** counters are per-process, so multiple workers multiply the effective limit and separate instances share nothing. Documented in README §7.7; the classes take an injectable clock and a narrow interface to keep a Redis swap cheap. | Back with Redis or enforce at the gateway before scaling out | Resolved for single-process; revisit when scaling |
 | WebSocket auth token can be passed as a query parameter | Low-Medium | `backend/api/ws_interview.py:166-180` | `?access_token=<jwt>` in the connection URL is a common and largely unavoidable pattern for browser WebSockets (no custom header support), but it means the token can end up in server access logs, browser history, and Referer headers if not handled carefully | Confirm access logs don't record full query strings for the `/interview/ws/*` path, and prefer the header path (already supported) from any non-browser client | No, but worth a log-scrubbing check |
 | **[RESOLVED]** ~~No test coverage for the auth/session layer at all~~ | High | `tests/test_auth.py` (new, 48 tests) | Covers password policy (including the multibyte byte-limit case), signup success/conflict/race, sign-in success and every failure mode, user-enumeration resistance, corrupt-hash and oversized-password handling, JWT verification (valid, expired, forged signature, missing subject, malformed, and `alg: none` downgrade), session-ownership enforcement, the throttling primitives with an injected clock, and an HTTP-layer pass through the real FastAPI stack asserting 422/429/401 wiring and the `Retry-After` header. Verified non-vacuous by mutation testing: removing the duplicate-key handling and disabling the rate limiter each cause the corresponding tests to fail. | Done | — |
@@ -1086,3 +1086,88 @@ distinction above against a throwaway FastAPI app, and the `/metrics`
 endpoint itself — including that scraping `/metrics` does not inflate its own
 counter. Also started the real app with `uvicorn` and read actual scraped
 output, rather than trusting the tests alone.
+
+---
+
+## 28. Change log — password reset
+
+Punch-list item from §4: the last piece of the auth story that was fully
+buildable without a decision only the project owner can make (email
+*verification* still needs one — see below). Suite: **331 → 341 passing.**
+
+### Backend
+
+Two new routes in `routes_auth.py`:
+
+- `POST /auth/forgot-password` — looks up the address, and **returns the
+  identical response whether or not an account exists**, the same
+  enumeration-resistance shape §18 already built for sign-in. A differently
+  worded response here would have reopened exactly the oracle that hardening
+  closed, just through a second door. `tests/test_auth.py` asserts the two
+  responses are `==`, not just similarly-shaped.
+- `POST /auth/reset-password` — consumes a one-time token and updates the
+  password, subject to the same policy signup enforces (the validator was
+  extracted to `_validate_password_policy` so both paths share it rather than
+  drifting apart).
+
+The token itself: `secrets.token_urlsafe(32)` is emailed to the user, but
+only its **SHA-256 hash** is stored (`password_reset_tokens`, `_id` = the
+hash) — deliberately not bcrypt, unlike passwords. bcrypt's slowness defends
+against offline brute-forcing a *low-entropy* human-chosen password; a
+32-byte random token has nothing to brute-force, and bcrypt would only add a
+real delay to every legitimate reset. `consume_password_reset_token` is an
+atomic `find_one_and_update` gated on `used_at: None` and `expires_at > now`,
+so two concurrent requests racing the same token cannot both succeed — the
+same race class §18 fixed for signup, here for a different collection. A TTL
+index bounds the collection the same way `revoked_tokens` already does.
+
+### Email: pluggable, not a dependency on picking a provider
+
+`backend/email_provider.py` reads `EMAIL_PROVIDER`: `console` (default) logs
+the email — genuinely working for local dev and CI, not a stub to swap out
+later, and the reset link is right there in the log to test by hand. `smtp`
+sends via stdlib `smtplib` against any relay (Gmail, SendGrid, Mailgun, SES,
+Postmark all speak SMTP), configured entirely through `SMTP_*` env vars. No
+provider SDK, so no new dependency and no dependency-pin risk of the kind §27
+just found — switching providers later is a config change.
+
+A delivery failure is logged and **swallowed**, not surfaced to the caller:
+letting it reach the response would tell an attacker the address exists
+(the same reasoning as the identical-response requirement above). The
+generic response is returned either way; `tests/test_auth.py` covers this
+path explicitly with a mocked `EmailDeliveryError`.
+
+### Frontend
+
+`AuthPanel.jsx` gained a "Forgot password?" link (sign-in mode only) that
+swaps in a small email-only form, and `frontend/src/pages/ResetPasswordPage.jsx`
+is a new route at `/reset-password` that reads `?token=...`, has a distinct
+state for a missing token versus a successful reset, and enforces the
+new-password/confirm-password match client-side before calling the API.
+Both were screenshotted in a real headless browser in both themes — see the
+verification note below — not just built and assumed correct from the diff.
+
+### Deliberately not done: email verification
+
+The original assessment flagged this as depending on threat model rather
+than an unconditional gap ("flag for a decision, not silently skip"), and
+that framing still holds: signup continues to issue a session immediately
+with no proof the address is owned by the requester. Implementing it now
+would have meant choosing that trade-off unilaterally rather than building
+what was asked. The same `email_provider.py` this pass added is what a
+verification flow would send through, so adding it later is additive, not a
+rework.
+
+### Verification
+
+`tests/test_auth.py` gained three new test classes (10 tests): token-hash
+determinism, `forgot-password` (found vs. missing account get byte-identical
+responses, a delivery failure never surfaces, rate limiting applies via the
+same `_enforce_ip_rate_limit` scope mechanism already tested elsewhere), and
+`reset-password` (valid token updates the password and is verified against
+the new hash with `bcrypt.checkpw`, an invalid/expired/reused token is
+rejected with 400, the new password is still subject to the signup policy).
+Full suite green throughout. The frontend flow was driven in a real headless
+Chromium (not just `npm run build`): clicked "Forgot password?", visited
+`/reset-password?token=...` and `/reset-password` with no token, screenshotted
+all three states, and confirmed zero browser console errors.

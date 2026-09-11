@@ -46,6 +46,36 @@ export const authClient = {
     return data;
   },
 
+  forgotPassword: async (email) => {
+    const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not request a password reset.");
+    }
+    // The backend deliberately returns the same response whether or not the
+    // address has an account — do not let a caller here branch on that.
+    return data;
+  },
+
+  resetPassword: async (token, newPassword) => {
+    const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not reset the password.");
+    }
+    return data;
+  },
+
   logout: async () => {
     const token = authClient.getToken();
     // Tell the server to revoke this token, so it cannot be reused if it was
