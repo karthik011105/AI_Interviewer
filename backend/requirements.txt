@@ -28,6 +28,16 @@ python-dotenv==1.2.2
 # Error tracking. Inert unless SENTRY_DSN is set — see backend/logging_config.py.
 sentry-sdk==2.19.2
 
+# Metrics. /metrics is always exposed (no external service required — a
+# Prometheus server, if any, scrapes it); see backend/metrics.py.
+#
+# NOT prometheus-fastapi-instrumentator: 7.1.0 pins starlette<1.0.0, which
+# would silently downgrade the starlette this project actually runs on
+# (>=0.46.0, resolved to 1.6.0) — confirmed by installing it and watching pip
+# do exactly that. HTTP metrics are instrumented directly instead (see
+# RequestMetricsMiddleware in backend/main.py).
+prometheus-client==0.21.1
+
 # LLM
 groq==1.2.0
 

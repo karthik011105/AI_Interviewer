@@ -16,6 +16,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from backend.config import get_settings
+from backend.metrics import judge0_request_duration_seconds, judge0_requests_total
 
 _HARNESS_START_MARKER = "__INTERVIEW_SIMULATOR_RESULTS_START__"
 _HARNESS_END_MARKER = "__INTERVIEW_SIMULATOR_RESULTS_END__"
@@ -771,17 +772,25 @@ def _open_json_request(
 		headers[settings.auth_header] = settings.auth_token
 
 	request = urllib_request.Request(url, data=request_body, headers=headers, method=method)
+	started_at = time.monotonic()
 	try:
 		with urllib_request.urlopen(request, timeout=settings.request_timeout_seconds) as response:
 			charset = response.headers.get_content_charset() or "utf-8"
 			body = response.read().decode(charset)
 	except urllib_error.HTTPError as exc:
+		judge0_requests_total.labels(outcome="error").inc()
+		judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 		body = exc.read().decode("utf-8", errors="replace")
 		raise CodeExecutionError(
 			f"Judge0 request failed with HTTP {exc.code}: {body.strip() or exc.reason}."
 		) from exc
 	except urllib_error.URLError as exc:
+		judge0_requests_total.labels(outcome="error").inc()
+		judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 		raise CodeExecutionError(f"Judge0 is unavailable: {exc.reason}.") from exc
+
+	judge0_requests_total.labels(outcome="success").inc()
+	judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 
 	try:
 		parsed = json.loads(body)

@@ -11,8 +11,14 @@ from importlib import import_module
 from typing import Any
 
 from backend.config import GroqSettings
+from backend.metrics import groq_request_duration_seconds, groq_requests_total
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _record_groq_attempt(started_at: float, outcome: str) -> None:
+	groq_requests_total.labels(outcome=outcome).inc()
+	groq_request_duration_seconds.observe(time.monotonic() - started_at)
 
 
 class GroqClientError(RuntimeError):
@@ -97,12 +103,15 @@ def create_chat_completion(
 		request_kwargs["response_format"] = dict(response_format)
 
 	for attempt in range(1, max_attempts + 1):
+		started_at = time.monotonic()
 		try:
-			return client.chat.completions.create(**request_kwargs)
+			result = client.chat.completions.create(**request_kwargs)
 		except Exception as exc:
 			last_error = exc
 			if _is_rate_limit_error(exc):
+				_record_groq_attempt(started_at, "rate_limited")
 				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
+			_record_groq_attempt(started_at, "error")
 			if attempt >= max_attempts:
 				break
 
@@ -115,6 +124,9 @@ def create_chat_completion(
 				sleep_seconds,
 			)
 			time.sleep(sleep_seconds)
+		else:
+			_record_groq_attempt(started_at, "success")
+			return result
 
 	message = f"Groq completion failed after {max_attempts} attempt(s)."
 	if last_error is not None:
@@ -158,8 +170,10 @@ async def stream_chat_completion(
 
 	for attempt in range(1, max_attempts + 1):
 		emitted = False
+		started_at = time.monotonic()
 		try:
 			stream = await client.chat.completions.create(**request_kwargs)
+			_record_groq_attempt(started_at, "success")
 			async for event in stream:
 				choices = getattr(event, "choices", None) or []
 				if not choices:
@@ -175,12 +189,18 @@ async def stream_chat_completion(
 			if emitted:
 				# Mid-stream failure: the caller already has partial output, so
 				# surface the truncation in the log rather than replaying it.
+				# The connection itself already recorded as "success" above —
+				# this counts separately since the failure is not a retryable
+				# connection error.
+				groq_requests_total.labels(outcome="partial").inc()
 				_LOGGER.warning("Groq stream ended early after partial output: %s", exc)
 				return
 
 			last_error = exc
 			if _is_rate_limit_error(exc):
+				_record_groq_attempt(started_at, "rate_limited")
 				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
+			_record_groq_attempt(started_at, "error")
 			if attempt >= max_attempts:
 				break
 

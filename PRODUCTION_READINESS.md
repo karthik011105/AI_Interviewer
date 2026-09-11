@@ -1,7 +1,7 @@
 # Production Readiness Assessment — AI Interview Simulator
 
 Assessment date: 2026-08-28
-Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking)
+Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking, Prometheus metrics, frontend redesign)
 Scope: full repository (`backend/`, `frontend/`, `tests/`, config, Docker/Judge0, scripts, data assets).
 Method: direct source inspection (the `code-review-graph` MCP server failed to connect — `CONNECT_TIMEOUT` — so this pass used manual file reads, `git ls-files`, and targeted greps instead of graph queries), followed by running the backend test suite and the frontend build.
 
@@ -86,13 +86,15 @@ All of this is fixed; see §17.
 
 **[RESOLVED] LLM and compute spend is now bounded** — per-user hourly quotas on resume parsing, role matching, DSA execution, and voice (§21), extended to the interview WebSocket (§23). Every path that spends money on Groq, ElevenLabs, or Judge0 is now metered per account.
 
-**[RESOLVED] CORS origins, structured logging, and error tracking are now in
-place** — allowed frontend origins move through `CORS_ALLOWED_ORIGINS` instead
-of a hardcoded localhost list, every log line is JSON with a request-id that
-correlates one HTTP request across every module that logs during it, a
-catch-all exception handler turns a genuinely unhandled exception into a
-structured 500 instead of an opaque one, and Sentry initializes itself when
-`SENTRY_DSN` is set and stays fully inert otherwise (§26).
+**[RESOLVED] CORS origins, structured logging, error tracking, and metrics are
+now in place** — allowed frontend origins move through `CORS_ALLOWED_ORIGINS`
+instead of a hardcoded localhost list, every log line is JSON with a
+request-id that correlates one HTTP request across every module that logs
+during it, a catch-all exception handler turns a genuinely unhandled
+exception into a structured 500 instead of an opaque one, Sentry initializes
+itself when `SENTRY_DSN` is set and stays fully inert otherwise (§26), and
+`/metrics` now exposes request counts/latency by route plus Groq/Judge0 call
+outcomes (§27).
 
 The largest remaining risks are:
 
@@ -332,7 +334,7 @@ I did not find any other clearly-dead code paths in the routes/services I read d
 5. ~~Write an auth/session test suite~~ — **done**: `tests/test_auth.py`, 48 tests (§18).
 6. ~~Add Dockerfiles for backend + frontend and a CI pipeline~~ — **done and verified end to end** (§19). Remaining: let CI actually run once on a push.
 7. ~~Move CORS origins into env-driven config so a real frontend domain can be deployed~~ — **done** (§26).
-8. ~~Add structured logging + error tracking (Sentry or equivalent)~~ — **done** (§26). Metrics (§14) are still outstanding.
+8. ~~Add structured logging + error tracking (Sentry or equivalent) + basic metrics~~ — **done** (§26, §27).
 9. Confirm/harden the Judge0 sandbox (non-privileged containers, auth enabled) before letting untrusted users execute code through it (§3).
 10. Add spend/usage caps on Groq calls per user/session (§8).
 
@@ -1015,10 +1017,72 @@ found; that work was already correctly verified by the pass that wrote it.
 
 ### Still not done
 
-- **Metrics** (§14) — no Prometheus/OpenTelemetry instrumentation yet.
 - **CI has still never run for real.** The workflow now has meaningfully more
   to validate than when §19 shipped it (this change touches `main.py`,
   `config.py`, and adds a new runtime dependency) and remains something only
   ever exercised locally, not on GitHub's own runners.
 - `/health` still does not check Mongo connectivity (§14) — unrelated to this
   pass, carried forward from the original assessment.
+
+---
+
+## 27. Change log — Prometheus metrics
+
+Punch-list item 8's remaining half (§14). Suite: **321 → 331 passing.**
+
+`backend/metrics.py` adds four series: `http_requests_total` /
+`http_request_duration_seconds` (every request, labelled by method, route
+template, and status) via a new `RequestMetricsMiddleware` in `main.py`, and
+`groq_requests_total` / `judge0_requests_total` (each labelled by outcome —
+`success` / `rate_limited` / `error`) recorded at the one call site each of
+those clients actually has. `/metrics` serves them in Prometheus text format,
+unauthenticated — the same posture as `/health`, and consistent with how a
+scraper is normally kept out of reach at the network layer (a reverse proxy
+or the orchestrator's own network policy) rather than the application layer.
+
+### Not `prometheus-fastapi-instrumentator`
+
+The obvious library for the HTTP half turned out to be a real risk rather
+than a shortcut: `prometheus-fastapi-instrumentator==7.1.0` pins
+`starlette<1.0.0`, and this project resolves `starlette==1.6.0` (FastAPI
+0.136.0 only requires `>=0.46.0`, so nothing forces the newer version — it is
+just what `pip` picked when `requirements.txt` was last resolved). Installing
+the library to try it out **did exactly what the pin implies**: silently
+downgraded the installed `starlette` from 1.6.0 to 0.52.1, a transitive
+downgrade of the actual web framework this app runs on, caught only by
+`pip`'s own install log rather than by anything that would have failed
+loudly. Confirmed the app still imported at that downgraded version, then
+un-did it (`pip install starlette==1.6.0`) and wrote `RequestMetricsMiddleware`
+directly against `prometheus_client` instead — about 25 lines, no dependency
+risk, and it already had `RequestIdMiddleware` next to it as a template for
+exactly this kind of Starlette middleware. This is the second time in this
+project a library evaluated for one line of setup turned out to need throwing
+away after actually installing it and checking (§19 did the same for a
+dependency split, §20 for the DSA polling bug) — the lesson generalises: a
+library's own declared constraints are worth reading, not just its README.
+
+### Route templates, not resolved paths
+
+`RequestMetricsMiddleware` labels by `request.scope["route"].path` — the
+registered pattern (`/dsa/{session_id}/run`) — not `request.url.path` (the
+resolved URL with a real session id in it). Labelling by the resolved path
+would give every session id, submission id, and UUID this app has ever seen
+its own permanent Prometheus time series: exactly the unbounded-cardinality
+mistake that eventually takes a metrics endpoint down. `scope["route"]` is
+only populated *after* routing runs, which happens inside `call_next` — read
+after awaiting it, not before, the same ordering lesson `RequestIdMiddleware`
+already had to learn about `request.state` in §26. An unmatched route (404)
+has no `route` on its scope at all and is labelled `"unmatched"` rather than
+the arbitrary path someone probed. `tests/test_metrics.py` asserts the
+template label directly and asserts the raw-path label *never* gets written.
+
+### Verification
+
+`tests/test_metrics.py` (10 tests): Groq outcomes (success, rate-limited not
+counted as a plain error, one `error` sample per exhausted retry attempt),
+Judge0 outcomes (success, HTTP error, connection error) via the one function
+both health checks and submissions funnel through, the route-template/raw-path
+distinction above against a throwaway FastAPI app, and the `/metrics`
+endpoint itself — including that scraping `/metrics` does not inflate its own
+counter. Also started the real app with `uvicorn` and read actual scraped
+output, rather than trusting the tests alone.

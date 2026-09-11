@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.config import get_settings
@@ -19,6 +21,7 @@ from backend.logging_config import (
 	configure_logging,
 	request_id_var,
 )
+from backend.metrics import http_request_duration_seconds, http_requests_total
 from backend.api.routes_assessment import router as assessment_router
 from backend.api.routes_auth import router as auth_router
 from backend.api.routes_dsa import router as dsa_router
@@ -65,6 +68,36 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 		return response
 
 
+class RequestMetricsMiddleware(BaseHTTPMiddleware):
+	"""Record request count and latency, labelled by route template.
+
+	Labelling by ``request.url.path`` directly would give every session id
+	and UUID embedded in a URL its own Prometheus time series — an unbounded
+	label is exactly the mistake that makes a metrics endpoint fall over. The
+	route *template* (``/dsa/{session_id}/run``, not the resolved path) is
+	only available on ``request.scope["route"]`` after routing has actually
+	matched, which happens inside ``call_next`` — hence reading it after,
+	not before.
+	"""
+
+	async def dispatch(self, request: Request, call_next):
+		if request.url.path == "/metrics":
+			return await call_next(request)
+
+		started_at = time.monotonic()
+		response = await call_next(request)
+		duration = time.monotonic() - started_at
+
+		route = request.scope.get("route")
+		path = getattr(route, "path", None) or "unmatched"
+
+		http_requests_total.labels(
+			method=request.method, path=path, status=str(response.status_code)
+		).inc()
+		http_request_duration_seconds.labels(method=request.method, path=path).observe(duration)
+		return response
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
 	# Load Whisper off the event loop so the first candidate to speak does not
@@ -100,6 +133,7 @@ def create_app() -> FastAPI:
 		allow_headers=["*"],
 	)
 	app.add_middleware(RequestIdMiddleware)
+	app.add_middleware(RequestMetricsMiddleware)
 
 	@app.exception_handler(Exception)
 	async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -162,6 +196,10 @@ def create_app() -> FastAPI:
 				),
 			},
 		}
+
+	@app.get("/metrics", include_in_schema=False)
+	def metrics() -> Response:
+		return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 	return app
 
