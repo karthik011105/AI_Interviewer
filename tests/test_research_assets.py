@@ -40,7 +40,16 @@ class ResearchAssetRegistryTests(TestCase):
 	def test_health_exposes_research_asset_summary_without_changing_runtime_contract(self) -> None:
 		with patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.main.warmup_research_asset_registry"), \
-			 patch("backend.main.get_settings", return_value=SimpleNamespace(groq=None)), \
+			 patch(
+				 "backend.main.get_settings",
+				 return_value=SimpleNamespace(
+					 groq=None,
+					 cors=SimpleNamespace(
+						 allowed_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
+						 allow_origin_regex=r"http://(127\.0\.0\.1|localhost):(517[0-9]|3000)",
+					 ),
+				 ),
+			 ), \
 			 patch("backend.main.get_semantic_backend_status", return_value={"ready": True}), \
 			 patch("backend.main.get_research_asset_summary", return_value={
 				"available": True,

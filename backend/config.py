@@ -109,6 +109,19 @@ def _read_float(
 	return value
 
 
+def _read_csv(
+	source: Mapping[str, str],
+	name: str,
+	default: tuple[str, ...],
+) -> tuple[str, ...]:
+	raw_value = (source.get(name) or "").strip()
+	if not raw_value:
+		return default
+
+	values = tuple(item.strip() for item in raw_value.split(",") if item.strip())
+	return values or default
+
+
 def _read_bool(
 	source: Mapping[str, str],
 	name: str,
@@ -175,6 +188,23 @@ class Judge0Settings:
 
 
 @dataclass(frozen=True, slots=True)
+class CorsSettings:
+	"""Allowed browser origins for the API.
+
+	``allowed_origins`` defaults to the Vite dev server so local development
+	keeps working with zero configuration. A real deployment must set
+	CORS_ALLOWED_ORIGINS to its actual frontend domain(s) — without it, a
+	browser running the production frontend cannot call this API at all.
+	"""
+
+	allowed_origins: tuple[str, ...]
+	# Matches only http://localhost:<port> / http://127.0.0.1:<port> — useful
+	# for local dev against any Vite port, harmless in production because no
+	# real browser sends that Origin for a deployed page.
+	allow_origin_regex: str
+
+
+@dataclass(frozen=True, slots=True)
 class MongoSettings:
 	"""MongoDB connection settings."""
 	uri: str
@@ -234,6 +264,7 @@ class AppSettings:
 	mongo: MongoSettings
 	auth: AuthSettings
 	quotas: QuotaSettings
+	cors: CorsSettings
 	allow_local_resume_path_api: bool
 
 	@classmethod
@@ -480,6 +511,18 @@ class AppSettings:
 			),
 		)
 
+		cors_settings = CorsSettings(
+			allowed_origins=_read_csv(
+				source,
+				"CORS_ALLOWED_ORIGINS",
+				("http://127.0.0.1:5173", "http://localhost:5173"),
+			),
+			allow_origin_regex=(
+				source.get("CORS_ALLOW_ORIGIN_REGEX")
+				or r"http://(127\.0\.0\.1|localhost):(517[0-9]|3000)"
+			),
+		)
+
 		return cls(
 			groq=groq_settings,
 			resume_parsing=resume_parsing,
@@ -487,6 +530,7 @@ class AppSettings:
 			mongo=mongo_settings,
 			auth=auth_settings,
 			quotas=quota_settings,
+			cors=cors_settings,
 			allow_local_resume_path_api=_read_bool(
 				source,
 				"ENABLE_LOCAL_RESUME_PATH_API",
@@ -514,6 +558,7 @@ __all__ = [
 	"AppSettings",
 	"AuthSettings",
 	"ConfigurationError",
+	"CorsSettings",
 	"DOTENV_OVERRIDE_ENV_VAR",
 	"dotenv_override_enabled",
 	"load_project_dotenv",

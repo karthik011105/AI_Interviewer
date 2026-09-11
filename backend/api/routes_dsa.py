@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from typing import Any, Mapping
@@ -53,6 +54,8 @@ from backend.dsa.problem_selector import (
 	serialize_problem,
 )
 from backend.dsa.report_engine import build_dsa_question_report, build_dsa_round_report
+
+_LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dsa", tags=["dsa"])
 
@@ -331,7 +334,7 @@ def run_dsa_code(
 	except SafetyViolationError as exc:
 		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 	except CodeExecutionError as exc:
-		print("!!! JUDGE0 ERROR:", str(exc))
+		_LOGGER.error("Judge0 execution error: %s", exc)
 		raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 	judge_status = _derive_judge_status(execution_results)

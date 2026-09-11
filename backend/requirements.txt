@@ -25,6 +25,9 @@ pymongo>=4.6.0
 # Configuration
 python-dotenv==1.2.2
 
+# Error tracking. Inert unless SENTRY_DSN is set — see backend/logging_config.py.
+sentry-sdk==2.19.2
+
 # LLM
 groq==1.2.0
 

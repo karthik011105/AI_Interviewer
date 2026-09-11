@@ -1,7 +1,7 @@
 # Production Readiness Assessment — AI Interview Simulator
 
 Assessment date: 2026-08-28
-Last updated: 2026-08-29 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes)
+Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking)
 Scope: full repository (`backend/`, `frontend/`, `tests/`, config, Docker/Judge0, scripts, data assets).
 Method: direct source inspection (the `code-review-graph` MCP server failed to connect — `CONNECT_TIMEOUT` — so this pass used manual file reads, `git ls-files`, and targeted greps instead of graph queries), followed by running the backend test suite and the frontend build.
 
@@ -42,16 +42,30 @@ health. Run the suite and the build before trusting any assessment of it.
 
 ---
 
-## 0. Urgent — do this regardless of anything else below
+## 0. Credential exposure — status
 
-`.env` at the repo root (not committed — it's git-ignored and untracked, confirmed via `git ls-files`) contains live-looking credentials in plaintext:
+`.env` at the repo root contains live credentials in plaintext. It is git-ignored
+and was **never committed** to any reachable history (verified via
+`git log --all --full-history`), so despite the GitHub remote these were never
+pushed. All four were read into an assistant session during the assessment, so
+they should be considered exposed to wherever that transcript is stored.
 
-- `GROQ_API_KEY`
-- `AUTH_JWT_SECRET` (the secret that signs every session token)
-- `QUIZ_API_KEY`
-- `ELEVENLABS_API_KEY`
+| Credential | Status |
+|---|---|
+| `AUTH_JWT_SECRET` | **Rotated** (§22.1), verified — tokens signed with the old secret are now rejected |
+| `GROQ_API_KEY` | **Not rotated — accepted risk.** Owner elected to keep the existing key. |
+| `ELEVENLABS_API_KEY` | **Not rotated — accepted risk.** As above. |
+| `QUIZ_API_KEY` | **Not rotated — accepted risk.** As above. Used only by `scripts/import_questions_from_apis.py`, not at runtime. |
 
-These were read into this assistant session as part of the inspection you requested. Treat them as exposed and **rotate all four now**, then update `.env` with the new values. This is independent of the rest of the report and should not wait for a triage pass.
+The three retained keys are a deliberate decision by the project owner, recorded
+here rather than left looking like an outstanding task. Revisit it if any of them
+gains billing exposure or moves beyond a development tier, and rotate before this
+project is handed to anyone else.
+
+Separately, and **not** covered by the decision above: the Judge0 Redis and
+Postgres passwords in commit `1f249f5` *were* committed and pushed (§22.3). The
+repository is private, which bounds the exposure, but those two are a different
+class from the `.env` keys — they are in git history rather than only on disk.
 
 ---
 
@@ -72,11 +86,20 @@ All of this is fixed; see §17.
 
 **[RESOLVED] LLM and compute spend is now bounded** — per-user hourly quotas on resume parsing, role matching, DSA execution, and voice (§21), extended to the interview WebSocket (§23). Every path that spends money on Groq, ElevenLabs, or Judge0 is now metered per account.
 
+**[RESOLVED] CORS origins, structured logging, and error tracking are now in
+place** — allowed frontend origins move through `CORS_ALLOWED_ORIGINS` instead
+of a hardcoded localhost list, every log line is JSON with a request-id that
+correlates one HTTP request across every module that logs during it, a
+catch-all exception handler turns a genuinely unhandled exception into a
+structured 500 instead of an opaque one, and Sentry initializes itself when
+`SENTRY_DSN` is set and stays fully inert otherwise (§26).
+
 The largest remaining risks are:
 
 1. **Secrets still need rotating** (§0) — unchanged, and the only item outstanding since the first assessment.
 2. **[RESOLVED] Judge0 hardening** — authentication is now enabled and all hardcoded infrastructure passwords are parameterised (§22). **Still open:** Judge0 credentials were committed to the repository and are on the GitHub remote; they need rotating, and removing them from history requires a force-push (§22).
 3. **No email verification or password reset** (§4) — both blocked on choosing an email provider. Token revocation is done (§24).
+4. **CI has still never actually run.** The workflow now has real observability work to validate (§26), and remains unverified on GitHub's own runners — only ever run locally.
 
 None of this is unusual for a project at this stage — but it means "production" is a real project, not a config change.
 
@@ -308,8 +331,8 @@ I did not find any other clearly-dead code paths in the routes/services I read d
 4. ~~Add a password policy + fix the signup duplicate-key race~~ — **done** (§18).
 5. ~~Write an auth/session test suite~~ — **done**: `tests/test_auth.py`, 48 tests (§18).
 6. ~~Add Dockerfiles for backend + frontend and a CI pipeline~~ — **done and verified end to end** (§19). Remaining: let CI actually run once on a push.
-7. Move CORS origins into env-driven config so a real frontend domain can be deployed (§5).
-8. Add structured logging + error tracking (Sentry or equivalent) + basic metrics (§9, §14).
+7. ~~Move CORS origins into env-driven config so a real frontend domain can be deployed~~ — **done** (§26).
+8. ~~Add structured logging + error tracking (Sentry or equivalent)~~ — **done** (§26). Metrics (§14) are still outstanding.
 9. Confirm/harden the Judge0 sandbox (non-privileged containers, auth enabled) before letting untrusted users execute code through it (§3).
 10. Add spend/usage caps on Groq calls per user/session (§8).
 
@@ -891,3 +914,111 @@ stop shipping unrelated tooling, not to uninstall it.
 finding was wrong (§22.2) — it is the genuine upstream Judge0 v1.13.1 release,
 and it is now the reference copy of the pristine `judge0.conf` after that file
 was untracked. It stays.
+
+---
+
+## 26. Change log — CORS config, structured logging, and error tracking
+
+Punch-list items 7 and 8. Suite: **295 → 321 passing** (the 295 baseline
+already includes the interview-question-targeting work from
+`INTERVIEW_QUESTION_TARGETING.md`, reviewed and verified in this same pass —
+see below).
+
+### CORS moved into `AppSettings`
+
+`backend/main.py` hardcoded `allow_origins` to the two Vite dev-server
+origins, with no way to add a real frontend domain short of a code change and
+redeploy (§5). `CorsSettings` in `backend/config.py` now reads
+`CORS_ALLOWED_ORIGINS` (comma-separated) and `CORS_ALLOW_ORIGIN_REGEX`, both
+defaulting to the previous hardcoded values so local development needs no new
+configuration. `tests/test_config.py` covers the default, a custom origin
+list, a blank value falling back to the default (consistent with every other
+`_read_*` helper in this file), and a custom regex.
+
+### Structured (JSON) logging with request correlation
+
+Logging was ad hoc (§9): some modules used `logging.getLogger(__name__)`, one
+route used a raw `print()`, and nothing tied separate log lines from the same
+request together. `backend/logging_config.py` is now the single place that
+configures it:
+
+- Every log line is one JSON object to stdout (`timestamp`, `level`, `logger`,
+  `message`, and `exception` when there is one) — grep-able today, and ready
+  for a log aggregator without changing the emitting code later.
+- `RequestIdMiddleware` (`backend/main.py`) mints (or reuses an inbound
+  `X-Request-ID`) an id per request, threads it through a `contextvars.ContextVar`
+  so every log line emitted anywhere during that request carries it via a
+  logging filter, and echoes it back as a response header. A user report
+  ("it broke around 2pm") now turns into an exact log query instead of a
+  guess.
+- The stray `print("!!! JUDGE0 ERROR:", ...)` in `routes_dsa.py` (§2, flagged
+  as trivial but never fixed) is now `_LOGGER.error(...)`, so it participates
+  in the same format and level filtering as everything else.
+- `LOG_LEVEL` controls verbosity (default `INFO`).
+
+### A global exception handler, and the bug in its first version
+
+`backend/main.py` had no consistent shape for an unhandled exception (§5) —
+FastAPI's default 500 leaked no traceback (confirmed good), but had no
+request id, no log line, and no fixed error envelope. A handler registered for
+the base `Exception` class now returns `{"error": {"code", "message",
+"request_id"}}` and logs the exception with its request id.
+
+**The first version of this had a real bug, caught before landing.** A
+handler registered for the base `Exception` class is installed as
+`ServerErrorMiddleware`'s `error_handler` — Starlette special-cases `Exception`
+and `500` to sit *outside every user middleware*, including
+`RequestIdMiddleware`. Concretely: the exception propagates up through
+`RequestIdMiddleware`'s `try/finally`, which resets the contextvar to `None`
+on its way out, *before* `ServerErrorMiddleware` ever calls the handler — so
+`request_id_var.get()` inside the handler always returned `None`, silently
+defeating the one thing request ids exist for on exactly the responses that
+need them most. Caught by a test asserting the 500 body's `request_id` matches
+the response header, which failed with `None != 'trace-me'`.
+
+Fixed by also stamping the id onto `request.state` in the middleware.
+Starlette's `Request.state` is backed by the ASGI `scope` dict, which is the
+same object threaded through the entire connection — so it survives even
+though `ServerErrorMiddleware` constructs its own fresh `Request` from that
+scope. The handler reads `request.state` first, falling back to the
+contextvar only for unit tests that call it directly. `RequestIdMiddleware`
+also never got a chance to stamp its own response with `X-Request-ID` in this
+path, since the exception propagated out of `call_next` before that line — the
+handler sets the header itself for the same reason.
+
+`tests/test_main_observability.py` drives this through the real FastAPI stack
+with `TestClient(app, raise_server_exceptions=False)` — needed because
+`ServerErrorMiddleware` always re-raises after building the response, by
+design, so real servers can still log it. Also covers CORS wiring end to end
+(a configured origin allowed on preflight, an unconfigured one rejected, the
+dev-server default still working) and that a normal request is unaffected.
+
+### Sentry, optional and inert by default
+
+`configure_error_tracking()` calls `sentry_sdk.init()` only when `SENTRY_DSN`
+is set; with it unset (the default), the function returns immediately and
+never imports `sentry_sdk`, so nothing changes for anyone who hasn't set up an
+account. `sentry-sdk` is now a runtime dependency (`backend/requirements.txt`)
+since it needs to be importable when a DSN is supplied, but installing it
+costs nothing when it is not.
+
+### Interview-question-targeting review
+
+Before starting the above, the uncommitted working-tree changes implementing
+`INTERVIEW_QUESTION_TARGETING.md` (the 70% role / 30% resume question
+allocation, pinned as a standing preference) were reviewed rather than taken
+on faith: ran the full suite (295 passing, matching that document's own
+verification), checked for circular imports from the new cross-module
+dependency (`resume_skill_profiler.py` now imports from
+`question_generator.py`), and ran the frontend production build. No issues
+found; that work was already correctly verified by the pass that wrote it.
+
+### Still not done
+
+- **Metrics** (§14) — no Prometheus/OpenTelemetry instrumentation yet.
+- **CI has still never run for real.** The workflow now has meaningfully more
+  to validate than when §19 shipped it (this change touches `main.py`,
+  `config.py`, and adds a new runtime dependency) and remains something only
+  ever exercised locally, not on GitHub's own runners.
+- `/health` still does not check Mongo connectivity (§14) — unrelated to this
+  pass, carried forward from the original assessment.
