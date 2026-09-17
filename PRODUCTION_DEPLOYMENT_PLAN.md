@@ -816,3 +816,119 @@ instances, and a restart resets every counter. The sweep fixes unbounded growth,
 not the distribution problem. On a free tier running a single worker this is
 tolerable; it is the reason the deployment must stay at one worker until the
 counters move into MongoDB.
+
+---
+
+## 13. Change log — Phase 1.4, the resume pipeline
+
+Completed 2026-09-18. Suite: **378 → 387 tests**, all passing.
+
+This is the application's main untrusted-input boundary: an anonymous-ish
+authenticated caller hands the server an arbitrary file. The upload guard turned
+out to be as good as `PRODUCTION_READINESS.md` claimed, and the defects were
+just past it.
+
+### Defect 1 — a 9-byte upload caused an unhandled 500
+
+The upload guard validates only the first five bytes, so anything beginning
+`%PDF-` reaches PyMuPDF. PyMuPDF raises its own `FileDataError`, which is not in
+`resume_parser.py`'s `ResumeParserError` hierarchy — and `routes_resume.py`
+catches exactly that hierarchy. So a body of `b"%PDF-1.4\n"` passed validation
+and then escaped every handler as a 500.
+
+| Upload body | Before | After |
+|---|---|---|
+| `%PDF-1.4\n` | `pymupdf.FileDataError` → 500 | `ResumeExtractionError` → 400 |
+| `%PDF-1.4\n1 0 obj<</Type/Catalog` | `FileDataError` → 500 | 400 |
+| `%PDF-` + 4096 null bytes | `FileDataError` → 500 | 400 |
+| 5000 nested arrays | already 400 | 400 |
+| structurally valid, no pages | already 400 | 400 |
+
+Two aggravating details. PyMuPDF's message embeds the **absolute temp-file
+path**, so the replacement message is deliberately not interpolated from it — a
+test asserts the path does not appear. And because the quota is consumed by the
+dependency before the handler runs, each malformed upload also burned one of the
+user's ten hourly resume parses on a 500 that told them nothing.
+
+### Defect 2 — out-of-range `max_roles` returned 500 instead of 422
+
+`parse_resume_upload` takes `max_roles` as a bare `Form(5)` and then constructs
+`ResumeParseRequest` **inside its own body**. That model declares
+`Field(ge=1, le=10)`, but a pydantic `ValidationError` raised in a handler body
+is not the request-parsing error FastAPI converts into a 422 — it propagates as
+an unhandled exception.
+
+| `max_roles` | Before | After |
+|---|---|---|
+| 0 | 500 | 422 |
+| 11 | 500 | 422 |
+| 99999 | 500 | 422 |
+
+Fixed by declaring the same bounds on the Form parameter, where FastAPI can
+reject during parsing. The model keeps its own `Field` as the backstop for
+callers that construct it directly, and a test covers both layers. This was the
+only Form parameter in the codebase with this shape — every other one is a
+`bool` or an unconstrained `str`.
+
+### What was verified as already correct
+
+The upload guard is genuinely well built, and all six boundaries behave:
+
+| Case | Result |
+|---|---|
+| `.txt` filename | 400, only PDFs supported |
+| `image/png` content type | 400, must be a PDF content type |
+| empty file | 400, empty |
+| PDF name and type, no `%PDF-` header | 400, not a valid PDF |
+| 6 MiB body against a 5 MiB cap | 413, with the limit named |
+| no content type at all | 400, caught by the magic bytes |
+
+Also confirmed:
+
+- **The size cap is enforced while streaming**, chunk by chunk, so an oversized
+  upload is abandoned rather than buffered whole.
+- **No temp file leaks.** Five consecutive rejected uploads left nothing behind
+  in the temp directory; cleanup happens in both the `except` and the `finally`.
+- **`/resume/parse` does not exist** unless `ENABLE_LOCAL_RESUME_PATH_API` is
+  set. The route is registered inside an `if` at import time, so it is absent
+  rather than merely guarded — a stronger property, and now pinned by three
+  tests including one asserting the setting defaults to false.
+- **The happy path still works**, anchored by a test that parses the
+  repository's own `sample_resume.pdf` (2,229 characters extracted). Every other
+  new test here asserts a rejection, so without that anchor the fix could have
+  rejected everything and still passed.
+- **Every division in the scoring modules is guarded** — `resume_quality_scorer`
+  checks `total == 0`, empty text, and zero vector norms before dividing, and
+  falls back to keyword density if the TF-IDF path raises at all;
+  `resume_skill_profiler` and `ner_extractor` both use `max(n, 1)` denominators.
+  No defect found in any of the three.
+- **No mutable default arguments** anywhere in `backend/nlp/`.
+
+### Both fixes were verified non-vacuous
+
+Reverting them both and re-running produced 4 errors and 1 failure in exactly
+the new tests, then restoring returned the module to green. A regression test
+that has never been seen to fail is not yet a regression test.
+
+### A decision for you: third-party personal data in git
+
+`sample_resume.pdf` is tracked, and it is not a synthetic fixture — it contains
+a **real person's full name, phone number, and email address**. It is referenced
+by the README demo walkthrough (§7.6 step 3), so §16 of
+`PRODUCTION_READINESS.md` was right to keep it and my own note in §3 above was
+wrong to call it unused.
+
+That makes it a privacy question rather than a housekeeping one, and it is
+sharpened by the Phase 2.6 decision to rotate secrets without rewriting
+history: the file stays in every clone regardless. Options, for you to pick in
+Phase 2:
+
+1. Replace it with a synthetic resume and delete the original going forward.
+   Simple, and the demo keeps working. The PII stays in history.
+2. Replace it **and** purge it from history, which reverses the earlier
+   no-force-push decision for this one file.
+3. Keep it, on the basis that the repository is private and the person
+   consented.
+
+I have not changed it either way, because deleting a documented demo asset and
+choosing how to handle someone else's personal data are both yours to decide.

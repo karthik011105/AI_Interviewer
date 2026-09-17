@@ -113,7 +113,7 @@ jobs:
       # to tests/ instead of the repository root, which puts tests/ on sys.path
       # in place of the root. On Windows that combination crashes the
       # interpreter outright — an access violation (0xC0000005) with zero
-      # output, not a test failure. With -t . the same suite reports 378
+      # output, not a test failure. With -t . the same suite reports 387
       # passing tests. This job had never run, so nothing caught it.
       - name: Run tests
         run: python -m unittest discover -s tests -t . -p "test_*.py" --verbose

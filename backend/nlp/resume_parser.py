@@ -425,7 +425,29 @@ class ResumeParser:
 		"""Extract text from a PDF and reject encrypted or low-signal documents."""
 
 		fitz = _load_pymupdf()
-		document = fitz.open(str(pdf_path))
+
+		# PyMuPDF raises its own FileDataError (and, depending on the failure,
+		# other RuntimeError subclasses) on a file it cannot parse. Those are
+		# not in this module's error hierarchy, so untranslated they escaped
+		# every handler in routes_resume.py and became an unhandled 500.
+		#
+		# This is trivially reachable: the upload guard only verifies the first
+		# five bytes, so a 9-byte body of b"%PDF-1.4\n" passes validation and
+		# then fails to open. A malformed upload is the caller's problem and
+		# belongs in the 4xx family.
+		#
+		# The original message embeds the absolute temp-file path, which is why
+		# it is deliberately not interpolated into the replacement.
+		try:
+			document = fitz.open(str(pdf_path))
+		except ResumeParserError:
+			raise
+		except Exception as exc:
+			raise ResumeExtractionError(
+				"The uploaded file could not be opened as a PDF. It may be "
+				"corrupt, truncated, or not actually a PDF."
+			) from exc
+
 		try:
 			if getattr(document, "needs_pass", False) or getattr(
 				document,

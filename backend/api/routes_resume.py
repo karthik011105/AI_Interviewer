@@ -107,7 +107,15 @@ async def parse_resume_upload(
 	run_role_matching: bool = Form(True),
 	use_groq_profiles: bool = Form(True),
 	persist_role_matches: bool = Form(True),
-	max_roles: int = Form(5),
+	# The bounds must be declared HERE, not only on ResumeParseRequest.
+	# This handler builds that model itself, further down, from these loose Form
+	# values. A pydantic ValidationError raised inside a handler body is not the
+	# request-parsing error FastAPI turns into a 422 — it propagates as an
+	# unhandled exception, so max_roles=0 or max_roles=99999 returned a 500.
+	# Declaring the same ge/le on the Form makes FastAPI reject it during
+	# parsing, where it belongs, and the model's own Field stays as the
+	# backstop for callers that construct it directly.
+	max_roles: int = Form(5, ge=1, le=10),
 	persist_interview_contexts: bool = Form(True),
 	# Metered: this route runs a full-resume Groq extraction, the most expensive
 	# single LLM call in the application.
