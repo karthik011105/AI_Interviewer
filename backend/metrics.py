@@ -50,6 +50,12 @@ judge0_request_duration_seconds = Histogram(
 )
 
 __all__ = [
+	# The two HTTP metrics were missing from this list even though
+	# backend/main.py imports them by name. Importing by name works either
+	# way, so nothing was broken -- but a reader checking what this module
+	# exports was told the wrong answer.
+	"http_requests_total",
+	"http_request_duration_seconds",
 	"groq_requests_total",
 	"groq_request_duration_seconds",
 	"judge0_requests_total",

@@ -401,3 +401,132 @@ Still outstanding, and the reason is external: CI has never run, and it cannot r
 until a commit reaches GitHub. The workflow changes above are exactly the kind that
 only a real run can validate. Phase 0 is therefore complete locally but **not
 closed**; 0.6 records the 341-test baseline in CI, which requires 0.5 first.
+
+### Why CI has never run: it structurally could not
+
+`PRODUCTION_READINESS.md` records "CI has still never run for real" three separate
+times (§19, §20, §26) without establishing why. The reason is not that nobody
+pushed. It is that the workflow cannot fire:
+
+| Trigger in `ci.yml` | Why it never fires |
+|---|---|
+| `push: branches: [main]` | **`.github/workflows/ci.yml` does not exist on `origin/main`.** The workflow only exists on `feat/conversational-interview`, which is 17 commits ahead. A push to `main` cannot run a workflow that is not on `main` |
+| `workflow_dispatch` | GitHub only offers manual dispatch for workflows present on the **default branch**. Same root cause, so the button has never existed |
+| `pull_request` | **This one works** — a pull request runs the workflow from the PR's head branch |
+
+So the only way to get a CI run today is to **open a pull request from
+`feat/conversational-interview` into `main`**. Pushing the branch on its own does
+nothing. This is worth knowing before spending time wondering why a push produced
+no run.
+
+Two consequences for the plan:
+
+1. Phase 0.5 is "open a PR", not "push a branch".
+2. Once that PR merges, the workflow reaches `main` and the other two triggers
+   start working for the first time. Until then, every CI run must come from a
+   pull request.
+
+---
+
+## 10. Change log — Phase 1.1, config / logging / metrics
+
+Completed 2026-09-17. Suite: **341 → 348 tests**, all passing.
+
+Method: read `config.py`, `logging_config.py`, `metrics.py`, and `main.py`; read
+`tests/test_main_observability.py`, `test_config.py`, `test_logging_config.py`, and
+`test_metrics.py`; then wrote a throwaway probe that drove the real ASGI stack and
+inspected the Prometheus registry directly, rather than trusting either the source
+or the existing tests.
+
+The existing tests here are good and not vacuous — they go through `TestClient`
+against the real app rather than calling functions directly, and they correctly
+document why `raise_server_exceptions=False` is needed. They simply did not ask
+the questions below.
+
+### Two real defects, both from one root cause
+
+`@app.exception_handler(Exception)` is invoked by Starlette's
+`ServerErrorMiddleware`, which wraps the **entire** user middleware stack from the
+outside. A 500 built there has bypassed every middleware on its way out. Measured,
+not reasoned:
+
+| Probe | Before | After |
+|---|---|---|
+| A successful request increments `http_requests_total{status="200"}` | 0.0 → 1.0 | unchanged |
+| An unhandled exception increments `http_requests_total{status="500"}` | **0.0 → 0.0** | 0.0 → 1.0 |
+| A 500 carries `Access-Control-Allow-Origin` | **absent** | present |
+
+**Defect 1 — failures were invisible in the metrics.** `http_requests_total` never
+recorded a 500 from an unhandled exception, and the latency histogram never
+observed it. The practical effect is worse than a missing number: a route failing
+on every single request looked **identical to a route receiving no traffic at
+all**. The metrics went quiet exactly when they mattered. §27 added these metrics
+specifically to see failures, so this defeated the feature's purpose.
+
+**Defect 2 — 500s reached the browser with no CORS headers.** Because
+`CORSMiddleware` had been added first and was therefore *innermost*, it never saw
+the error response. A browser receiving it reports an opaque CORS failure rather
+than surfacing the JSON body — so the `request_id` that body exists to carry,
+the entire mechanism for correlating a user report to a log line (§26), never
+reached the user. This is not hypothetical for this deployment: Track A puts the
+frontend on Cloudflare Pages and the API on Hugging Face Spaces, so they are on
+different origins by definition and **every** 500 would have been unreadable.
+
+### The fix
+
+A new `ErrorHandlingMiddleware`, placed innermost, converts a route exception into
+the structured 500 from *inside* the stack, so the response then travels back out
+through metrics and CORS like any ordinary response. `RequestMetricsMiddleware`
+also now records around a `try/except` and re-raises, so a failure is counted even
+if something escapes. The middleware order was inverted so that CORS is outermost:
+
+```
+CORSMiddleware                  <- outermost: decorates every response, errors included
+  RequestIdMiddleware           <- sets the contextvar the two below log with
+    RequestMetricsMiddleware
+      ErrorHandlingMiddleware   <- innermost: turns a route exception into a response
+        ...routes
+```
+
+`add_middleware` prepends, so this order reads backwards in the source. That is
+precisely why the bug existed, so the ordering now carries a comment saying so.
+The original `@app.exception_handler(Exception)` is kept as a genuine fallback for
+anything raised by the middleware between `ServerErrorMiddleware` and
+`ErrorHandlingMiddleware`, and both paths now share one `_internal_error_response`
+builder so the two bodies cannot drift apart.
+
+### Tests added
+
+Seven, in `tests/test_main_observability.py`:
+
+- `ErrorPathObservabilityTests` (5): a 500 is counted, a 200 is counted, a 500
+  carries CORS headers for an allowed origin *and* a readable body with a
+  request id, a 500 carries the `X-Request-ID` header, and the exception detail
+  is not leaked to the client.
+- `MiddlewareOrderTests` (2): the stack order is asserted directly, since order
+  is the actual mechanism and asserting only the symptoms would let a reorder
+  pass. Counter assertions read the registry before and after and compare a
+  delta, because Prometheus counters are process-global and a label combination
+  that has never been observed has no sample at all rather than a sample of zero.
+
+### Smaller items
+
+- `backend/metrics.py` omitted `http_requests_total` and
+  `http_request_duration_seconds` from `__all__`, although `main.py` imports both
+  by name. Nothing was broken, but the module misreported what it exports. Fixed.
+- `config.py` was read closely and **no defect was found**. The `.env` precedence
+  work from §20 is correct, the validation is thorough, and the bcrypt 72-byte
+  ceiling is enforced against the right unit (bytes, not characters).
+- `logging_config.py` was read closely and **no defect was found**. Sentry stays
+  inert without a DSN and does not enable `send_default_pii`.
+
+### Carried forward, not fixed here
+
+- **`/metrics` is still unauthenticated.** Confirmed by probe: an anonymous
+  request returns 200 with ~5.9 KB that enumerates every route template and its
+  traffic volume. This is Phase 2.3 and is deliberately left there rather than
+  conflated with the error-path work.
+- **`/health` still does not touch MongoDB.** Phase 2.2.
+- `starlette` 1.6.0 warns on every test run that `starlette.testclient` with
+  `httpx` is deprecated in favour of `httpx2`. A pinned-dependency decision, not
+  a defect.

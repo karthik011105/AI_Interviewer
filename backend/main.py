@@ -85,17 +85,97 @@ class RequestMetricsMiddleware(BaseHTTPMiddleware):
 			return await call_next(request)
 
 		started_at = time.monotonic()
-		response = await call_next(request)
-		duration = time.monotonic() - started_at
+		try:
+			response = await call_next(request)
+		except Exception:
+			# Record the failure before re-raising. Without this, an exception
+			# propagating out of call_next skips the counters entirely, so a
+			# route that raises on every request looks like *no traffic at all*
+			# rather than a route that is failing — the metrics go quiet
+			# exactly when they matter most.
+			#
+			# ErrorHandlingMiddleware sits inside this one and converts route
+			# exceptions into a 500 response, so in practice this path only
+			# catches something raised by the middleware between the two. It is
+			# kept because "the counter lies about failures" is the more
+			# expensive bug of the two.
+			self._record(request, "500", time.monotonic() - started_at)
+			raise
 
+		self._record(request, str(response.status_code), time.monotonic() - started_at)
+		return response
+
+	@staticmethod
+	def _record(request: Request, status: str, duration: float) -> None:
 		route = request.scope.get("route")
 		path = getattr(route, "path", None) or "unmatched"
 
 		http_requests_total.labels(
-			method=request.method, path=path, status=str(response.status_code)
+			method=request.method, path=path, status=status
 		).inc()
 		http_request_duration_seconds.labels(method=request.method, path=path).observe(duration)
-		return response
+
+
+class ErrorHandlingMiddleware(BaseHTTPMiddleware):
+	"""Turn an unhandled exception into the structured 500 from *inside* the
+	middleware stack.
+
+	There is already an ``@app.exception_handler(Exception)`` below, and it
+	produces the same body — but a handler registered for the base Exception
+	class is invoked by Starlette's ``ServerErrorMiddleware``, which wraps the
+	entire user middleware stack from the outside. A response built there has
+	bypassed every middleware on the way out, with two consequences that only
+	show up in production:
+
+	1. ``RequestMetricsMiddleware`` never sees it, so 500s are missing from
+	   ``http_requests_total``.
+	2. ``CORSMiddleware`` never sees it, so the response carries no
+	   ``Access-Control-Allow-Origin``. The browser then reports an opaque CORS
+	   failure instead of surfacing the JSON body — which means the
+	   ``request_id`` deliberately included in that body, the whole point of
+	   correlating a user report back to a log line, never reaches the user.
+	   This is not a hypothetical: the deployed frontend and API are on
+	   different origins by design, so *every* 500 would be unreadable.
+
+	Catching here, innermost, means the exception becomes an ordinary response
+	that then travels back out through metrics and CORS like any other.
+	The outer handler is kept as a fallback for anything raised by the
+	middleware itself, outside this one.
+	"""
+
+	async def dispatch(self, request: Request, call_next):
+		try:
+			return await call_next(request)
+		except Exception as exc:
+			request_id = getattr(request.state, "request_id", None) or request_id_var.get()
+			_LOGGER.error(
+				"Unhandled exception on %s %s",
+				request.method,
+				request.url.path,
+				exc_info=exc,
+			)
+			return _internal_error_response(request_id)
+
+
+def _internal_error_response(request_id: str | None) -> JSONResponse:
+	"""The one structured 500 body, shared by the middleware and the handler.
+
+	Deliberately says nothing about the exception. The detail belongs in the
+	log line, correlated by ``request_id``; putting it here would leak internal
+	structure to any caller who can trigger an error.
+	"""
+
+	return JSONResponse(
+		status_code=500,
+		content={
+			"error": {
+				"code": "internal_error",
+				"message": "An unexpected error occurred.",
+				"request_id": request_id,
+			}
+		},
+		headers={"X-Request-ID": request_id} if request_id else None,
+	)
 
 
 @asynccontextmanager
@@ -124,6 +204,29 @@ def create_app() -> FastAPI:
 	settings = get_settings()
 
 	app = FastAPI(title="AI Interview Simulator", version="0.1.0", lifespan=_lifespan)
+
+	# ORDER IS LOAD-BEARING, AND IT READS BACKWARDS.
+	#
+	# `add_middleware` prepends, so the LAST one added is the OUTERMOST. The
+	# stack below therefore runs, outermost to innermost:
+	#
+	#     CORSMiddleware            <- must be outermost, so it can attach
+	#                                  Access-Control-* to every response that
+	#                                  leaves, including error responses
+	#       RequestIdMiddleware     <- sets the contextvar the two below log with
+	#         RequestMetricsMiddleware
+	#           ErrorHandlingMiddleware   <- innermost, so a route exception
+	#                                        becomes a response that the two
+	#                                        above still get to see
+	#             ...routes
+	#
+	# The previous order had CORS added last of the three and therefore
+	# innermost, which is why 500s reached the browser with no CORS headers.
+	# Adding a middleware here without reading the above will silently
+	# reintroduce that.
+	app.add_middleware(ErrorHandlingMiddleware)
+	app.add_middleware(RequestMetricsMiddleware)
+	app.add_middleware(RequestIdMiddleware)
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=list(settings.cors.allowed_origins),
@@ -132,42 +235,29 @@ def create_app() -> FastAPI:
 		allow_methods=["*"],
 		allow_headers=["*"],
 	)
-	app.add_middleware(RequestIdMiddleware)
-	app.add_middleware(RequestMetricsMiddleware)
 
 	@app.exception_handler(Exception)
 	async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-		# FastAPI/Starlette resolve HTTPException (and its subclasses) to their
-		# own handler first, so this only ever fires for genuinely unhandled
-		# exceptions — the ones that would otherwise produce an opaque 500 with
-		# no log line and no way to correlate a user report back to it.
+		# FALLBACK ONLY. ErrorHandlingMiddleware now catches route exceptions
+		# from inside the stack, which is what gets them counted in metrics and
+		# decorated with CORS headers. This handler is invoked by Starlette's
+		# ServerErrorMiddleware, which wraps the user middleware stack from the
+		# outside, so it is reached only when something raises in the
+		# middleware *between* ServerErrorMiddleware and ErrorHandlingMiddleware
+		# — a genuinely unusual case, but one that would otherwise return an
+		# opaque 500 with no log line.
 		#
-		# A handler registered for the base Exception class runs inside
-		# ServerErrorMiddleware, which sits outside RequestIdMiddleware and
-		# rebuilds its own Request only after that middleware's `finally` has
-		# already reset the contextvar. `request.state` is backed by the same
-		# ASGI scope object throughout the connection, so it survives where the
+		# ServerErrorMiddleware rebuilds its own Request from the shared ASGI
+		# scope, and does so only after RequestIdMiddleware's `finally` has
+		# already reset the contextvar. `request.state` is backed by that same
+		# scope object for the whole connection, so it survives where the
 		# contextvar does not; the contextvar is kept as a fallback for the
 		# unit tests that call this handler directly.
 		request_id = getattr(request.state, "request_id", None) or request_id_var.get()
 		_LOGGER.error(
 			"Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc
 		)
-		# RequestIdMiddleware never gets a chance to stamp this response itself:
-		# the exception propagated out of its `call_next`, past the line that
-		# would have set this header, straight to ServerErrorMiddleware.
-		response_headers = {"X-Request-ID": request_id} if request_id else None
-		return JSONResponse(
-			status_code=500,
-			content={
-				"error": {
-					"code": "internal_error",
-					"message": "An unexpected error occurred.",
-					"request_id": request_id,
-				}
-			},
-			headers=response_headers,
-		)
+		return _internal_error_response(request_id)
 
 	app.include_router(auth_router)
 	app.include_router(assessment_router)
