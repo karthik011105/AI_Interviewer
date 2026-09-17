@@ -18,18 +18,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # No MongoDB service: the suite mocks the repository layer throughout and
-    # passes against an unreachable database, so a service container would only
-    # add startup time. Add one here if integration tests are introduced.
+    # tests/test_database_integration.py drives MongoRepository against a real
+    # database, so a service container is now needed. It replaces the note that
+    # used to stand here saying one would be required "if integration tests are
+    # introduced" — they have been, because the rest of the suite mocks the
+    # repository layer and so had never executed a single real query, index, or
+    # concurrency check.
+    #
+    # Those tests skip themselves when no database is reachable, so a
+    # contributor without MongoDB still gets a green local suite. They must not
+    # skip here, which is what the guard step below enforces.
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
 
     env:
       # config.py refuses to load without this. The value is irrelevant to the
       # tests — they only need it to be present and non-empty.
       AUTH_JWT_SECRET: ci-test-secret-not-used-outside-ci
-      # Points at a port nothing is listening on, so an accidental real database
-      # call fails loudly instead of silently passing against leftover state.
+      # The unit tests mock the repository layer and must not reach a database,
+      # so this still points at a port nothing listens on: an accidental real
+      # call fails loudly instead of passing against leftover state.
       MONGO_URI: mongodb://127.0.0.1:59999
       MONGO_DB_NAME: interview_simulator_ci
+      # The integration tests read this one instead, and each creates its own
+      # throwaway database that it drops afterwards.
+      MONGO_TEST_URI: mongodb://127.0.0.1:27017
 
     steps:
       - uses: actions/checkout@v4
@@ -65,11 +86,34 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-all-MiniLM-L6-v2-${{ runner.os }}
 
+      # A service container that fails to come up would make the integration
+      # tests skip themselves, and the suite would still report success with
+      # zero real database coverage. That is the same failure mode as the Node
+      # glob above: a green run that tested nothing. Assert the database is
+      # actually reachable from the runner before trusting the result.
+      - name: Verify MongoDB is reachable
+        env:
+          MONGO_TEST_URI: mongodb://127.0.0.1:27017
+        run: |
+          python - <<'PY'
+          import os, sys
+          import pymongo
+          uri = os.environ["MONGO_TEST_URI"]
+          client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=20000)
+          try:
+              version = client.server_info()["version"]
+          except Exception as exc:
+              sys.exit(f"MongoDB unreachable at {uri}: {exc}")
+          finally:
+              client.close()
+          print(f"MongoDB {version} reachable at {uri}")
+          PY
+
       # -t . is not optional. Without it, unittest sets the top-level directory
       # to tests/ instead of the repository root, which puts tests/ on sys.path
       # in place of the root. On Windows that combination crashes the
       # interpreter outright — an access violation (0xC0000005) with zero
-      # output, not a test failure. With -t . the same suite reports 348
+      # output, not a test failure. With -t . the same suite reports 371
       # passing tests. This job had never run, so nothing caught it.
       - name: Run tests
         run: python -m unittest discover -s tests -t . -p "test_*.py" --verbose

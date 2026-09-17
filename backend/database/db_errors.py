@@ -27,6 +27,23 @@ class ConcurrentUpdateError(DatabaseClientError):
 	"""Raised when optimistic concurrency checks fail."""
 
 
+class DuplicateRecordError(DatabaseClientError):
+	"""Raised when an insert violates a unique index.
+
+	This exists because ``pymongo.errors.DuplicateKeyError`` is **not** a
+	``DatabaseClientError``, so it escaped every ``except DatabaseClientError``
+	handler in the route layer and surfaced as an unhandled 500. The routes
+	that insert into a collection with a unique index all follow a
+	check-then-create pattern, which is a time-of-check/time-of-use race: two
+	concurrent requests both see "no existing record" and both insert, and the
+	loser used to get a traceback rather than a handled response.
+
+	Translating it here means a caller can distinguish "this already exists"
+	from "the database is unreachable" and, where the operation is meant to be
+	idempotent, recover by re-reading the record the winner created.
+	"""
+
+
 class DSAStage(StrEnum):
 	"""Canonical DSA stage values stored in the database."""
 

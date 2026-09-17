@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 
 import pymongo
 from pymongo.collection import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from backend.config import MongoSettings
 
@@ -16,6 +17,7 @@ from .db_errors import (
 	DatabaseConfigurationError,
 	DatabaseDependencyError,
 	DSAStage,
+	DuplicateRecordError,
 	JudgeStatus,
 	RecordNotFoundError,
 	_utcnow_iso,
@@ -107,14 +109,26 @@ class MongoRepository:
 		return self._map_id(doc)
 
 	def insert_one(self, collection_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-		"""Insert a single record."""
+		"""Insert a single record.
+
+		A unique-index violation is translated into ``DuplicateRecordError``.
+		pymongo's own ``DuplicateKeyError`` is not a ``DatabaseClientError``, so
+		untranslated it escaped every ``except DatabaseClientError`` in the
+		route layer and became an unhandled 500.
+		"""
 		doc = dict(payload)
 		if "id" in doc:
 			doc["_id"] = doc.pop("id")
 		else:
 			doc["_id"] = self._generate_id()
 
-		self.db[collection_name].insert_one(doc)
+		try:
+			self.db[collection_name].insert_one(doc)
+		except DuplicateKeyError as exc:
+			raise DuplicateRecordError(
+				f"A record violating a unique index already exists in "
+				f"'{collection_name}'."
+			) from exc
 		return self._map_id(doc)
 
 	def insert_many(
@@ -134,8 +148,17 @@ class MongoRepository:
 			
 		if not docs:
 			return []
-			
-		self.db[collection_name].insert_many(docs)
+
+		try:
+			self.db[collection_name].insert_many(docs)
+		except DuplicateKeyError as exc:
+			# insert_many is ordered by default, so this leaves the documents
+			# before the offending one inserted. Callers must treat a failure
+			# here as "partially applied", not "nothing happened".
+			raise DuplicateRecordError(
+				f"A record violating a unique index already exists in "
+				f"'{collection_name}'; the batch was only partially inserted."
+			) from exc
 		return [self._map_id(doc) for doc in docs]
 
 	def update_one(
@@ -366,9 +389,21 @@ class MongoRepository:
 		*,
 		session_id: str,
 	) -> dict[str, Any]:
-		"""Fetch all stored round contexts for a session keyed by round name."""
+		"""Fetch all stored round contexts for a session keyed by round name.
+
+		Skips any document missing either field rather than raising. The
+		previous comprehension guarded ``round`` but then indexed
+		``context_json`` unguarded, so a single partially written document
+		raised ``KeyError`` and took out report generation for the whole
+		session — a read path failing because of one bad row, when the
+		remaining rows were perfectly usable.
+		"""
 		cursor = self.db["interview_round_contexts"].find({"session_id": session_id})
-		return {doc["round"]: doc["context_json"] for doc in cursor if "round" in doc}
+		return {
+			doc["round"]: doc["context_json"]
+			for doc in cursor
+			if doc.get("round") and doc.get("context_json") is not None
+		}
 
 	@staticmethod
 	def _normalize_interview_response_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -610,13 +645,35 @@ class MongoRepository:
 		stage: DSAStage | str | None = None,
 		approach_text: str | None = None,
 	) -> dict[str, Any]:
-		"""Persist the canonical DSA state with optimistic concurrency."""
+		"""Persist the canonical DSA state with optimistic concurrency.
+
+		``expected_state_version=None`` is the unguarded path: it writes without
+		a version-matched filter. It must still move the counter *forwards*.
+
+		The previous implementation derived the next version from the caller's
+		``state_json`` on that path, which let the counter go backwards and so
+		defeated the guard for every later writer. Measured against a real
+		MongoDB: with the stored version at 5, a blind write carrying a stale
+		``state_json`` (``state_version: 1``) set the stored version to 2, after
+		which a writer still holding version 2 was accepted and silently
+		overwrote the newer state. No current caller omits the argument, so this
+		was latent rather than live, but the default value made it a footgun for
+		the next one. The stored version is now the only source of truth.
+		"""
 		state = dict(state_json)
-		current_version = int(
-			expected_state_version
-			if expected_state_version is not None
-			else state.get("state_version", 0)
-		)
+		if expected_state_version is not None:
+			current_version = int(expected_state_version)
+		else:
+			# Read the version from the database, never from the caller.
+			stored = self.db["dsa_sessions"].find_one(
+				{"session_id": session_id, "question_number": question_number},
+				{"state_version": 1},
+			)
+			if stored is None:
+				raise RecordNotFoundError(
+					"DSA session not found while attempting to persist state."
+				)
+			current_version = int(stored.get("state_version") or 0)
 		next_version = current_version + 1
 		stage_value = str(stage or state.get("stage", DSAStage.PROBLEM_SETUP.value))
 		state["stage"] = stage_value

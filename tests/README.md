@@ -1,7 +1,7 @@
 # Tests README
 
 This folder contains backend-oriented regression and verification tests.
-34 modules, **348 tests**.
+35 modules, **371 tests**.
 
 ## 1. Main command for checking the project
 
@@ -38,7 +38,7 @@ the top-level directory to `tests/` rather than the repository root, which puts
 imports against the wrong root.
 
 This is easy to misdiagnose as a broken environment or a flaky native dependency,
-because each of the 34 modules passes when run on its own, and all 34 import
+because each of the modules passes when run on its own, and all of them import
 cleanly together in one process. Only discovery with the wrong top-level
 directory fails, and it fails silently. An earlier revision of this file
 recommended the form without `-t .` as "the safest repo-level test command",
@@ -95,7 +95,26 @@ Representative areas include:
 - config precedence, logging config, metrics, observability
 - workflow reset behaviour and research asset registration
 
-## 5. Reviewer guidance
+## 5. Database integration tests
+
+`tests/test_database_integration.py` drives `MongoRepository` against a real
+MongoDB: 23 tests covering the unique and TTL indexes, optimistic concurrency
+on both hot paths, the single-use guarantee on password reset tokens under a
+concurrent race, and the persistence round trips. Each test class creates a
+throwaway database and drops it afterwards, so it never touches real data.
+
+They **skip themselves** when no database is reachable, so a contributor
+without MongoDB still gets a green suite. Set `MONGO_TEST_URI` if yours is not
+on `mongodb://localhost:27017`. CI runs a MongoDB service container and asserts
+it is reachable before the suite, because a silent skip would mean a green run
+with no database coverage at all.
+
+This file exists because nothing else here executes a real query. Four defects
+were found the first time the layer was actually run, including one where the
+optimistic-concurrency version counter could be moved backwards, defeating the
+guard for every later writer.
+
+## 6. Reviewer guidance
 
 For normal checking, run:
 
@@ -107,16 +126,16 @@ For normal checking, run:
 That combination shows the repository installs, compiles, and exercises the
 major backend flows.
 
-## 6. What these tests do not cover
+## 7. What these tests do not cover
 
 Worth knowing before treating a green run as proof the system works:
 
-- The suite mocks the repository layer throughout and passes against an
-  unreachable MongoDB, so it validates no real query, index, or concurrency
-  behaviour.
 - Judge0 is not exercised. The DSA execution tests do not run code.
 - No test drives the interview WebSocket against a real socket.
 - Groq is never called.
+- Every module *except* `test_database_integration.py` mocks the repository
+  layer and passes against an unreachable MongoDB, so outside that one file no
+  real query, index, or concurrency behaviour is validated.
 
 A green suite means the logic is consistent with its own assumptions. It does
 not mean the deployed system works; that needs the live smoke test.

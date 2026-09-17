@@ -530,3 +530,149 @@ Seven, in `tests/test_main_observability.py`:
 - `starlette` 1.6.0 warns on every test run that `starlette.testclient` with
   `httpx` is deprecated in favour of `httpx2`. A pinned-dependency decision, not
   a defect.
+
+---
+
+## 11. Change log — Phase 1.2, the database layer
+
+Completed 2026-09-17. Suite: **348 → 371 tests**, all passing, no skips.
+
+### This layer had never been executed by a test
+
+`tests/README.md` and the CI workflow both said it outright: the suite mocks the
+repository layer throughout and passes against an unreachable MongoDB. So no
+test had ever run a real query, checked that an index exists, or exercised the
+optimistic concurrency that two hot paths depend on. The CI comment even said a
+service container should be added "if integration tests are introduced".
+
+MongoDB 8.3.4 was already running locally, so this pass drove the real thing.
+**Four defects surfaced the first time it was actually run.** That ratio is the
+argument for the rest of Phase 1.
+
+### Defect 1 — the concurrency version counter could be moved backwards
+
+The most serious finding in this phase. `persist_dsa_state` accepts
+`expected_state_version=None` as its unguarded path, and on that path it derived
+the next version from **the caller's own `state_json`** rather than from the
+database. Measured against a real MongoDB:
+
+| Step | Stored `state_version` |
+|---|---|
+| After four guarded writes | 5 |
+| After one blind write carrying a stale `state_json` (`state_version: 1`) | **2** |
+| A writer still holding version 2 then attempts a write | **accepted** |
+
+Once the counter rewinds, every later writer's guard is defeated and newer state
+is silently overwritten. The counter is now read from the database and is the
+only source of truth, so the same sequence gives 5 → 6 and the stale writer is
+still rejected.
+
+All four production call sites pass the version explicitly, so this was **latent
+rather than live** — but `queries.py` exposes the parameter with a default of
+`None`, so the next caller who omitted it would have got silent corruption with
+no error anywhere.
+
+### Defect 2 — `DuplicateKeyError` escaped the domain error hierarchy
+
+`issubclass(DuplicateKeyError, DatabaseClientError)` is `False`. The route layer
+catches `DatabaseClientError` in more than a dozen places, so a unique-index
+violation bypassed all of them and became an **unhandled 500** rather than a
+handled response.
+
+This is reachable. `POST /dsa/start` reads with `get_dsa_session`, returns the
+record if it exists, and otherwise inserts — a check-then-create against a
+unique index on `(session_id, question_number)`. Two concurrent starts, which a
+double-clicked button or a client retry produces, both see nothing and both
+insert. The loser got a traceback.
+
+A new `DuplicateRecordError(DatabaseClientError)` is now raised by `insert_one`
+and `insert_many`. The `insert_many` message says explicitly that the batch was
+only partially inserted, because pymongo's ordered insert stops at the offending
+document and leaves the earlier ones in place.
+
+`POST /dsa/start` now catches it and returns the record the winner created,
+which makes the endpoint idempotent — what the check-then-create was reaching
+for. Failing one of two identical requests gave the user nothing they could act
+on. If the record still cannot be found after a duplicate error, the error is
+re-raised rather than masked, since that combination means something else is
+wrong.
+
+### Defect 3 — one malformed row broke a whole read path
+
+`get_all_interview_contexts` guarded `round` and then indexed `context_json`
+unguarded, so a single partially written document raised `KeyError` and took out
+report generation for the entire session, even though every other row was
+usable. It now skips incomplete documents.
+
+### Defect 4 — a test-visible client leak
+
+The probe and then the new test module both triggered pymongo's warning about a
+`MongoClient` being garbage collected while open. Noise rather than a defect,
+but it was on every run. Closed explicitly.
+
+### What was verified as already correct
+
+Worth recording, because these are the parts that carry the most risk and they
+hold up:
+
+- **Every declared index exists**, with the right uniqueness, including the two
+  TTL indexes with `expireAfterSeconds=0` that are the only thing bounding
+  growth of `revoked_tokens` and `password_reset_tokens`.
+- **Both optimistic-concurrency guards reject stale writers correctly**
+  (`advance_interview_question`, `persist_dsa_state` with an explicit version).
+- **Password reset tokens are genuinely atomic.** With nine threads racing the
+  same token, exactly one consumed it. Expired tokens are not consumable.
+- **`revoke_token` is idempotent**, so a retried logout does not 500.
+- **`update_one` raises `RecordNotFoundError`** rather than silently doing
+  nothing.
+- **`upsert_final_report` survives concurrency.** I expected its read-then-upsert
+  to race against the unique index on `session_id`; six concurrent callers
+  produced exactly one document and zero errors, because MongoDB serialises
+  upserts on the same filter. **My hypothesis was wrong**, and the test now
+  records the real behaviour rather than the assumption.
+- **`queries.py` is a pure pass-through** with no logic of its own. No defect.
+
+### A design weakness, recorded rather than changed
+
+`append_dsa_submission` reads the submissions array, appends in Python, and
+writes the whole array back under a version guard. Under six concurrent appends,
+two were stored and four were rejected with `ConcurrentUpdateError`. That is
+safe — nothing is torn or duplicated, verified by test — but it is **lossy**: the
+losers must retry, and serial retries do keep every submission. A `$push` would
+be conflict-free and lose nothing. Not changed here because it trades away the
+whole-document version guard that the rest of the record relies on, which is a
+design decision rather than a bug fix.
+
+### A guard I first misread
+
+`_load_or_create_round_session` rebuilds a round when
+`existing_mode == "dynamic" or wants_dynamic`, which resets
+`current_question_index` to 0 and `state_version` to 1 — verified against the
+real database as `(4, 2) → (0, 1)`, after which a writer holding version 1 was
+accepted. I initially read this as a live bug that would wipe a reconnecting
+conversational interview.
+
+It is not. An earlier branch returns when `existing_mode == "dynamic" and
+wants_dynamic`, so by the time that condition is reached the two are known to
+differ, and it fires only on a genuine mode change. The comment is accurate. The
+residual risk is narrow: a mode change concurrent with an in-flight turn could
+let a version-1 writer win once. Left alone.
+
+### Tests added
+
+`tests/test_database_integration.py`, 23 tests in six classes: indexes,
+duplicate inserts, optimistic concurrency, token paths, read-path robustness,
+and persistence round trips. Each class creates a throwaway database and drops
+it in `tearDownClass`, so a failing test cannot change another test's result and
+real data is never touched.
+
+They **skip when no MongoDB is reachable**, so a contributor without one still
+gets a green suite. CI now runs a `mongo:7` service container — replacing the
+comment that said one would be needed "if integration tests are introduced".
+
+**And CI asserts the database is reachable before running the suite.** A service
+container that failed to start would make these tests skip themselves and the
+run would still be green with zero database coverage. That is the same failure
+mode as the Node glob in Phase 0: a green run that tested nothing. The guard was
+verified both ways locally — it passes against a live MongoDB and exits non-zero
+against a dead port.
