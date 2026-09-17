@@ -9,6 +9,11 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+# Suffixed environments too (.venv311, .venv-3.11). Without the glob, a
+# virtualenv built under any other name is untracked but NOT ignored, so a
+# `git add -A` would happily commit a multi-gigabyte torch install.
+.venv*/
+venv*/
 *.egg-info/
 dist/
 build/

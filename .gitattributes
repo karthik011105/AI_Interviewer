@@ -1,0 +1,39 @@
+# Line-ending policy.
+#
+# This repository is developed on Windows but its shell scripts, Dockerfiles, and
+# CI workflows all execute on Linux. Git's autocrlf handling will happily check a
+# shell script out with CRLF endings, and Linux then fails to run it with an
+# error that names the interpreter rather than the real cause:
+#
+#   /usr/bin/env: 'bash\r': No such file or directory
+#
+# Forcing LF on everything that is executed by a POSIX shell, or parsed by
+# Docker or GitHub Actions, prevents that entirely.
+
+# Let Git decide for ordinary text, but normalise to LF in the repository.
+* text=auto
+
+# Must be LF: executed by a POSIX shell or parsed by a Linux toolchain.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+.dockerignore   text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.conf          text eol=lf
+
+# Must be CRLF: PowerShell on Windows is tolerant of LF, but keeping these
+# native avoids noisy diffs for the people editing them on Windows.
+*.ps1           text eol=crlf
+
+# Binary — never touch these, and never try to diff them as text.
+*.pdf           binary
+*.onnx          binary
+*.pth           binary
+*.zip           binary
+*.png           binary
+*.jpg           binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.ipynb         -text

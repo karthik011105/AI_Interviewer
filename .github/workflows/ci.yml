@@ -50,8 +50,29 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r backend/requirements.txt
 
+      # The suite is not hermetic: importing the app calls
+      # warmup_semantic_encoder(), which fetches all-MiniLM-L6-v2 from the
+      # HuggingFace Hub. A local run makes ~35 Hub requests, and the Hub itself
+      # warns that they are unauthenticated and therefore rate limited. Without
+      # this cache, every CI run re-downloads the model and a Hub rate limit or
+      # outage fails the build for reasons unrelated to the code.
+      #
+      # Keyed on the model name so that changing the model invalidates the cache
+      # rather than silently testing against the old one.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-${{ runner.os }}
+
+      # -t . is not optional. Without it, unittest sets the top-level directory
+      # to tests/ instead of the repository root, which puts tests/ on sys.path
+      # in place of the root. On Windows that combination crashes the
+      # interpreter outright — an access violation (0xC0000005) with zero
+      # output, not a test failure. With -t . the same suite reports 341
+      # passing tests. This job had never run, so nothing caught it.
       - name: Run tests
-        run: python -m unittest discover -s tests -p "test_*.py" --verbose
+        run: python -m unittest discover -s tests -t . -p "test_*.py" --verbose
 
   frontend:
     name: Frontend build
@@ -68,7 +89,12 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 24, not 20. The `test` script in package.json passes a glob
+          # ("src/**/*.test.js") to `node --test`, and glob expansion inside
+          # the test runner only arrived in Node 21 — on Node 20 the pattern is
+          # taken as a literal path and no tests run. 24 is the version the
+          # suite was actually verified green on (19 tests, 6 suites).
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -76,6 +102,12 @@ jobs:
       # package.json, which is a check in its own right.
       - name: Install dependencies
         run: npm ci
+
+      # The reducer tests existed alongside an `npm test` script but were never
+      # wired into CI, so they had never run here. Before Build, because a unit
+      # failure should surface faster than a bundle.
+      - name: Run tests
+        run: npm test
 
       - name: Build
         run: npm run build
