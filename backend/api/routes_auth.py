@@ -29,6 +29,7 @@ from backend.api.rate_limit import (
 	RateLimitExceeded,
 )
 from backend.config import get_settings
+from backend.database.db_errors import DuplicateRecordError
 from backend.database.mongo_client import get_repository
 from backend.email_provider import EmailDeliveryError, send_email
 
@@ -224,11 +225,19 @@ def signup(request: SignupRequest, http_request: Request) -> dict[str, str]:
 				"created_at": datetime.now(timezone.utc).isoformat(),
 			},
 		)
-	except DuplicateKeyError as exc:
+	except (DuplicateRecordError, DuplicateKeyError) as exc:
 		# The check above is not atomic: two concurrent signups for the same
 		# address can both pass it, and the unique index on users.email then
 		# rejects the loser. Report that as the same conflict rather than
 		# letting it surface as an unhandled 500.
+		#
+		# DuplicateRecordError is what MongoRepository.insert_one raises, having
+		# translated pymongo's DuplicateKeyError into the domain hierarchy so
+		# that `except DatabaseClientError` handlers elsewhere can see it. The
+		# raw DuplicateKeyError is still caught here because this route is the
+		# one place where letting a duplicate through would create a second
+		# account for an address that already has one; a caller reaching the
+		# driver by another path must not bypass this.
 		raise HTTPException(
 			status_code=status.HTTP_409_CONFLICT,
 			detail="User with this email already exists.",

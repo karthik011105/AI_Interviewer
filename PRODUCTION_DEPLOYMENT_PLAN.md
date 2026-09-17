@@ -676,3 +676,143 @@ run would still be green with zero database coverage. That is the same failure
 mode as the Node glob in Phase 0: a green run that tested nothing. The guard was
 verified both ways locally — it passes against a live MongoDB and exits non-zero
 against a dead port.
+
+---
+
+## 12. Change log — Phase 1.3, auth and abuse controls
+
+Completed 2026-09-17. Suite: **371 → 378 tests**, all passing.
+
+### First, a regression I introduced in Phase 1.2 and this phase caught
+
+`POST /auth/signup` does a check-then-create against the unique index on
+`users.email`, and it handled the resulting race by catching
+`pymongo.errors.DuplicateKeyError`. Phase 1.2 changed `insert_one` to translate
+that into `DuplicateRecordError` — which made the signup handler **unreachable**.
+The concurrent-signup race would have produced an unhandled 500 instead of a 409.
+
+The full suite stayed green throughout, because
+`test_signup_race_surfaces_duplicate_key_as_409_not_500` mocks the repository
+and sets `insert_one.side_effect = DuplicateKeyError(...)`. The mock asserted a
+contract the repository no longer had. **A mocked boundary is only as good as the
+exception it mocks**, and this is the same failure mode §23 of
+`PRODUCTION_READINESS.md` recorded for vacuous tests — the test passes while the
+thing it claims to protect is broken.
+
+Fixed three ways, not one:
+
+1. The route catches both `DuplicateRecordError` and the raw `DuplicateKeyError`.
+   This is the one place where letting a duplicate through would create a second
+   account for an address that already has one, so a caller reaching the driver
+   by another path must not bypass it.
+2. The existing test is parameterised over **both** error types.
+3. A new test pins the repository's side of the contract, so removing or
+   renaming the translation fails a test rather than silently making the signup
+   race a 500 again.
+
+The regression test was verified to be non-vacuous by reverting the route fix and
+confirming it fails with `error='DuplicateRecordError'`, then restoring it.
+
+### Defect 1 — both throttles grew without bound
+
+`FixedWindowRateLimiter._events` and `FailureTracker._failures` are long-lived
+process state, and neither ever released a key. A deque is only pruned when that
+same key is checked again, and an expired lockout is only forgotten when that
+same identifier is seen again — so a caller who never returns was retained
+forever, still holding their timestamps.
+
+| Scenario | Keys retained before | After |
+|---|---|---|
+| 10,000 one-off callers, entire window lapsed | **10,000** | 1 |
+| 10,000 failed sign-ins, every lockout expired | **10,000** | 0 |
+
+The auth limiter keys on client address and the quota limiters key on user id,
+so ordinary traffic drove this, not just abuse. The quota window is an hour and
+the voice quota allows 200 events, so a retained entry could hold up to 200
+timestamps per user indefinitely.
+
+Both classes now sweep expired keys, at most once per window, under the lock
+already held. Bounding the sweep to once per window keeps it O(n) but amortises
+to negligible per check. Six tests cover it, including the two that matter most:
+a key still inside its window is never swept (so the sweep cannot become a way
+to escape the limit), and an active lockout survives a sweep.
+
+### Defect 2 — behind a proxy, every user shared one rate-limit bucket
+
+This one follows directly from the deployment decision, and it would have
+shipped.
+
+`_client_key` uses the direct peer address and **deliberately refuses to read
+`X-Forwarded-For`**, because that header is attacker-controlled and honouring it
+blindly lets anyone mint a fresh budget per request. Verified: three requests
+carrying three different forged `X-Forwarded-For` values all mapped to one key.
+That part is correct, and well reasoned.
+
+The consequence is what was missed. Behind a reverse proxy, `request.client` is
+the **proxy**, so every user collapses into a single bucket:
+
+- one 10-attempts-per-minute auth budget for the entire deployment
+- one user tripping the limit locks out everybody
+- the per-account lockout still works, but the per-IP layer becomes useless
+
+`backend/Dockerfile` ran uvicorn with no `--proxy-headers`, and Track A puts the
+backend on Hugging Face Spaces, behind exactly such a proxy. Cloud Run and any
+ingress are the same.
+
+The Dockerfile now passes `--proxy-headers --forwarded-allow-ips` driven by a new
+`UVICORN_FORWARDED_ALLOW_IPS`, defaulting to `127.0.0.1` — uvicorn's own default,
+so nothing changes for a direct or compose run. A proxied deployment sets it to
+the proxy's address, or `*` where the container is only reachable through the
+platform's ingress.
+
+The trust semantics were verified directly against uvicorn's
+`ProxyHeadersMiddleware` rather than assumed:
+
+| Trusted hosts | Peer | `X-Forwarded-For` | Resulting client |
+|---|---|---|---|
+| `127.0.0.1` | `127.0.0.1` | `203.0.113.55` | `203.0.113.55` |
+| `127.0.0.1` | `10.9.9.9` | `203.0.113.55` | `10.9.9.9` (ignored) |
+| `*` | `10.9.9.9` | `203.0.113.55` | `203.0.113.55` |
+
+So the default is safe and the opt-in is explicit. Documented in `.env.example`
+and wired through `docker-compose.yml`, which validates with
+`docker compose config`. The backend was then started with the exact new command
+and served `/health` with a clean startup log, so the flags are real rather than
+plausible.
+
+**Phase 3 depends on this:** the Spaces deployment must set
+`UVICORN_FORWARDED_ALLOW_IPS=*`, or per-IP rate limiting is global.
+
+### What was verified as already correct
+
+- **`_client_key` does not trust `X-Forwarded-For`** — verified with forged
+  headers through the real ASGI stack.
+- **The lockout is keyed on the submitted email, not a resolved account**, so
+  attempts against non-existent addresses throttle identically. Keying on a
+  found user would make the lockout a user-enumeration oracle, and the code
+  says so.
+- **A rejected attempt is not recorded**, so a caller hammering while blocked
+  does not extend their own lockout.
+- **The limiter uses a sliding window**, not a wall-clock bucket, so a caller
+  cannot burst twice by straddling a boundary. Still correct after the sweep: 3
+  of 5 attempts allowed against a budget of 3, and a fresh attempt allowed once
+  the window passes.
+- **`_verify_password` treats an over-long secret and a malformed hash as a
+  failed comparison** rather than a 500.
+- **The login password field is deliberately not subject to the signup policy**,
+  which would otherwise lock out older accounts and disclose the policy to
+  unauthenticated callers. Only a 1024-byte input guard, well above the 72 bytes
+  bcrypt considers.
+- **JWTs carry a `jti`**, so one token can be revoked without invalidating the
+  user's other sessions.
+- **Quotas key on user id, not IP** — correct, since every quota-guarded route
+  is authenticated and the account is what maps to spend.
+
+### Carried forward
+
+The in-process counter problem itself is unchanged and remains **Phase 2.1**:
+with N workers every limit is multiplied by N, nothing is shared across
+instances, and a restart resets every counter. The sweep fixes unbounded growth,
+not the distribution problem. On a free tier running a single worker this is
+tolerable; it is the reason the deployment must stay at one worker until the
+counters move into MongoDB.

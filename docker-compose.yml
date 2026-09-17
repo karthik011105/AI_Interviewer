@@ -60,6 +60,11 @@ services:
       JUDGE0_API_BASE_URL: ${JUDGE0_URL_FROM_CONTAINER:-http://host.docker.internal:2359}
       TTS_PROVIDER: ${TTS_PROVIDER:-piper}
       UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+      # Which peers uvicorn will believe X-Forwarded-For from. The default is
+      # localhost only, which is correct here: nothing proxies this stack, and
+      # the backend port is published directly to the host. A deployment behind
+      # a real proxy must widen it — see the note in .env.example.
+      UVICORN_FORWARDED_ALLOW_IPS: ${UVICORN_FORWARDED_ALLOW_IPS:-127.0.0.1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

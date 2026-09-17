@@ -73,11 +73,44 @@ class FixedWindowRateLimiter:
         self._clock = clock or time.monotonic
         self._events: Dict[str, Deque[float]] = {}
         self._lock = threading.Lock()
+        self._last_sweep_at: float | None = None
 
     def _prune(self, timestamps: Deque[float], now: float) -> None:
         cutoff = now - self._window_seconds
         while timestamps and timestamps[0] <= cutoff:
             timestamps.popleft()
+
+    def _maybe_sweep(self, now: float) -> None:
+        """Drop keys with no events left inside the window.
+
+        Without this, ``_events`` grows with the number of distinct keys *ever*
+        seen rather than the number currently active, because a key's deque is
+        only pruned when that same key is checked again — and a caller who
+        never returns is never checked again. Measured before this existed:
+        10,000 one-off callers left 10,000 entries behind, still holding their
+        timestamps, long after every window had lapsed. For the auth limiter
+        the key is a client address and for the quota limiters it is a user id,
+        so in a long-running process that is unbounded growth driven by
+        ordinary traffic.
+
+        Runs at most once per window, under the caller's lock. A sweep is O(n)
+        in tracked keys, and bounding it to once per window keeps the amortised
+        cost per check negligible while still ensuring an idle key cannot
+        outlive its window by more than one sweep interval.
+        """
+
+        if self._last_sweep_at is not None and now - self._last_sweep_at < self._window_seconds:
+            return
+        self._last_sweep_at = now
+
+        cutoff = now - self._window_seconds
+        stale = [
+            key
+            for key, timestamps in self._events.items()
+            if not timestamps or timestamps[-1] <= cutoff
+        ]
+        for key in stale:
+            del self._events[key]
 
     def check(self, key: str) -> None:
         """Record an attempt for ``key``; raise if it exceeds the budget.
@@ -87,6 +120,7 @@ class FixedWindowRateLimiter:
         """
         now = self._clock()
         with self._lock:
+            self._maybe_sweep(now)
             timestamps = self._events.setdefault(key, deque())
             self._prune(timestamps, now)
             if len(timestamps) >= self._max_events:
@@ -101,6 +135,13 @@ class FixedWindowRateLimiter:
     def clear(self) -> None:
         with self._lock:
             self._events.clear()
+            self._last_sweep_at = None
+
+    def tracked_key_count(self) -> int:
+        """Number of keys currently held. Exposed for tests and diagnostics."""
+
+        with self._lock:
+            return len(self._events)
 
 
 class FailureTracker:
@@ -133,10 +174,42 @@ class FailureTracker:
         # key -> (consecutive failure count, timestamp of most recent failure)
         self._failures: Dict[str, tuple[int, float]] = {}
         self._lock = threading.Lock()
+        self._last_sweep_at: float | None = None
+
+    def _maybe_sweep(self, now: float) -> None:
+        """Drop entries whose lockout window has fully elapsed.
+
+        ``check`` already forgets an expired streak, but only for the key being
+        checked. An address that fails a few sign-ins and never returns is
+        never checked again, so its entry was retained forever: 10,000 failed
+        sign-ins against 10,000 distinct identifiers left 10,000 entries in
+        place long after every lockout had expired. Since the key is the
+        *submitted* email (deliberately, so that unknown accounts throttle
+        identically and the lockout is not an enumeration oracle), an attacker
+        enumerating addresses was also growing this dict.
+
+        Runs at most once per lockout window, under the caller's lock.
+        """
+
+        if (
+            self._last_sweep_at is not None
+            and now - self._last_sweep_at < self._lockout_seconds
+        ):
+            return
+        self._last_sweep_at = now
+
+        stale = [
+            key
+            for key, (_, last_failure_at) in self._failures.items()
+            if now - last_failure_at >= self._lockout_seconds
+        ]
+        for key in stale:
+            del self._failures[key]
 
     def check(self, key: str) -> None:
         now = self._clock()
         with self._lock:
+            self._maybe_sweep(now)
             entry = self._failures.get(key)
             if entry is None:
                 return
@@ -152,6 +225,7 @@ class FailureTracker:
     def record_failure(self, key: str) -> None:
         now = self._clock()
         with self._lock:
+            self._maybe_sweep(now)
             count, last_failure_at = self._failures.get(key, (0, now))
             if now - last_failure_at >= self._lockout_seconds:
                 count = 0
@@ -164,6 +238,13 @@ class FailureTracker:
     def clear(self) -> None:
         with self._lock:
             self._failures.clear()
+            self._last_sweep_at = None
+
+    def tracked_key_count(self) -> int:
+        """Number of keys currently held. Exposed for tests and diagnostics."""
+
+        with self._lock:
+            return len(self._failures)
 
 
 __all__ = [

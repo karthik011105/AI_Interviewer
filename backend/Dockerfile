@@ -85,4 +85,25 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 #   2. Each worker loads its own copy of the sentence-transformers and whisper
 #      models, so memory scales roughly linearly with worker count.
 ENV UVICORN_WORKERS=1
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS}"]
+
+# Rate limiting keys on the direct peer address, because backend/api/routes_auth.py
+# deliberately refuses to trust X-Forwarded-For (an attacker could otherwise mint a
+# fresh budget per request by inventing a value). The consequence is that behind a
+# reverse proxy every user collapses into ONE bucket: the whole deployment shares a
+# single 10-attempts-per-minute auth budget, and one user tripping it locks out
+# everybody.
+#
+# --proxy-headers makes uvicorn rewrite request.client from the forwarded headers,
+# but only for peers listed in --forwarded-allow-ips, so the header is still not
+# blindly trusted. The default below is uvicorn's own: localhost only, which means
+# nothing changes for a direct or docker-compose run.
+#
+# A proxied deployment MUST widen this to the proxy's address. On a platform where
+# the container is only reachable through the platform's own ingress (Hugging Face
+# Spaces, Cloud Run), "*" is the practical value:
+#     UVICORN_FORWARDED_ALLOW_IPS=*
+# Do not set "*" anywhere the container port is reachable directly, or the header
+# becomes forgeable again and the rate limit can be bypassed per request.
+ENV UVICORN_FORWARDED_ALLOW_IPS=127.0.0.1
+
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS} --proxy-headers --forwarded-allow-ips \"${UVICORN_FORWARDED_ALLOW_IPS}\""]
