@@ -216,7 +216,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 3.3 | Make the backend image Spaces-compatible: listen on `7860`, read secrets from Space secrets, confirm nothing writes to a read-only path |
 | 3.4 | Deploy the backend; watch a cold start end to end and record real startup time and peak memory |
 | 3.5 | Build and deploy the frontend to Cloudflare Pages with the production `VITE_API_BASE_URL`; set `CORS_ALLOWED_ORIGINS` and `AUTH_PASSWORD_RESET_URL_BASE` to the real domain |
-| 3.6 | Wire Judge0 per the chosen option and execute one real submission in each of the three languages |
+| 3.6 | Wire Judge0 per the chosen option and execute one real submission in each of the three languages. **Java especially:** Phase 1.9 found JVM heap reservation under isolate is memory-pressure sensitive, so confirm Java runs on RapidAPI's hosted tier, whose memory config differs from local. Revisit `JUDGE0_MEMORY_LIMIT_KB` (default 256 MB, at the JVM's edge) if it is flaky |
 | 3.7 | **Full live smoke test as a real user**: sign up, upload a resume, get a role match, run a scripted interview, run a voice interview over WSS, complete a DSA problem, generate a report, reset a password, sign out and confirm the token is revoked |
 | 3.8 | Verify quotas and rate limits behave on the deployed instance, including across a restart |
 
@@ -1380,3 +1380,119 @@ real question, and it is now explicitly part of **Phase 1.13**.
   handling for the case where a stored `total_score` of `0.0` came from a
   progress fallback rather than a real evaluation. Conflating those two would
   make an unstarted round look like a failed one.
+
+---
+
+## 18. Change log — Phase 1.9, the DSA subsystem
+
+Completed 2026-09-18. Suite: **419 → 435 tests**, all passing.
+
+### First, a correction to this plan's own framing
+
+Section 3 called the static safety gate "the highest-risk code in the repo — it
+is what stands between a user and arbitrary execution." That is **wrong**, and
+getting it right changes the whole audit.
+
+The gate (`code_executor.safety_gate`) is a **defense-in-depth pre-filter**. The
+real isolation boundary is **Judge0**, which runs every submission in an
+ephemeral, isolated container. The `exec(USER_CODE)` that looked alarming is
+inside the harness *string* submitted to Judge0, not run in the backend process.
+So a gap in the gate lets a submission reach a sandbox that is already designed
+to contain it — an erosion of a secondary layer, not a remote-code-execution
+hole.
+
+That reframing matters because it inverts the risk priority. With Judge0 as the
+real boundary, the gate's more damaging failure mode is not a missed attack — it
+is a **false positive that rejects a legitimate candidate's correct solution**.
+And that is exactly what was found.
+
+### Defect 1 — the gate rejected everyday DSA operations (Python)
+
+`_FORBIDDEN_ATTRIBUTE_CALLS` matched attribute-call *names* on any object, so
+these all failed:
+
+| Legitimate code | Blocked with |
+|---|---|
+| `nums.remove(x)` | "Calling attribute remove is not allowed" |
+| `seen.remove(x)` (a set) | same |
+| `s.replace(' ', '')` | "Calling attribute replace is not allowed" |
+| `[w.replace('a','b') for w in words]` | same |
+
+`list.remove`, `set.remove`, and `str.replace` are bread-and-butter for the
+exact problems a DSA round poses ("remove duplicates", "clean a string"). The
+entries were meant to catch `os.remove` / `Path.replace`, but **those dangerous
+forms all require importing `os`, `pathlib`, or `shutil` — every one of which is
+already in `_FORBIDDEN_MODULES`.** You cannot reach a dangerous `.remove` /
+`.replace` without a banned import, so the two entries added nothing but false
+rejections. Both were removed.
+
+### Defect 2 — safe C++ string formatting was rejected
+
+The C++ token list is substring-matched, and it contained `printf(` and
+`scanf(`. So `std::sprintf` (which contains `printf(`), `std::snprintf`,
+`std::fprintf`, and `std::sscanf` (which contains `scanf(`) were all blocked —
+pure in-memory string formatting that cannot escape anything. `printf`/`scanf`
+themselves are not dangerous either: they do console I/O against the same
+stdin/stdout the harness already feeds, exactly like `cin`/`cout`. Both tokens
+were removed; the genuinely dangerous ones (`system(`, `popen(`, `fork(`,
+`socket(`, `freopen(`, and the file/thread `#include`s) stay.
+
+### Both fixes were proven not to open a hole
+
+The security direction was tested explicitly, not assumed. After the fixes,
+every dangerous form is still rejected:
+
+| Attempt | Still blocked? |
+|---|---|
+| `import os; os.remove(...)` | yes — at the import |
+| `from os import remove` | yes |
+| `import pathlib; Path(...).unlink()` | yes |
+| `import subprocess` | yes |
+| `eval` / `exec` / `open` / `__import__` | yes |
+| C++ `system(` / `popen(` / `fork(` / `socket(` | yes |
+| Java `Runtime.getRuntime` / `ProcessBuilder` / `System.exit` | yes |
+
+16 tests in `tests/test_dsa_safety_gate.py` cover both directions, verified
+non-vacuous by reverting both fixes (7 failures) and restoring. This is the
+first direct test coverage the gate has had.
+
+### Execution verified end to end against a live Judge0
+
+A local Judge0 stack was running, so the three-language path (the one §20 of
+`PRODUCTION_READINESS.md` repaired) was exercised for real, not mocked:
+
+| Language | Result |
+|---|---|
+| Python | **Accepted, 2/2** cases |
+| C++ | **Accepted, 2/2** cases |
+| Java | passes via the project's own `test_dsa_multilanguage_execution` (stable across repeated runs) |
+
+### An honest caveat on Java, carried to Phase 3.6
+
+While verifying Java, a standalone reproduction hit `Could not reserve enough
+space for … object heap` — a JVM startup failure — **consistently**, even though
+the project's own multilanguage test passes Java against the same Judge0 URL with
+the same memory limit and near-identical code. The application code path is
+identical for all three languages, so this is a Judge0/`isolate` host-level
+heap-reservation characteristic on this machine, not an application defect, and I
+could not make it fail through the project's own contract.
+
+I am **not** claiming a fix for something I cannot reproduce through the real
+interface, and I am **not** claiming Java is bulletproof. The truthful state:
+Java passes the project's execution test locally; JVM heap reservation under
+`isolate` is memory-pressure sensitive; and the chosen deployment runs Judge0 on
+**RapidAPI's hosted tier**, which has entirely different memory configuration.
+**Java execution must be verified against the actual deployed Judge0 in Phase
+3.6**, and that step is flagged there. The default `JUDGE0_MEMORY_LIMIT_KB` of
+256 MB sits at the JVM's lower edge and is worth revisiting if hosted Java
+proves flaky.
+
+### What was verified as already correct
+
+- **The gate fails safe.** Unparseable Python raises `SafetyViolationError`, not
+  an unhandled crash, and an oversized submission is rejected before parsing.
+- **`safety_gate` runs before every execution.** It is called at the single
+  `_execute_cases` chokepoint that both `run_sample` and `run_submission` pass
+  through, so no execution path skips it.
+- **The C++/Java "no main()" checks are correct** — the harness supplies `main`,
+  and a submission declaring its own is refused rather than silently colliding.

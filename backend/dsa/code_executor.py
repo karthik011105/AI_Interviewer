@@ -56,6 +56,18 @@ _DSA_LANGUAGE_ALIASES = {
 	"jav": "java",
 }
 
+# Substring-matched against the lowercased C++ source. Every token here is one
+# that genuinely reaches outside the sandbox: file redirection, process spawning,
+# or networking. Judge0 is the real isolation boundary; this is a pre-filter.
+#
+# `printf(` and `scanf(` were deliberately REMOVED. They are not security
+# relevant — they do console I/O against the same stdin/stdout the harness
+# already feeds, exactly like cin/cout — and because the match is a naive
+# substring test they collided with the safe, in-memory string-formatting
+# family: `sprintf(`, `snprintf(`, and `fprintf(` all contain `printf(`, and
+# `sscanf(` contains `scanf(`. A candidate formatting into a buffer with
+# `std::sprintf` had a correct solution rejected for using a function that
+# cannot escape anything.
 _CPP_FORBIDDEN_TOKENS = {
 	"#include <filesystem>",
 	"#include <fstream>",
@@ -65,8 +77,6 @@ _CPP_FORBIDDEN_TOKENS = {
 	"system(",
 	"fork(",
 	"socket(",
-	"scanf(",
-	"printf(",
 }
 
 _JAVA_FORBIDDEN_TOKENS = {
@@ -102,10 +112,31 @@ _FORBIDDEN_BUILTINS = {
 	"__import__",
 }
 
+# Attribute-call names blocked regardless of the object they are called on,
+# because the static gate cannot do type inference to tell os.system(x) from
+# a harmless method of the same name.
+#
+# IMPORTANT: this is a DEFENSE-IN-DEPTH pre-filter, not the sandbox. The real
+# isolation boundary is Judge0, which runs every submission in an ephemeral
+# container. So the only cost of a false NEGATIVE here is that a submission
+# reaches a sandbox that is already designed to contain it; the cost of a false
+# POSITIVE is that a candidate's correct solution is rejected outright.
+#
+# `remove` and `replace` were deliberately REMOVED from this set. They are the
+# two names here that collide with everyday DSA operations — `list.remove(x)`,
+# `set.remove(x)`, `str.replace(a, b)`, `bytes.replace(...)` — and blocking them
+# rejected a large fraction of legitimate solutions ("remove duplicates",
+# "clean a string"). Their only DANGEROUS forms are `os.remove` / `Path.replace`
+# and similar, all of which require importing `os`, `pathlib`, or `shutil` — and
+# every one of those modules is already in _FORBIDDEN_MODULES. You cannot obtain
+# a dangerous object to call `.remove`/`.replace` on without a banned import, so
+# these two entries added nothing but false positives.
+#
+# The names kept below have no common builtin-type collision, so they stay as
+# cheap belt-and-suspenders against a dangerous call slipping through on an
+# object obtained some way the module bans did not anticipate.
 _FORBIDDEN_ATTRIBUTE_CALLS = {
 	"popen",
-	"remove",
-	"replace",
 	"rmdir",
 	"rmtree",
 	"system",
