@@ -65,6 +65,15 @@ services:
       # the backend port is published directly to the host. A deployment behind
       # a real proxy must widen it — see the note in .env.example.
       UVICORN_FORWARDED_ALLOW_IPS: ${UVICORN_FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # Share throttle counters through the mongo service above, matching what
+      # the image sets, so this stack behaves like a deployment rather than
+      # exercising a configuration production does not use.
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-mongo}
+      # /metrics is closed unless one of these is set. Left unset here so a
+      # local stack does not publish its route map on a mapped port; set
+      # METRICS_TOKEN to scrape it, or METRICS_PUBLIC=true to opt out.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      METRICS_PUBLIC: ${METRICS_PUBLIC:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

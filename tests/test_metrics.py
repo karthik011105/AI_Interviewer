@@ -217,12 +217,20 @@ class MetricsEndpointTests(TestCase):
 		config.reset_settings()
 
 	def test_metrics_endpoint_exposes_prometheus_text_format(self) -> None:
-		with patch("backend.main.warmup_semantic_encoder"), \
+		# /metrics is no longer public: its labels name every route template and
+		# its traffic volume, so it needs a token (or an explicit opt-out). The
+		# exposition-format contract this test exists to check is unchanged — it
+		# just has to authenticate now. Access control itself is covered in
+		# tests/test_health_readiness_metrics.py.
+		with patch.dict(os.environ, {"METRICS_TOKEN": "scrape-me"}, clear=False), \
+			 patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.main.warmup_research_asset_registry"):
 			app = create_app()
 			with TestClient(app) as client:
 				client.get("/health")
-				response = client.get("/metrics")
+				response = client.get(
+					"/metrics", headers={"Authorization": "Bearer scrape-me"}
+				)
 
 		self.assertEqual(response.status_code, 200)
 		self.assertIn("text/plain", response.headers["content-type"])
@@ -230,13 +238,24 @@ class MetricsEndpointTests(TestCase):
 		self.assertIn('path="/health"', response.text)
 
 	def test_scraping_metrics_itself_is_not_counted(self) -> None:
-		with patch("backend.main.warmup_semantic_encoder"), \
+		# The scrapes must be AUTHENTICATED. Without a token /metrics now
+		# answers 404, so an unauthenticated version of this test would pass
+		# trivially — the status="200" sample cannot move if the request never
+		# succeeds — and would stop testing that a *successful* scrape does not
+		# inflate its own counter.
+		headers = {"Authorization": "Bearer scrape-me"}
+		with patch.dict(os.environ, {"METRICS_TOKEN": "scrape-me"}, clear=False), \
+			 patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.main.warmup_research_asset_registry"):
 			app = create_app()
 			with TestClient(app) as client:
-				client.get("/metrics")
+				first = client.get("/metrics", headers=headers)
 				before = _sample("http_requests_total", {"method": "GET", "path": "/metrics", "status": "200"})
-				client.get("/metrics")
+				second = client.get("/metrics", headers=headers)
 				after = _sample("http_requests_total", {"method": "GET", "path": "/metrics", "status": "200"})
 
+		# Precondition: the scrapes actually worked, so the assertion below is
+		# about self-counting rather than about being locked out.
+		self.assertEqual(first.status_code, 200)
+		self.assertEqual(second.status_code, 200)
 		self.assertEqual(after, before)

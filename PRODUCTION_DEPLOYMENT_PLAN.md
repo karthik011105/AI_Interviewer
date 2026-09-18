@@ -193,8 +193,8 @@ Cross-cutting work that is not any one subsystem's fault.
 | # | Task | Notes |
 |---|---|---|
 | 2.1 | ~~**Move rate limits and quotas into MongoDB**~~ | **Done** — see §24. Shared, durable, atomic. `RATE_LIMIT_BACKEND=mongo` set in the image; memory stays the default so local runs need no database |
-| 2.2 | **Split `/health` from `/ready`** | `/health` stays a liveness check. `/ready` pings Mongo and reports Groq and Judge0 reachability. Platform health checks point at `/ready` |
-| 2.3 | **Protect `/metrics`** | Bearer token or network restriction. Today anyone can enumerate the API surface and read traffic volumes |
+| 2.2 | ~~**Split `/health` from `/ready`**~~ | **Done** — see §25. `/ready` pings Mongo and returns 503 when it is unreachable; `/health` stays dependency-free because the container HEALTHCHECK uses it. Judge0 deliberately not probed |
+| 2.3 | ~~**Protect `/metrics`**~~ | **Done** — see §25. Bearer token via `METRICS_TOKEN`, 404 (not 403) when unauthorized, `METRICS_PUBLIC` to opt out. `/health` filename disclosure removed too |
 | 2.4 | **Choose and wire a real email provider** | `EMAIL_PROVIDER=console` means password reset writes to a log instead of sending mail. The reset flow is built (§28) but is not functional in production until this is set |
 | 2.5 | **Security headers and TLS** | Review `frontend/nginx.conf` for CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy`. Confirm the deployed frontend is HTTPS-only and the socket is WSS |
 | 2.6 | **Secrets** | Rotate the Judge0 Postgres/Redis passwords committed in `1f249f5` (§22.3) before anything is public. Decide explicitly whether to rewrite history; that needs a force-push, and a `backup-before-rewrite` branch already exists |
@@ -2085,3 +2085,103 @@ backend selection and the startup warning.
 That is not belt-and-braces: the default run exercises a configuration
 production does not use, and the reset bug above is exactly what the second run
 catches. It costs about a minute.
+
+---
+
+## 25. Change log — Phases 2.2 and 2.3, liveness/readiness and metrics access
+
+Completed 2026-09-18. Suite: **479 → 493 tests**, passing under both throttle
+stores.
+
+### 2.2 — `/health` and `/ready` now answer different questions
+
+`PRODUCTION_READINESS.md` §14 carried "/health does not check Mongo" as an open
+gap from the very first assessment. It is closed, but not by adding a Mongo
+check to `/health` — that would have been the wrong fix.
+
+| Endpoint | Question | Touches MongoDB | On failure |
+|---|---|---|---|
+| `/health` | is this process serving? | **no** | — |
+| `/ready` | should this instance receive traffic? | **yes** | **503** |
+
+The separation matters because of who polls what. Docker marks a container
+unhealthy when `HEALTHCHECK` fails, and a restart policy then restarts it. If
+that probe checked MongoDB, a brief database blip would restart a process that
+was working perfectly — converting a short dependency problem into a restart
+loop. So `HEALTHCHECK` stays on `/health`, and a load balancer or platform
+health check should poll `/ready`.
+
+Verified both directions against a real database:
+
+| Scenario | `/health` | `/ready` |
+|---|---|---|
+| MongoDB up | 200 | 200, `status: ready` |
+| MongoDB unreachable | **200** (correct — the process is fine) | **503**, `ServerSelectionTimeoutError` |
+
+`/ready` uses an explicit 2-second server-selection timeout and failed in 2.1s,
+because a readiness probe must fail fast rather than hang and let the platform
+time it out ambiguously. The error body reports only the **exception type**: a
+pymongo message embeds the connection string, which in a real deployment
+carries credentials. A test asserts a password placed in `MONGO_URI` does not
+appear in the response.
+
+**Judge0 is deliberately not probed.** It is optional — only the DSA round needs
+it — and reaching it is an HTTP round trip with a 15-second timeout. A probe
+polled every few seconds must not make a call that slow, or the probe becomes
+the outage. A test asserts `judge0_health_check` is absent from the handler so
+this cannot be "helpfully" added later.
+
+### 2.3 — `/metrics` is no longer public, and `/health` stopped leaking filenames
+
+The Prometheus payload labels every route template in the application with its
+traffic volume. That is a free map of the API surface and of which paths carry
+the most traffic, and it was served to anyone who asked.
+
+| Configuration | Result |
+|---|---|
+| Nothing set | **404** |
+| `METRICS_TOKEN` set, no/wrong/bare/`Basic` credential | **404** |
+| `METRICS_TOKEN` set, correct `Bearer` token | 200 |
+| `METRICS_PUBLIC=true` | 200, and a startup warning |
+
+**404 rather than 403** is the point: a 403 confirms there is something there
+worth scraping. The token is compared with `secrets.compare_digest`, because
+`==` leaks a secret's prefix through timing to anyone willing to measure.
+`METRICS_PUBLIC` remains as a deliberate escape hatch for scraping over an
+already-trusted private network, and warns at startup so an accidental setting
+is visible rather than silent.
+
+Separately, `/health` was returning `registered_model_names` and
+`registered_notebook_names` — **real filenames from the server's filesystem** —
+on an unauthenticated endpoint, which Phase 1.5 flagged. Only counts remain
+there; the names moved to `/ready`.
+
+### Two existing tests had pinned the old behaviour
+
+The suite failed on the first run, and both failures were tests asserting
+exactly what was just fixed:
+
+- `test_research_assets` asserted `/health` returns `registered_model_names`,
+  i.e. it encoded the disclosure as a contract. It now asserts the filenames
+  are **absent**.
+- `test_metrics` asserted `/metrics` returns 200 unauthenticated. It now
+  authenticates, since the exposition-format contract it exists to check is
+  unchanged.
+
+A third test needed attention even though it **passed**.
+`test_scraping_metrics_itself_is_not_counted` scraped `/metrics` twice and
+asserted the `status="200"` counter did not move. Unauthenticated that now
+returns 404, so the assertion held trivially — the counter cannot move if the
+request never succeeds — and the test had quietly stopped verifying that a
+*successful* scrape avoids counting itself. It now authenticates and asserts
+both scrapes returned 200 as a precondition.
+
+That is the same failure mode this audit keeps finding: a test that still
+passes after the thing it protects has changed underneath it.
+
+### Verification
+
+14 new tests in `tests/test_health_readiness_metrics.py`. Full suite green at
+493 under both `RATE_LIMIT_BACKEND=memory` and `mongo`. `docker compose config`
+validates, and both new variables are wired through compose and documented in
+`.env.example` alongside a note on which endpoint a probe should use.

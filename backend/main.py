@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import secrets
 import time
 import uuid
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -179,6 +182,66 @@ def _internal_error_response(request_id: str | None) -> JSONResponse:
 	)
 
 
+METRICS_TOKEN_ENV_VAR = "METRICS_TOKEN"
+METRICS_PUBLIC_ENV_VAR = "METRICS_PUBLIC"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _metrics_is_public(env: Mapping[str, str] | None = None) -> bool:
+	source = os.environ if env is None else env
+	return (source.get(METRICS_PUBLIC_ENV_VAR) or "").strip().casefold() in _TRUTHY
+
+
+def _metrics_token(env: Mapping[str, str] | None = None) -> str:
+	source = os.environ if env is None else env
+	return (source.get(METRICS_TOKEN_ENV_VAR) or "").strip()
+
+
+def _metrics_request_is_authorized(request: Request) -> bool:
+	"""Whether this caller may read /metrics.
+
+	Order matters. An explicit ``METRICS_PUBLIC=true`` wins, because someone who
+	sets it has decided. Otherwise a token must be configured *and* presented.
+	With neither, nobody is authorized and the endpoint reports 404.
+	"""
+
+	if _metrics_is_public():
+		return True
+
+	expected = _metrics_token()
+	if not expected:
+		return False
+
+	header = request.headers.get("Authorization") or ""
+	scheme, _, presented = header.partition(" ")
+	if scheme.strip().casefold() != "bearer":
+		return False
+
+	# Constant-time: a token is a secret, and comparing it with == leaks its
+	# prefix through timing to anyone willing to measure.
+	return secrets.compare_digest(presented.strip(), expected)
+
+
+def warn_if_metrics_are_public(env: Mapping[str, str] | None = None) -> bool:
+	"""Warn when /metrics is readable without credentials.
+
+	Returns True when the warning fired, so startup code and tests can tell.
+	"""
+
+	source = os.environ if env is None else env
+	if not _metrics_is_public(source):
+		return False
+
+	logging.getLogger(__name__).warning(
+		"%s is enabled, so /metrics is readable by anyone. The payload names "
+		"every route template and its traffic volume. Set %s instead to require "
+		"a bearer token.",
+		METRICS_PUBLIC_ENV_VAR,
+		METRICS_TOKEN_ENV_VAR,
+	)
+	return True
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
 	# Load Whisper off the event loop so the first candidate to speak does not
@@ -207,6 +270,7 @@ def create_app() -> FastAPI:
 	# the worker count. This is the caveat rate_limit.py has always carried in
 	# a docstring, which is exactly the wrong place for it to be noticed.
 	warn_if_throttles_are_process_local()
+	warn_if_metrics_are_public()
 
 	settings = get_settings()
 
@@ -278,24 +342,110 @@ def create_app() -> FastAPI:
 
 	@app.get("/health")
 	def health() -> dict[str, object]:
-		settings = get_settings()
-		groq_settings = settings.groq
+		"""Liveness: is this process serving?
+
+		Deliberately touches no dependency, so it answers exactly one question
+		and answers it fast. This is what the container HEALTHCHECK uses, and
+		that matters: a liveness probe that fails when MongoDB blips would
+		restart a perfectly healthy process, turning a brief database problem
+		into a restart loop. Use ``/ready`` to decide whether to send traffic.
+
+		The response used to include ``research_assets``, which lists real model
+		and notebook **filenames** from the server's filesystem, on an
+		unauthenticated endpoint. That is needless disclosure — anyone could
+		enumerate part of the deployment's layout — so the detail moved to
+		``/ready`` and only the counts remain here.
+		"""
+
+		groq_settings = get_settings().groq
+		semantic = get_semantic_backend_status()
+		research = get_research_asset_summary()
 		return {
 			"status": "ok",
-			"semantic_matching": get_semantic_backend_status(),
-			"research_assets": get_research_asset_summary(),
-			"groq": {
-				"configured": groq_settings is not None,
-				"model": groq_settings.resume_parser_model if groq_settings is not None else None,
-				"max_retries": groq_settings.max_retries if groq_settings is not None else 0,
-				"backoff_base_seconds": (
-					groq_settings.backoff_base_seconds if groq_settings is not None else 0.0
-				),
+			"semantic_matching": {
+				"active_backend": semantic.get("active_backend"),
+				"sbert_ready": semantic.get("sbert_ready"),
 			},
+			"research_assets": {
+				"available": research.get("available"),
+				"model_count": research.get("model_count"),
+				"notebook_count": research.get("notebook_count"),
+			},
+			"groq": {"configured": groq_settings is not None},
 		}
 
+	@app.get("/ready")
+	def ready(response: Response) -> dict[str, object]:
+		"""Readiness: should this instance receive traffic?
+
+		Unlike ``/health`` this actually reaches MongoDB, because the
+		application cannot serve a single meaningful request without it —
+		§14 of PRODUCTION_READINESS.md carried "/health does not check Mongo"
+		as an open gap from the first assessment, and this is it closed.
+
+		Returns 503 when the database is unreachable, so a load balancer or
+		platform health check stops routing to an instance that would only
+		produce errors.
+
+		**Judge0 is deliberately not probed here.** It is optional — only the
+		DSA round needs it — and reaching it is an HTTP round trip with a
+		15 second timeout. A readiness probe polled every few seconds must not
+		make an outbound call that slow, or the probe becomes the outage. Its
+		health is available on demand through the DSA routes instead.
+		"""
+
+		checks: dict[str, object] = {}
+		ready_to_serve = True
+
+		try:
+			# A short, explicit timeout: readiness must fail fast rather than
+			# hang the probe and let the platform time it out ambiguously.
+			from pymongo import MongoClient
+
+			settings = get_settings()
+			probe = MongoClient(
+				settings.mongo.uri, serverSelectionTimeoutMS=2000
+			)
+			try:
+				probe.admin.command("ping")
+				checks["mongo"] = {"ok": True}
+			finally:
+				probe.close()
+		except Exception as exc:
+			ready_to_serve = False
+			# The exception text can carry the connection string, including
+			# credentials, so only the type is reported.
+			checks["mongo"] = {"ok": False, "error": type(exc).__name__}
+			_LOGGER.warning("Readiness probe failed: MongoDB unreachable (%s)", type(exc).__name__)
+
+		groq_settings = get_settings().groq
+		checks["groq"] = {"configured": groq_settings is not None}
+		checks["semantic_matching"] = get_semantic_backend_status()
+		checks["research_assets"] = get_research_asset_summary()
+
+		if not ready_to_serve:
+			response.status_code = 503
+
+		return {"status": "ready" if ready_to_serve else "not_ready", "checks": checks}
+
 	@app.get("/metrics", include_in_schema=False)
-	def metrics() -> Response:
+	def metrics(request: Request) -> Response:
+		"""Prometheus exposition, not public by default.
+
+		The payload names every route template in the application and its
+		traffic volume, which is a free map of the API surface and of which
+		paths are worth attacking. It was served to anyone who asked.
+
+		``METRICS_TOKEN`` gates it behind a bearer token. With no token set the
+		endpoint answers **404** rather than 403, so an unauthenticated caller
+		cannot even confirm it exists. ``METRICS_PUBLIC=true`` restores the old
+		open behaviour for someone who genuinely wants it, and says so in the
+		startup log.
+		"""
+
+		if not _metrics_request_is_authorized(request):
+			# 404, not 403: a 403 confirms there is something here to scrape.
+			return JSONResponse(status_code=404, content={"detail": "Not Found"})
 		return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 	return app

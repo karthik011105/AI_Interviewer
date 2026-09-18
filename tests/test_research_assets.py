@@ -71,4 +71,13 @@ class ResearchAssetRegistryTests(TestCase):
 		self.assertIn("groq", payload)
 		self.assertIn("research_assets", payload)
 		self.assertEqual(payload["research_assets"]["model_count"], 3)
-		self.assertEqual(payload["research_assets"]["registered_model_names"][2], "t5_model.pth")
+		# The filenames deliberately do NOT appear here. /health is
+		# unauthenticated, and `registered_model_names` /
+		# `registered_notebook_names` are real paths from the server's
+		# filesystem — needless disclosure on an anonymous endpoint. Counts are
+		# enough to tell whether the registry found anything; the names moved
+		# to /ready.
+		self.assertNotIn("registered_model_names", payload["research_assets"])
+		self.assertNotIn("registered_notebook_names", payload["research_assets"])
+		self.assertNotIn(".pth", response.text)
+		self.assertNotIn(".ipynb", response.text)

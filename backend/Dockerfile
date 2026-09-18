@@ -83,8 +83,14 @@ COPY --chown=appuser:appuser backend/ /app/backend/
 USER appuser
 EXPOSE 8000
 
-# Liveness only — /health does not touch MongoDB, so it reports whether the
-# process is serving, not whether every dependency is reachable.
+# Liveness, deliberately. /health touches no dependency, so it answers only
+# "is this process serving?".
+#
+# It must stay that way. Docker marks a container unhealthy when this fails and
+# a restart policy will then restart it, so pointing this at /ready would turn
+# a brief MongoDB blip into a restart loop of a process that was working fine.
+# /ready answers the opposite question, "should this instance receive traffic?",
+# and is what a load balancer or platform health check should poll.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD curl --fail --silent http://127.0.0.1:8000/health || exit 1
 
