@@ -1496,3 +1496,125 @@ proves flaky.
   through, so no execution path skips it.
 - **The C++/Java "no main()" checks are correct** — the harness supplies `main`,
   and a submission declaring its own is refused rather than silently colliding.
+
+---
+
+## 19. Change log — Phase 1.10, the voice subsystem
+
+Completed 2026-09-18. Suite: **435 → 446 tests**, all passing.
+
+### Defect 1 — the deployment does not use the TTS engine it is configured for
+
+`docker-compose.yml` sets `TTS_PROVIDER=piper`, and `piper` is the documented
+default in `backend/voice/tts.py`. But **no stage of `backend/Dockerfile`
+installs the piper binary**, and `piper-tts` is not in `requirements.txt`. So
+`_resolve_piper_executable()` returns `None` and every containerised synthesis
+falls through to edge-tts.
+
+That fallback is correct behaviour. The defect is that it was **invisible**: the
+"provider unavailable" branch logged at `DEBUG`, which is below the documented
+default `LOG_LEVEL=INFO`. Measured with the real chain, zero log lines were
+emitted at INFO. The operator's explicit configuration was being ignored with no
+record anywhere.
+
+Confirmed it is not container-only: `_PIPER_EXE` is `None` on this development
+machine too, so local runs have also been silently using edge-tts all along.
+
+A second, worse case sat underneath it. When *every* provider reports itself
+unavailable, `last_error` is never set, so the chain returned `None` with no log
+at all — making "voice is entirely dead for this deployment" indistinguishable
+from "this turn had nothing to say".
+
+| Situation | Before | After |
+|---|---|---|
+| Configured provider unavailable, fallback works | silent (DEBUG) | **WARNING** naming the consequence |
+| Every provider unavailable | silent `None` | **WARNING** that voice is disabled |
+| Configured provider works | silent | silent (unchanged) |
+| A *fallback* provider unavailable | DEBUG | DEBUG (unchanged) |
+
+Only the **first** entry in the chain warns, because only that one is the
+operator's choice; a later provider being unconfigured is routine and warning
+about it would be noise that gets filtered and stops being read. Both the
+happy-path silence and the fallback-stays-quiet behaviour are tested, so the
+warning cannot degrade into background chatter.
+
+### An asymmetry that looked like a bug and is not
+
+The fallback chains are not symmetrical:
+
+| `TTS_PROVIDER` | Chain |
+|---|---|
+| `edge` | edge → elevenlabs → piper |
+| `elevenlabs` | elevenlabs → edge → piper |
+| `piper` | piper → edge **(no elevenlabs)** |
+
+This is deliberate and now says so in the code. Piper is the local, offline,
+zero-cost engine; an operator selecting it has implicitly declined paid API
+calls, and silently failing over to a metered service would spend money they did
+not ask to spend. edge-tts is free, so it stays as the safe fallback. A test
+pins it, because the asymmetry reads like an oversight and is exactly the kind
+of thing a later cleanup would "fix".
+
+### Defect 2 — a truncated audio frame would raise
+
+`EnergyVAD.process` called `np.frombuffer(pcm_bytes, dtype=np.int16)`, which
+raises `ValueError` on an odd byte count. PCM frames arrive from a browser over
+a network, where a truncated frame is a normal consequence of a flaky
+connection rather than a programming error. A trailing half-sample carries no
+information, so it is now dropped instead of raising. Detection itself is
+unchanged, verified by tests covering both the onset and offset windows.
+
+**Reachability, stated honestly:** this is currently **not reachable**, because
+`EnergyVAD` has no callers at all.
+
+### `backend/voice/vad.py` is dead code
+
+A repository-wide search, including the tests, found **zero imports** of
+`EnergyVAD`. It was superseded by client-side detection: the browser runs Silero
+VAD and sends each whole utterance as one binary frame, with turn boundaries
+arriving as explicit control messages. `_handle_audio_frame` says so outright —
+"there is nothing for the server to detect here".
+
+I did not delete it. Phase 1.7 was a lesson in exactly that: removing 14 "unused"
+imports broke three tests that were reaching through the module. This one is
+genuinely unreferenced, but a server-side VAD is the natural fallback if a client
+ever cannot run Silero, and the module is small and self-contained. Instead its
+docstring now states plainly that it is unused, why, and that it has therefore
+**never processed a real audio stream** — so nobody mistakes it for proven code.
+
+Deleting it is a reasonable call and is yours to make.
+
+### A decision for you: the 63 MB voice model
+
+`backend/data/tts_models/en_US-lessac-medium.onnx` is **63.2 MB**, tracked in
+git, copied into the backend image by `COPY backend/ /app/backend/` — and
+unusable, because the binary that would read it is not installed. It is the bulk
+of the 60 MB `.git` noted in §0.
+
+Three coherent options:
+
+1. **Install piper in the image.** Makes the configuration true and removes a
+   network dependency from voice output — edge-tts relies on an undocumented
+   free Microsoft endpoint, which is fragile for production. `onnxruntime` is
+   already installed as a transitive dependency. Costs image size and CPU
+   synthesis time on a 2-vCPU free tier.
+2. **Make `edge` the honest default and drop the model.** Immediately smaller
+   image, configuration matches reality, one less moving part. Accepts the
+   external-endpoint dependency.
+3. **Leave it**, now that the mismatch at least announces itself in the logs.
+
+I recommend **(1)** for the production path and **(2)** if the free tier's CPU
+budget matters more than voice reliability — but this trades cost, latency, and
+voice quality against each other, which is a product decision rather than a bug.
+
+### What was verified as already correct
+
+- **The synthesis-failure path already logged at WARNING** (added in commit
+  `361b90e`). The gap was only the *unavailable* path, which is a different
+  branch — a provider that is configured and fails is not the same as one that
+  was never there.
+- **Returning `None` rather than raising when no audio is available is right.**
+  Callers continue the round silently because the question text is already on
+  screen; stalling a live interview over missing audio would be worse.
+- **`EnergyVAD`'s detection logic is correct** — onset and offset hysteresis
+  both behave as specified, and RMS on int16 cannot overflow float32.

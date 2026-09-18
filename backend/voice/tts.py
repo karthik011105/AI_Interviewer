@@ -607,6 +607,21 @@ def _synthesize_with_edge_audio(text: str, *, voice: str | None = None) -> TTSAu
 
 
 def _provider_order() -> tuple[str, ...]:
+    """The configured provider first, then the fallbacks, in preference order.
+
+    Note the asymmetry in the piper branch: it does NOT fall back to
+    ElevenLabs, while the other two branches do. That is deliberate and worth
+    stating, because it looks like an oversight. Piper is the local, offline,
+    zero-cost engine; an operator who selects it has implicitly chosen "no
+    paid API calls". Silently failing over to a metered service would spend
+    money they did not ask to spend. edge-tts is free, so it stays in the
+    chain as the safe fallback.
+
+    The inverse is not symmetrical for the same reason: choosing `edge`
+    expresses a preference for a network engine, so ElevenLabs is a reasonable
+    second, and piper remains the last-resort local option.
+    """
+
     provider = _current_tts_provider()
     if provider == "edge":
         return ("edge", "elevenlabs", "piper")
@@ -617,8 +632,9 @@ def _provider_order() -> tuple[str, ...]:
 
 def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResult | None:
     last_error: TTSSynthesisError | None = None
+    provider_order = _provider_order()
 
-    for provider in _provider_order():
+    for index, provider in enumerate(provider_order):
         try:
             if provider == "edge":
                 return _synthesize_with_edge_audio(text, voice=voice)
@@ -626,9 +642,29 @@ def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResul
                 return _synthesize_with_elevenlabs_audio(text, voice=voice)
             return _synthesize_with_piper_audio(text, voice=voice)
         except TTSUnavailableError as exc:
-            # Not configured at all (no API key, no binary found, ...) — routine
-            # enough in dev that this stays at debug level.
-            _LOGGER.debug("TTS provider %r unavailable, trying the next one: %s", provider, exc)
+            # A *fallback* provider being unconfigured is routine — most
+            # deployments set up one of the three — so those stay at debug.
+            #
+            # The FIRST entry is different: it is the provider the operator
+            # explicitly asked for via TTS_PROVIDER. Silently substituting a
+            # different engine means the deployment is not doing what its own
+            # configuration says. That happened by default: docker-compose.yml
+            # sets TTS_PROVIDER=piper, but no stage of backend/Dockerfile
+            # installs the piper binary, so every containerised synthesis
+            # quietly fell through to edge-tts with nothing at the default log
+            # level to say so.
+            if index == 0:
+                _LOGGER.warning(
+                    "Configured TTS provider %r is unavailable (%s); falling back to %s. "
+                    "Voice output is not using the engine this deployment is configured for.",
+                    provider,
+                    exc,
+                    " then ".join(provider_order[1:]) or "nothing",
+                )
+            else:
+                _LOGGER.debug(
+                    "TTS provider %r unavailable, trying the next one: %s", provider, exc
+                )
             continue
         except TTSSynthesisError as exc:
             # The provider *was* configured and still failed (bad request,
@@ -642,6 +678,18 @@ def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResul
 
     if last_error is not None:
         raise last_error
+
+    # Every provider reported itself unavailable, so there is no exception to
+    # re-raise and the caller gets None. Callers treat that as "continue the
+    # round without audio", which is the right behaviour for a candidate
+    # mid-interview — the question text is already on screen. But it means
+    # voice is entirely dead, and returning None silently made that
+    # indistinguishable from a round that simply had nothing to say.
+    _LOGGER.warning(
+        "No TTS provider is available (tried %s); continuing without audio. "
+        "Voice output is disabled for this deployment until one is configured.",
+        ", ".join(provider_order),
+    )
     return None
 
 
