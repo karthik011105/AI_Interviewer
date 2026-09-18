@@ -1,7 +1,7 @@
 # Tests README
 
 This folder contains backend-oriented regression and verification tests.
-38 modules, **446 tests**.
+39 modules, **452 tests**.
 
 ## 1. Main command for checking the project
 

@@ -1618,3 +1618,106 @@ voice quality against each other, which is a product decision rather than a bug.
   screen; stalling a live interview over missing audio would be worse.
 - **`EnergyVAD`'s detection logic is correct** — onset and offset hysteresis
   both behave as specified, and RMS on int16 cannot overflow float32.
+
+---
+
+## 20. Change log — Phases 1.11 and 1.12, assessment and workflow
+
+Completed 2026-09-18. Suite: **446 → 452 tests**, all passing. Audited together
+as the two smallest backend subsystems (~1,400 lines combined).
+
+**No defects were found in either.** Both are in good shape, so this entry is
+mostly a record of what was checked and what the evidence was — which is worth
+having, because "we looked and it was fine" is only useful if it says how hard
+it looked.
+
+### 1.12 — the workflow reset endpoint
+
+`POST /workflow/reset` is the only destructive route in the API. It deletes
+assessment state, interview rounds, recorded responses, DSA sessions, and the
+final report. **Every delete is scoped by `session_id` alone** — there is no
+user filter on the delete calls themselves. That is a sound design, but it puts
+the entire weight of cross-account safety on `ensure_session_access` being
+called first.
+
+`ensure_session_access` itself is correct and fails closed:
+
+| Condition | Result |
+|---|---|
+| Session has no `user_id` | 409 — refused, not treated as public |
+| No authenticated caller | 401 |
+| Caller is a different user | 403 |
+| Caller owns the session | allowed |
+
+It was already unit-tested in `test_auth.py`. What was missing is proof that
+**this route actually calls it**, and that a rejected call leaves the owner's
+data untouched. A unit test on a guard does not catch a route that forgets to
+invoke it, and for a destructive endpoint that gap is expensive.
+
+Six integration tests now cover it against a real MongoDB, seeding a session
+with data in all five collections the endpoint deletes from:
+
+- A different user's reset attempt raises 403 **and every row survives** — the
+  counts are compared before and after, not just the status code.
+- The owner can still reset their own session (the guard is not so strict it
+  blocks the legitimate case).
+- An ownerless session is refused with 409 rather than reset by whoever asks.
+- A missing session is a 404, not a silent success.
+- Resetting `hr` leaves the technical round and its recorded response intact,
+  so the cascade does not over-delete.
+- One user's reset does not touch another user's session, proving the
+  `session_id` scoping is real rather than assumed.
+
+**Verified non-vacuous:** removing the `ensure_session_access` call from the
+route makes the attacker's reset succeed, and two of the tests fail. That is
+the specific regression they exist to catch.
+
+Also checked and correct: `target` is regex-bounded in the Pydantic model to the
+seven known values, so the `RESET_CASCADE[request.target]` lookup cannot raise
+`KeyError` on hostile input.
+
+### 1.11 — the assessment question bank
+
+The 677 KB bank is loaded through `@lru_cache(maxsize=1)`, so it is parsed once
+per process rather than per request. Same for the role catalog. Validated all
+566 questions directly:
+
+| Check | Result |
+|---|---|
+| Duplicate `question_id` | **0** |
+| Duplicate prompt text | **0** |
+| `correct_option_id` not among that question's `options` | **0** |
+| `active` field | all `true` |
+| `is_core` field | proper booleans (13 true, 553 false) |
+| Option counts | 565 with four options, 1 with three |
+
+Two things that looked like defects and were not, both worth recording because
+the obvious reading was wrong:
+
+- **`is_core` appeared to be the string `"True"`.** It is not — that was my own
+  probe stringifying the value before printing it. Re-checked with `type()`:
+  all 566 are real booleans. A string `"False"` would have been truthy and
+  silently marked every question core, so this was worth confirming rather than
+  reporting from the first output.
+- **13 questions have no `domains` and no `role_families`**, which looked like
+  broken role targeting. They are exactly the 13 `is_core` questions
+  (`core_big_o_01`, `core_queue_01`, and so on). Core questions are deliberately
+  role-agnostic so they apply to every candidate. Coherent design, not a gap.
+
+The single three-option question among 565 four-option ones is a cosmetic
+inconsistency, not a correctness problem — a three-option multiple choice is
+valid and scores normally.
+
+### Carried forward
+
+Both modules share the systemic driver-error gap from Phase 1.8: their
+`except DatabaseClientError` handlers do not catch raw `PyMongoError`, so an
+Atlas failover surfaces as a 500 rather than a 503. Already tracked as **Phase
+2.12** and not duplicated here.
+
+One note specific to the reset endpoint: it is **not atomic**. A database
+failure partway through leaves the session partially reset — for example
+assessment cleared but DSA not. The operation is idempotent, so a retry
+completes it, and the alternative (a multi-document transaction) would require
+a replica set that the free-tier target may not provide. Acceptable, but worth
+knowing it is a deliberate trade rather than an oversight.
