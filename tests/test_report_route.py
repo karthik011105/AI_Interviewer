@@ -542,3 +542,113 @@ class ReportPersistenceBehaviourTests(TestCase):
 			any("could not be saved" in item for item in recommendations),
 			msg=f"expected a persistence warning, got {recommendations}",
 		)
+
+
+class ReportPersistenceDriverErrorTests(TestCase):
+	"""A failure to *store* a report must not block *showing* it.
+
+	That is the documented purpose of ``_persist_report_snapshot``: the
+	snapshot is derived from round collections that were just read
+	successfully, so the user should still get it. It caught
+	``DatabaseClientError`` only — but ``upsert_final_report`` reaches
+	``find_one_and_update`` directly with no translation layer, so a
+	driver-level failure arrives raw and used to escape as a 500.
+
+	These are not exotic failures. The deployment target is a MongoDB Atlas M0
+	cluster capped at 512 MB, and a full cluster rejects writes with
+	``OperationFailure``. The one condition this function most needed to
+	survive was the one it did not.
+	"""
+
+	def _snapshot(self) -> dict[str, object]:
+		return {
+			"session_id": "session-1",
+			"overall_score": 0.8,
+			"round_scores": {"hr": 0.8},
+			"dimension_scores": {},
+			"report_json": {"summary": "computed fine"},
+		}
+
+	def test_a_driver_level_write_failure_degrades_instead_of_raising(self) -> None:
+		from pymongo.errors import ExecutionTimeout, OperationFailure, WriteError
+
+		for label, error in (
+			("OperationFailure (a full cluster)", OperationFailure("quota exceeded")),
+			("WriteError", WriteError("write rejected")),
+			("ExecutionTimeout", ExecutionTimeout("timed out")),
+		):
+			with self.subTest(case=label):
+				with patch.object(
+					routes_report, "upsert_final_report", side_effect=error
+				):
+					snapshot, ok, persisted, detail = (
+						routes_report._persist_report_snapshot(self._snapshot())
+					)
+
+				self.assertFalse(persisted)
+				self.assertIsNotNone(detail)
+				# The computed report must survive intact — that is the point.
+				self.assertEqual(snapshot["report_json"], {"summary": "computed fine"})
+				self.assertEqual(snapshot["overall_score"], 0.8)
+
+	def test_the_domain_error_still_degrades(self) -> None:
+		"""The original behaviour must be preserved, not replaced."""
+
+		with patch.object(
+			routes_report,
+			"upsert_final_report",
+			side_effect=DatabaseClientError("mongo unreachable"),
+		):
+			snapshot, ok, persisted, detail = routes_report._persist_report_snapshot(
+				self._snapshot()
+			)
+
+		self.assertFalse(persisted)
+		self.assertIn("unreachable", detail)
+
+	def test_a_duplicate_record_error_degrades(self) -> None:
+		"""DuplicateRecordError was introduced in the database phase and is a
+		DatabaseClientError, so it should already have been covered. Pinned
+		because report persistence is an upsert and this is the error its
+		unique index would raise."""
+
+		from backend.database.db_errors import DuplicateRecordError
+
+		with patch.object(
+			routes_report,
+			"upsert_final_report",
+			side_effect=DuplicateRecordError("duplicate session_id"),
+		):
+			_, _, persisted, detail = routes_report._persist_report_snapshot(
+				self._snapshot()
+			)
+
+		self.assertFalse(persisted)
+		self.assertIsNotNone(detail)
+
+	def test_a_successful_write_reports_persisted(self) -> None:
+		"""Guards against the broadened except swallowing the happy path."""
+
+		with patch.object(
+			routes_report,
+			"upsert_final_report",
+			return_value={"session_id": "session-1", "overall_score": 0.8},
+		):
+			snapshot, ok, persisted, detail = routes_report._persist_report_snapshot(
+				self._snapshot()
+			)
+
+		self.assertTrue(ok)
+		self.assertTrue(persisted)
+		self.assertIsNone(detail)
+
+	def test_a_non_database_error_is_not_swallowed(self) -> None:
+		"""The broadened handler must not become a bare except. A bug in the
+		snapshot-building code is not a persistence failure and should surface
+		rather than be reported to the user as 'we could not save this'."""
+
+		with patch.object(
+			routes_report, "upsert_final_report", side_effect=TypeError("a real bug")
+		):
+			with self.assertRaises(TypeError):
+				routes_report._persist_report_snapshot(self._snapshot())

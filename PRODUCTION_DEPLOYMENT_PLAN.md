@@ -178,7 +178,7 @@ Order is dependency-first, so a defect found early does not invalidate later wor
 | 1.10 | Voice | `voice/stt.py`, `tts.py`, `vad.py`, `routes_voice.py` | 1.2k | The piper finding from §0.2. Decide: install piper, or drop the 63 MB model and make edge-tts the honest default |
 | 1.11 | Assessment | `assessment/question_bank.py`, `routes_assessment.py` | 0.8k | A 677 KB bank loaded at startup; validate schema and dedupe |
 | 1.12 | Workflow / reset | `routes_workflow.py`, `lib/workflowReset.js` | ~0.5k | A destructive endpoint. Verify ownership enforcement and that it cannot cross accounts |
-| 1.13 | Frontend | `frontend/src/**` | 13.6k | `ScriptedInterview.jsx` is 75 KB and `ReportPage.jsx` 52 KB in single files. Error boundaries, token handling, the WSS upgrade, and the baked-at-build `VITE_API_BASE_URL` |
+| 1.13 | Frontend | `frontend/src/**` | 13.6k | `ScriptedInterview.jsx` is 75 KB and `ReportPage.jsx` 52 KB in single files. Error boundaries, token handling, the WSS upgrade, and the baked-at-build `VITE_API_BASE_URL`. **Plus:** Phase 1.8 established that a partial round reports the mean over *answered* questions, so the report is only honest if the UI shows `response_count` against `total_questions` next to the score. Verify that it does |
 | 1.14 | Scripts & data assets | `scripts/*`, `data/`, `models/*.pth`, `sample_resume.pdf` | ~1k | `models/*.pth` and `sample_resume.pdf` are tracked but appear unused at runtime. Confirm, then remove |
 
 Deliverable: `AUDIT_LOG.md`, one section per subsystem, each recording what was read,
@@ -203,6 +203,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.9 | **Data lifecycle** | Atlas M0 is 512 MB. Resume text, transcripts, and reports accumulate. Needs TTL indexes or a retention policy, plus a backup/export path |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
 | 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
+| 2.12 | **Translate driver errors into the domain hierarchy at one boundary** | Found in Phase 1.8, and systemic. **46 handlers across 7 route modules** catch `DatabaseClientError`, but `MongoRepository` calls pymongo directly in most methods, so a raw `PyMongoError` escapes all of them. Measured: `AutoReconnect` (what an Atlas failover produces) and `ExecutionTimeout` (a slow query on a shared-tier cluster) each become a **500 instead of a 503**. Both are expected events on Atlas M0, which is the chosen deployment. The fix is one translation boundary in the repository, not 46 edits — extending the `DuplicateKeyError` translation added in Phase 1.2 to the rest of the driver's error tree |
 
 ---
 
@@ -1267,3 +1268,115 @@ the persist step idempotent so a retry cannot double-record. Both are design
 decisions about what a dropped connection should mean mid-answer, not bug fixes,
 and they want the engine code in scope. It belongs in Phase 2 alongside the other
 state-durability work, and it is listed there now.
+
+---
+
+## 17. Change log — Phase 1.8, evaluation, feedback, reporting
+
+Completed 2026-09-18. Suite: **414 → 419 tests**, all passing.
+
+### Defect — the "degrade gracefully" path did not degrade
+
+`_persist_report_snapshot` exists for one reason, stated in its own docstring:
+the snapshot is derived from round collections that were **just read
+successfully**, so a failure to *store* it must not block *showing* it. The user
+gets the computed report with `persisted=False` and a note, never a 5xx.
+
+It caught `DatabaseClientError` only. But `upsert_final_report` reaches
+`find_one_and_update` directly, with no translation layer, so a driver-level
+failure arrives raw:
+
+| Write failure | Before | After |
+|---|---|---|
+| `DatabaseClientError` | degraded | degraded |
+| `DuplicateRecordError` | degraded | degraded |
+| `OperationFailure` | **escaped → 500** | degraded |
+| `WriteError` | **escaped → 500** | degraded |
+| `ExecutionTimeout` | **escaped → 500** | degraded |
+
+These are not exotic. The chosen deployment is a MongoDB Atlas **M0 cluster
+capped at 512 MB**, and a full cluster rejects writes with `OperationFailure`.
+So the single failure this function most needed to survive was the one it did
+not, and the candidate lost a report that had already been computed correctly.
+
+Now catches `PyMongoError` alongside the domain error. A test asserts the
+handler did **not** become a bare `except`: a `TypeError` from a genuine bug in
+the snapshot code still propagates, because that is not a persistence failure
+and must not be reported to the user as "we could not save this".
+
+### The bigger finding: this gap is systemic, and it is Phase 2 work
+
+The same shape exists everywhere. `MongoRepository` calls pymongo directly in
+most of its methods, so raw driver errors escape every handler that catches the
+domain type. Measured on a read path:
+
+| Error | Result |
+|---|---|
+| `DatabaseClientError` | correct 503 |
+| `AutoReconnect` (an Atlas failover) | **escapes → 500** |
+| `ExecutionTimeout` (a slow shared-tier query) | **escapes → 500** |
+
+And the blast radius is the whole API:
+
+| Route module | `except DatabaseClientError` handlers |
+|---|---|
+| `routes_dsa.py` | 15 |
+| `routes_interview.py` | 13 |
+| `routes_resume.py` | 7 |
+| `routes_assessment.py` | 5 |
+| `routes_report.py` | 3 |
+| `routes_workflow.py` | 2 |
+| `routes_auth.py` | 1 |
+| **total** | **46** |
+
+Every one of those means a transient database event on a shared-tier cluster
+surfaces as "internal error" rather than "temporarily unavailable" — which
+changes whether a client retries, and which is exactly wrong for Atlas M0 where
+failovers are expected.
+
+**I did not fix this here, deliberately.** The right fix is one translation
+boundary in the repository, extending the `DuplicateKeyError` translation added
+in Phase 1.2 to the rest of the driver's error tree. Editing 46 handlers is the
+wrong shape, and rewriting the data layer's error contract at the end of a long
+session is how a regression gets introduced into every data path at once. It is
+tracked as **Phase 2.12** with this evidence.
+
+The report-persist path was fixed now because it is the one whose entire
+documented purpose is to degrade, and because it is the last step of the
+candidate's whole journey — losing a finished report is the most expensive
+possible moment to fail.
+
+### Partial-round scoring: examined, and not a defect
+
+I set out to check whether an abandoned round produces a misleading score. A
+round planned for six questions where the candidate answered one, scoring 0.95:
+
+| Basis | Reported score |
+|---|---|
+| Mean over **answered** questions (current behaviour) | 0.95 |
+| Mean over **planned** questions | 0.16 |
+
+Averaging over answered questions is the defensible choice — a candidate should
+not be scored down for questions never asked — **provided the report also says
+how few were answered**. It does: `response_count`, `total_questions`,
+`completed_question_count`, `status`, `scored_stage_count`, and
+`completed_stage_count` are all present in the builders.
+
+The overall score averages non-null round scores, so a round never started
+contributes nothing rather than a zero. Also right.
+
+So the backend is sound here, and the honesty of the report now rests entirely
+on the frontend actually displaying those counts next to the score. That is a
+real question, and it is now explicitly part of **Phase 1.13**.
+
+### What was verified as already correct
+
+- **Every division is guarded.** Four aggregation sites: `_average` returns
+  `None` on an empty list, the per-round mean is inside an `if responses`
+  branch, the DSA pass-rate checks `total_count <= 0`, and the overall mean
+  checks `if not values`. No zero-division anywhere.
+- **A zero score is distinguished from an absent score.** `_coerce_numeric_score`
+  returns `None` rather than `0.0` for unscored input, and there is explicit
+  handling for the case where a stored `total_score` of `0.0` came from a
+  progress fallback rather than a real evaluation. Conflating those two would
+  make an unstarted round look like a failed one.

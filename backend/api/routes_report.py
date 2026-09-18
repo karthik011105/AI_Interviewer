@@ -18,6 +18,8 @@ from backend.database.queries import (
 	list_interview_responses,
 	upsert_final_report,
 )
+from pymongo.errors import PyMongoError
+
 from backend.database.db_errors import DatabaseClientError
 from backend.dsa.report_engine import build_dsa_round_report
 
@@ -1092,6 +1094,19 @@ def _persist_report_snapshot(snapshot: Mapping[str, Any]) -> tuple[dict[str, Any
 	failure to *store* it must not block *showing* it. The caller receives the
 	computed snapshot with ``persisted=False`` plus the failure detail, which is
 	surfaced to the user as a recommendation rather than as a 5xx.
+
+	``PyMongoError`` is caught alongside the domain error, and that is the whole
+	point rather than defensive padding. ``upsert_final_report`` reaches
+	``find_one_and_update`` directly, with no translation layer, so a
+	driver-level failure arrives raw — and ``DatabaseClientError`` does not
+	cover it. Measured: ``OperationFailure``, ``WriteError``, and
+	``ExecutionTimeout`` all escaped this handler and turned into a 500.
+
+	Those are not exotic. The deployment target is a MongoDB Atlas M0 cluster
+	capped at 512 MB; a full cluster rejects writes with ``OperationFailure``.
+	So the one failure mode this function most needed to survive was the one it
+	did not, and the user lost a report that had already been successfully
+	computed.
 	"""
 	try:
 		persisted = upsert_final_report(
@@ -1102,7 +1117,7 @@ def _persist_report_snapshot(snapshot: Mapping[str, Any]) -> tuple[dict[str, Any
 			report_json=_coerce_mapping(snapshot.get("report_json")),
 		)
 		return persisted, True, True, None
-	except DatabaseClientError as exc:
+	except (DatabaseClientError, PyMongoError) as exc:
 		_LOGGER.warning(
 			"Failed to persist final report for session %s: %s",
 			snapshot.get("session_id"),
