@@ -49,10 +49,22 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/opt/hf-cache \
     SENTENCE_TRANSFORMERS_HOME=/opt/hf-cache \
     # Both models are baked in above, so no network call to HuggingFace is
-    # needed or wanted at runtime. Drop this if you change model names without
-    # also updating the pre-fetch step, or startup will fail rather than
-    # silently download.
-    HF_HUB_OFFLINE=1
+    # needed or wanted at runtime.
+    #
+    # If you change a model name without also updating the pre-fetch step, the
+    # load fails against this offline cache. That does NOT stop the container:
+    # role matching catches the failure and falls back to token-overlap
+    # matching, which is materially worse, while /health still returns 200.
+    # (An earlier version of this comment claimed startup would fail. It does
+    # not — verified.) The fallback is now logged as a warning, and
+    # REQUIRE_SEMANTIC_ENCODER below turns it into a hard startup failure.
+    HF_HUB_OFFLINE=1 \
+    # Make a missing semantic encoder fatal rather than a silent downgrade.
+    # Set in the image because the models ARE baked in here, so a failure to
+    # load one is a real packaging error and should stop the deployment rather
+    # than quietly degrade every candidate's role matches. Unset it if you
+    # deliberately want to run on the token-overlap fallback.
+    REQUIRE_SEMANTIC_ENCODER=true
 
 # curl is used by the container HEALTHCHECK below.
 RUN apt-get update \

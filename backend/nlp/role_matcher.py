@@ -514,10 +514,73 @@ def _compute_builtin_bm25_scores(
 	return scores
 
 
-def warmup_semantic_encoder() -> bool:
-	"""Load the shared SBERT encoder during app startup when possible."""
+class SemanticEncoderUnavailableError(RoleMatcherError):
+	"""Raised at startup when a required semantic encoder could not load."""
 
-	return get_semantic_encoder() is not None
+
+def semantic_encoder_required(env: Mapping[str, str] | None = None) -> bool:
+	"""Whether a missing semantic encoder should be fatal at startup.
+
+	Read from the environment next to ``DISABLE_SEMANTIC_ENCODER`` rather than
+	from ``AppSettings``, because the two are halves of one switch for this
+	subsystem and splitting them across two modules would be worse than the
+	small inconsistency with the project's usual settings home.
+	"""
+
+	source = os.environ if env is None else env
+	return (source.get("REQUIRE_SEMANTIC_ENCODER") or "").strip().lower() in {
+		"1",
+		"true",
+		"yes",
+		"on",
+	}
+
+
+def warmup_semantic_encoder() -> bool:
+	"""Load the shared SBERT encoder during app startup when possible.
+
+	Returns True when the encoder is live, False when role matching will run on
+	the token-overlap fallback instead.
+
+	The fallback is a deliberate design choice, not a failure — it keeps local
+	development and the test suite working without a model download. But it
+	produces materially worse role matches, and a deployment that silently
+	switches to it looks completely healthy: the process starts, ``/health``
+	returns 200, and only the ``semantic_matching.active_backend`` field says
+	anything is wrong.
+
+	That is exactly what used to happen. ``backend/Dockerfile`` sets
+	``HF_HUB_OFFLINE=1`` and claimed that changing the model name without
+	updating the pre-fetch step meant "startup will fail rather than silently
+	download". It did not: the load raised, the exception was logged and
+	swallowed, and the app served degraded matches indefinitely.
+
+	So the degradation is now logged as a warning that names the consequence,
+	and a deployment can opt into making it fatal with
+	``REQUIRE_SEMANTIC_ENCODER=true``. The default stays permissive so that
+	nothing about local development or CI changes.
+	"""
+
+	if get_semantic_encoder() is not None:
+		return True
+
+	if semantic_encoder_required():
+		raise SemanticEncoderUnavailableError(
+			f"The semantic encoder {_SBERT_MODEL_NAME!r} could not be loaded and "
+			"REQUIRE_SEMANTIC_ENCODER is set. Role matching would silently fall "
+			"back to token overlap, which produces materially worse matches. "
+			"Either make the model available (it is pre-fetched into the image "
+			"by backend/Dockerfile — check the name matches) or unset "
+			"REQUIRE_SEMANTIC_ENCODER to accept the fallback."
+		)
+
+	_LOGGER.warning(
+		"Semantic encoder %r is unavailable; role matching is running on the "
+		"token-overlap fallback, which produces materially worse matches. "
+		"Set REQUIRE_SEMANTIC_ENCODER=true to make this fatal instead.",
+		_SBERT_MODEL_NAME,
+	)
+	return False
 
 
 def get_semantic_backend_status() -> dict[str, Any]:

@@ -932,3 +932,93 @@ Phase 2:
 
 I have not changed it either way, because deleting a documented demo asset and
 choosing how to handle someone else's personal data are both yours to decide.
+
+---
+
+## 14. Change log — Phase 1.5, role matching and research assets
+
+Completed 2026-09-18. Suite: **387 → 393 tests**, all passing (re-run twice to
+confirm; a 155s outlier was machine load, the steady figure is ~49s).
+
+### Defect — a documented startup guarantee that did not exist
+
+`backend/Dockerfile` sets `HF_HUB_OFFLINE=1` and carried this comment:
+
+> Drop this if you change model names without also updating the pre-fetch step,
+> **or startup will fail rather than silently download.**
+
+It does not fail. Verified by pointing `_SBERT_MODEL_NAME` at a non-existent
+model with `HF_HUB_OFFLINE=1` set:
+
+| Step | Result |
+|---|---|
+| `get_semantic_encoder()` | raises `OSError`, caught and logged, returns `None` |
+| `warmup_semantic_encoder()` | returns `False` |
+| `create_app()` | **succeeds** |
+| `/health` | 200, with `semantic_matching.active_backend: "token_overlap"` |
+
+So changing the model name — or any packaging slip that leaves it out of the
+image — produces a deployment that starts cleanly, passes its health check, and
+serves **materially worse role matches indefinitely**. The only evidence is one
+field inside a JSON body, and nothing alerts.
+
+This is the most consequential kind of defect for a free-tier deployment,
+because there is no second instance to compare against and no one watching a
+dashboard. It fails open, quietly, on the feature the product is built around.
+
+The token-overlap fallback itself is a good design choice and was kept: it is
+what lets the test suite and a local run work with no model download. What
+changed is that it can no longer happen unnoticed:
+
+- It logs a warning that names the consequence and the flag, rather than only
+  emitting a swallowed traceback.
+- `REQUIRE_SEMANTIC_ENCODER=true` makes it a hard startup failure, raising
+  `SemanticEncoderUnavailableError` with a message an operator can act on.
+- `backend/Dockerfile` now **sets that flag**, because the models are baked into
+  the image there, so a load failure is a packaging error rather than an
+  expected condition.
+- The false comment is corrected and says what actually happens.
+
+The default stays permissive, so nothing about local development or CI changes.
+Documented in `.env.example` alongside the existing `DISABLE_SEMANTIC_ENCODER`,
+which is the other half of the same switch.
+
+One deliberate inconsistency: `REQUIRE_SEMANTIC_ENCODER` is read from the
+environment inside `role_matcher.py` rather than added to `AppSettings`. It sits
+next to `DISABLE_SEMANTIC_ENCODER`, which is already read that way, and
+splitting two halves of one switch across two modules would be worse than the
+small departure from the project's usual settings home.
+
+Six tests cover it, including that the flag does **not** fail when the encoder
+is fine — otherwise setting it would make every deployment unbootable — and the
+truthy-spelling table, since an operator typing `True` or `1` must get the
+protection they think they asked for.
+
+### What was verified as already correct
+
+- **Every division is guarded.** `_safe_ratio` clamps and checks the
+  denominator; the built-in BM25 uses `max(len(documents), 1)` and
+  `max(len(document), 1)`; the average document length is floored at 1.0.
+- **BM25 degrades cleanly.** `rank_bm25` is optional and there is a pure-Python
+  Okapi implementation behind it, with `/health` reporting which is live.
+- **`research_assets.py` is genuinely inert.** It indexes filenames and sizes
+  and never loads or executes a checkpoint or notebook, exactly as its docstring
+  claims. No defect. Note that `/models/` and `/notebooks/` are excluded by
+  `.dockerignore`, so in the deployed container this registry is legitimately
+  empty.
+
+### Carried forward to Phase 2.3
+
+`/health` is unauthenticated and includes `registered_model_names` and
+`registered_notebook_names` — real filenames from the server's filesystem.
+Low severity, and empty in the container, but it is unnecessary disclosure on an
+anonymous endpoint and belongs with the `/metrics` hardening rather than here.
+
+### A dependency on Phase 3
+
+Because the Dockerfile now sets `REQUIRE_SEMANTIC_ENCODER=true`, the image will
+**refuse to start** if the pre-fetch step and `_SBERT_MODEL_NAME` ever disagree.
+That is the intended behaviour, and it is strictly better than degrading — but
+it means the first real container run in Phase 3.4 is now also the test of that
+flag. CI only builds the images, it does not run them, so this cannot be
+confirmed before then.
