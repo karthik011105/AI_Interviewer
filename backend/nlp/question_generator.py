@@ -914,16 +914,51 @@ def _normalise_string_list(values: Any) -> list[str]:
 	return result
 
 
-def _resolve_skill_tier(context: Mapping[str, Any], skill: str) -> str:
+def _skill_score_entry(context: Mapping[str, Any], skill: str) -> Mapping[str, Any] | None:
+	"""Look up a skill's profile entry, tolerating case and whitespace.
+
+	Both callers below used ``skill_scores.get(skill)`` — an exact dict lookup —
+	while every other comparison in this module casefolds. That mismatch is
+	reachable: the profiler writes ``skill_scores[skill]`` and appends the same
+	``skill`` to its tier lists, but ``_normalise_string_list`` strips those
+	lists on the way in here. So a skill name arriving from the LLM with a
+	stray leading space (" Verilog") is stored under " Verilog" and looked up
+	as "Verilog", and the lookup misses.
+
+	A miss is not loud. ``_resolve_skill_origin`` had no fallback at all and
+	returned "role", which quietly collapses the 70/30 role-to-resume split
+	toward 100% role — the exact targeting guarantee
+	``INTERVIEW_QUESTION_TARGETING.md`` exists to provide, lost with no error.
+
+	Exact match first, so the common path stays a single dict hit.
+	"""
+
 	skill_profile = context.get("skill_profile")
-	if isinstance(skill_profile, Mapping):
-		skill_scores = skill_profile.get("skill_scores")
-		if isinstance(skill_scores, Mapping):
-			entry = skill_scores.get(skill)
-			if isinstance(entry, Mapping):
-				tier = str(entry.get("tier") or "").strip().lower()
-				if tier in {"strong", "familiar", "mentioned", "absent"}:
-					return tier
+	if not isinstance(skill_profile, Mapping):
+		return None
+	skill_scores = skill_profile.get("skill_scores")
+	if not isinstance(skill_scores, Mapping):
+		return None
+
+	entry = skill_scores.get(skill)
+	if isinstance(entry, Mapping):
+		return entry
+
+	wanted = str(skill or "").strip().casefold()
+	if not wanted:
+		return None
+	for key, value in skill_scores.items():
+		if str(key or "").strip().casefold() == wanted and isinstance(value, Mapping):
+			return value
+	return None
+
+
+def _resolve_skill_tier(context: Mapping[str, Any], skill: str) -> str:
+	entry = _skill_score_entry(context, skill)
+	if entry is not None:
+		tier = str(entry.get("tier") or "").strip().lower()
+		if tier in {"strong", "familiar", "mentioned", "absent"}:
+			return tier
 
 	for tier, key in (
 		("strong", "strong_skills"),
@@ -943,16 +978,17 @@ def _resolve_skill_origin(context: Mapping[str, Any], skill: str) -> str:
 	Skills the resume profiler could not tag (older cached profiles, tests)
 	default to "role" so the 70/30 split degrades to the previous tier-only
 	allocation rather than starving on an empty resume bucket.
+
+	That default is only safe when the lookup itself is reliable. It is why
+	this goes through ``_skill_score_entry``: an exact-key lookup here used to
+	turn a stray space in a skill name into a silent "role", and enough of
+	those collapse the split entirely.
 	"""
-	skill_profile = context.get("skill_profile")
-	if isinstance(skill_profile, Mapping):
-		skill_scores = skill_profile.get("skill_scores")
-		if isinstance(skill_scores, Mapping):
-			entry = skill_scores.get(skill)
-			if isinstance(entry, Mapping):
-				origin = str(entry.get("origin") or "").strip().casefold()
-				if origin in {"role", "resume", "role_and_resume"}:
-					return origin
+	entry = _skill_score_entry(context, skill)
+	if entry is not None:
+		origin = str(entry.get("origin") or "").strip().casefold()
+		if origin in {"role", "resume", "role_and_resume"}:
+			return origin
 	return "role"
 
 

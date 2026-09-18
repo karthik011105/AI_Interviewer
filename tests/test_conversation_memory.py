@@ -11,6 +11,8 @@ from unittest import TestCase
 
 from backend.nlp.conversation_memory import (
 	MAX_DIALOGUE_TURNS,
+	MAX_DIGEST_LINES,
+	_estimate_tokens,
 	append_turn,
 	build_messages,
 	make_candidate_turn,
@@ -275,3 +277,122 @@ class CoverageDirectorTests(TestCase):
 		self.assertEqual(plan["targets"], [])
 		self.assertIsNone(next_target(plan))
 		self.assertIn("none", build_director_block(plan, turns_used=0))
+
+
+class DigestBoundTests(TestCase):
+	"""The digest was the one unbounded thing in a module whose docstring
+	promises a "bounded transcript".
+
+	Turns past MAX_DIALOGUE_TURNS fold into digest lines and nothing dropped
+	them, so a long session grew the digest forever. That matters more than it
+	looks: ``build_messages`` counts the entire digest as fixed overhead and
+	only ever trims the *recent* turns, so past a certain digest length no
+	amount of trimming can bring the prompt back under budget_tokens and the
+	budget silently becomes advisory. Every director turn resends the
+	transcript, so the cost is paid on every turn.
+	"""
+
+	def _drive(self, turn_count: int) -> tuple[list, list]:
+		dialogue: list = []
+		digest: list = []
+		for index in range(turn_count):
+			if index % 2 == 0:
+				turn = make_interviewer_turn(
+					index=index,
+					text=f"Question {index} about a specific skill area",
+					action="ask",
+					focus_skill="Verilog",
+					tier="strong",
+				)
+			else:
+				turn = make_candidate_turn(
+					index=index,
+					text=f"Answer {index}. " + ("detail " * 40),
+					score=0.7,
+				)
+			dialogue, digest = append_turn(dialogue, turn, digest=digest)
+		return dialogue, digest
+
+	def test_a_long_session_bounds_both_the_dialogue_and_the_digest(self) -> None:
+		"""300 turns is reachable: the interview_turn quota allows 120 an hour."""
+
+		dialogue, digest = self._drive(300)
+
+		self.assertLessEqual(len(dialogue), MAX_DIALOGUE_TURNS)
+		self.assertLessEqual(len(digest), MAX_DIGEST_LINES)
+		# Before the cap this was 260 and growing.
+		self.assertEqual(len(digest), MAX_DIGEST_LINES)
+
+	def test_the_digest_keeps_the_most_recent_lines(self) -> None:
+		"""Oldest dropped first: the director needs continuity with what just
+		happened more than it needs the opening exchange."""
+
+		_, digest = self._drive(300)
+
+		# Turn indices appear as "T<n>" at the start of each digest line.
+		indices = [int(line.split()[0][1:]) for line in digest]
+		self.assertEqual(indices, sorted(indices), "digest should stay in order")
+		self.assertGreater(
+			min(indices), 0, "the earliest turns should have been dropped"
+		)
+
+	def test_a_long_session_prompt_stays_inside_the_token_budget(self) -> None:
+		"""The property the cap exists to protect."""
+
+		dialogue, digest = self._drive(300)
+
+		messages = build_messages(
+			system="You are an interviewer. " * 20,
+			dialogue=dialogue,
+			digest=digest,
+			director_block="Ask about X.",
+			budget_tokens=2500,
+		)
+
+		total = sum(_estimate_tokens(message["content"]) for message in messages)
+		self.assertLessEqual(total, 2500)
+
+	def test_an_oversized_stored_digest_is_capped_at_render_time(self) -> None:
+		"""A digest read back from round state may predate the cap, or have been
+		written by an older build. build_messages never trims the digest, so it
+		has to refuse an over-long one up front."""
+
+		dialogue, _ = self._drive(30)
+		stored = [f"T{index} answered, scored 0.70: some text" for index in range(500)]
+
+		messages = build_messages(
+			system="sys", dialogue=dialogue, digest=stored, budget_tokens=2500
+		)
+
+		digest_messages = [
+			message
+			for message in messages
+			if message["content"].startswith("EARLIER IN THIS INTERVIEW")
+		]
+		self.assertEqual(len(digest_messages), 1)
+		rendered_lines = digest_messages[0]["content"].count("\n")
+		self.assertLessEqual(rendered_lines, MAX_DIGEST_LINES)
+
+	def test_a_short_session_is_untouched(self) -> None:
+		"""The cap must not disturb a normal-length round, which is every real
+		interview: a dynamic round plans about six questions."""
+
+		dialogue, digest = self._drive(12)
+
+		self.assertEqual(len(dialogue), 12)
+		self.assertEqual(digest, [])
+
+	def test_the_cap_is_overridable_for_callers_that_need_it(self) -> None:
+		dialogue: list = []
+		digest: list = []
+		for index in range(60):
+			dialogue, digest = append_turn(
+				dialogue,
+				make_interviewer_turn(index=index, text=f"Q{index}", action="ask"),
+				digest=digest,
+				max_turns=5,
+				max_digest_lines=3,
+			)
+
+		self.assertLessEqual(len(dialogue), 5)
+		self.assertLessEqual(len(digest), 3)

@@ -1022,3 +1022,125 @@ That is the intended behaviour, and it is strictly better than degrading — but
 it means the first real container run in Phase 3.4 is now also the test of that
 flag. CI only builds the images, it does not run them, so this cannot be
 confirmed before then.
+
+---
+
+## 15. Change log — Phase 1.6, question generation
+
+Completed 2026-09-18. Suite: **393 → 404 tests**, all passing.
+
+The largest subsystem so far (~2,700 lines across the generator, coverage
+director, interview director, interview context, and conversation memory), and
+the one carrying the standing 70/30 role-to-resume targeting preference.
+
+### Defect 1 — the 70/30 split could silently collapse to 100% role
+
+`_resolve_skill_origin` and `_resolve_skill_tier` both looked their skill up
+with `skill_scores.get(skill)`, an **exact dict lookup**, while every other
+comparison in the module casefolds. That mismatch is reachable rather than
+theoretical: the profiler writes `skill_scores[skill]` and appends the same
+`skill` to its tier lists, but `_normalise_string_list` **strips** those lists
+on the way into the allocator. So a skill name arriving from the LLM with a
+stray leading space is stored under `" Verilog"` and looked up as `"Verilog"`.
+
+| Stored key | Looked up | Origin before | Tier before |
+|---|---|---|---|
+| `'Verilog'` | `'Verilog'` | `resume` | `strong` |
+| `' Verilog '` | `'Verilog'` | **`role`** | **`general`** |
+| `'verilog'` | `'Verilog'` | **`role`** | **`general`** |
+
+And a miss was not loud. `_resolve_skill_origin` had **no fallback at all** and
+returned `"role"`, so enough misses collapse the allocation toward 100% role —
+losing the exact guarantee `INTERVIEW_QUESTION_TARGETING.md` exists to provide,
+with no error anywhere. `_resolve_skill_tier` was less exposed because it has a
+casefolded fallback scan over the tier lists, but it still misses when the skill
+is not in one of them.
+
+Both now go through a shared `_skill_score_entry` that tries the exact key first
+(so the common path stays one dict hit) and falls back to a normalised scan. All
+five key variants now resolve correctly.
+
+Care was taken not to overcorrect: a genuinely absent skill must still default
+to `"role"`, because that is what lets an untagged or older cached profile
+degrade to tier-only allocation instead of starving the role bucket. A blank
+`focus_skill` must not fuzzy-match the first entry either. Both are tested.
+
+### Defect 2 — the prompt token budget was advisory
+
+`conversation_memory.py` opens by describing itself as a "Compact, **bounded**
+transcript". The dialogue is bounded at `MAX_DIALOGUE_TURNS = 40`. The digest
+was not bounded at all: turns past that limit fold into digest lines and nothing
+ever dropped them.
+
+That matters more than it first looks, because of how `build_messages` spends
+its budget. It treats the **entire digest as fixed overhead** and only ever
+trims the *recent* turns. So past a certain digest length, no amount of trimming
+can bring the prompt back under `budget_tokens`, the function returns an
+over-budget prompt anyway, and the budget quietly becomes a suggestion. Every
+director turn resends the transcript, so that is paid for on every single turn
+of every session — against Groq, which is metered spend.
+
+It is reachable inside the existing quota: `QUOTA_INTERVIEW_TURN_PER_HOUR` is
+120, so 300 turns is a few hours of ordinary use.
+
+| After 300 turns | Before | After |
+|---|---|---|
+| Dialogue turns retained | 40 | 40 |
+| Digest lines retained | **260 and growing** | 30 |
+| Assembled prompt (budget 2500) | over budget | ~1,389 tokens |
+| A 500-line digest read from stored state | rendered in full | capped to 30 lines |
+
+Capped at `MAX_DIGEST_LINES = 30`, oldest dropped first, in **both** paths:
+`append_turn` bounds what gets persisted, and `build_messages` bounds what gets
+rendered — the second because a digest read back from round state may predate
+the cap or have been written by an older build, and `build_messages` will never
+trim it.
+
+Dropping the oldest lines is safe. Nothing downstream reads the digest: the
+report is built from the `interview_responses` collection, so no candidate data
+is lost. And the director needs continuity with what just happened more than it
+needs the opening exchange. A normal round is unaffected — a dynamic round plans
+about six questions, so the digest stays empty, which is also tested.
+
+### What was verified as already correct
+
+- **The 70/30 split behaves across every round size.** Measured at counts 1
+  through 12 with both buckets full: the role share ranges 50%–80% and averages
+  close to 70%, hitting exactly 70/30 at count 10 and the 4:2 the spec cites at
+  count 6. The variance is integer rounding on small counts, and the spec says
+  "roughly 70/30". Not a defect.
+- **Bucket exhaustion fills the round rather than under-filling it.** With no
+  resume-origin skills at all, a 6-question round still gets 6 questions, and
+  the same in reverse. The leftover budget is spent from whichever bucket still
+  has candidates.
+- **The §19 cached-question fix is real and content-based.** A cached HR batch
+  that has drifted technical ("What is the difference between SQL and NoSQL
+  databases?") is correctly rejected for regeneration, while a properly
+  generated batch is reused. Every malformed shape — not a mapping, empty list,
+  missing `question` key, item not a mapping — returns False rather than
+  raising.
+- **`build_messages` cannot loop forever.** The trimming pass is a single
+  forward pass, so an unsatisfiable budget returns an over-budget prompt rather
+  than hanging. That is the right failure mode, and with the digest capped the
+  situation should no longer arise.
+- **Candidate speech is treated as data, not instructions.**
+  `sanitize_candidate_text` strips the protocol's own markers, so a spoken
+  "ignore previous instructions" wrapped in `<candidate_answer>` tags cannot end
+  a turn early or fake metadata. This is the prompt-injection boundary and it is
+  handled deliberately.
+
+### A deliberate trade-off, recorded not changed
+
+`interview_runtime.py` reuses a cached batch whenever `current_index > 0`,
+**without** revalidating its content. So the §19 protection only applies to a
+round that has not started. A session that received a drifted batch and answered
+one question keeps it for the rest of the round.
+
+That is the better trade. Regenerating mid-round would replace questions the
+candidate has already answered and orphan their recorded responses. Left alone.
+
+### Both fixes verified non-vacuous
+
+Reverting them produced 5 failures in `test_conversation_memory` and 5 in
+`test_question_generator_skill_profile`, in exactly the new tests, before
+restoring.

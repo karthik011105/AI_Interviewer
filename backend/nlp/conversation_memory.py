@@ -26,6 +26,27 @@ MAX_DIALOGUE_TURNS = 40
 _TRUNCATED_ANSWER_CHARS = 400
 _DIGEST_ANSWER_CHARS = 90
 
+# The digest was the one unbounded thing in a module whose docstring promises a
+# "bounded transcript". Turns past MAX_DIALOGUE_TURNS fold into digest lines,
+# and nothing ever dropped them — so a long session grew the digest forever,
+# and `build_messages` counts the whole digest as fixed overhead while only ever
+# trimming the *recent* turns. Past a certain length the digest alone exceeds
+# budget_tokens, at which point trimming can no longer bring the prompt back
+# under it and the budget silently becomes advisory. Every director turn resends
+# the transcript, so that is paid for on every single turn.
+#
+# 30 lines keeps the digest a clear minority of the 2500-token budget (~750
+# tokens at this module's crude 4-chars-per-token estimate), leaving room for
+# the system prompt, the steering block, and the 12 verbatim recent turns that
+# actually drive the next question.
+#
+# The oldest lines are dropped rather than the newest: the director needs
+# continuity with what just happened more than it needs the opening exchange,
+# and nothing downstream reads the digest. The report is built from the
+# interview_responses collection, not from here, so dropping a digest line
+# loses no candidate data.
+MAX_DIGEST_LINES = 30
+
 _CANDIDATE_OPEN = "<candidate_answer>"
 _CANDIDATE_CLOSE = "</candidate_answer>"
 
@@ -106,8 +127,14 @@ def append_turn(
 	*,
 	digest: Sequence[str] = (),
 	max_turns: int = MAX_DIALOGUE_TURNS,
+	max_digest_lines: int = MAX_DIGEST_LINES,
 ) -> tuple[list[CompactTurn], list[str]]:
-	"""Append a turn, folding anything past `max_turns` into the digest."""
+	"""Append a turn, folding anything past `max_turns` into the digest.
+
+	The digest is itself capped at `max_digest_lines`, oldest dropped first —
+	see the note on MAX_DIGEST_LINES for why an uncapped digest quietly turns
+	the prompt budget into a suggestion.
+	"""
 
 	turns = [*dialogue, turn]
 	digest_lines = list(digest)
@@ -117,6 +144,9 @@ def append_turn(
 		line = summarize_turn(overflow)
 		if line:
 			digest_lines.append(line)
+
+	if max_digest_lines >= 0 and len(digest_lines) > max_digest_lines:
+		digest_lines = digest_lines[len(digest_lines) - max_digest_lines :]
 
 	return turns, digest_lines
 
@@ -190,6 +220,13 @@ def build_messages(
 		recent = list(dialogue)
 
 	digest_lines = [*digest, *(line for line in (summarize_turn(t) for t in older) if line)]
+	# Cap here as well as in append_turn. A digest read back from stored round
+	# state predates that cap, or was written by an older build, and this
+	# function treats the digest as fixed overhead it will never trim — so an
+	# over-long one arriving from persistence would make the budget below
+	# unreachable no matter how much of the recent dialogue got truncated.
+	if len(digest_lines) > MAX_DIGEST_LINES:
+		digest_lines = digest_lines[len(digest_lines) - MAX_DIGEST_LINES :]
 	if digest_lines:
 		messages.append(
 			{
@@ -246,6 +283,7 @@ def build_messages(
 __all__ = [
 	"CompactTurn",
 	"MAX_DIALOGUE_TURNS",
+	"MAX_DIGEST_LINES",
 	"append_turn",
 	"build_messages",
 	"make_candidate_turn",

@@ -5,7 +5,12 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from backend.config import GroqSettings
-from backend.nlp.question_generator import _build_skill_allocation_plan, get_or_generate_questions
+from backend.nlp.question_generator import (
+	_build_skill_allocation_plan,
+	_resolve_skill_origin,
+	_resolve_skill_tier,
+	get_or_generate_questions,
+)
 
 
 class QuestionGeneratorSkillProfileTests(TestCase):
@@ -162,3 +167,104 @@ class SkillAllocationOriginSplitTests(TestCase):
 		# one absent-tier skill, so depth is prioritized over raw coverage.
 		absent_index = next(i for i, slot in enumerate(plan) if slot["question_tier"] == "absent")
 		self.assertTrue(all(plan[i]["question_tier"] != "absent" for i in range(absent_index)))
+
+class SkillScoreLookupTests(TestCase):
+	"""The origin and tier lookups must tolerate case and whitespace.
+
+	Both used ``skill_scores.get(skill)`` — an exact dict lookup — while every
+	other comparison in question_generator casefolds. The mismatch is
+	reachable, not theoretical: the profiler writes ``skill_scores[skill]`` and
+	appends the same ``skill`` to its tier lists, but
+	``_normalise_string_list`` strips those lists on the way into the
+	allocator. A skill name arriving from the LLM with a stray leading space
+	is therefore stored under one key and looked up under another.
+
+	A miss was not loud. ``_resolve_skill_origin`` had no fallback and returned
+	"role", which quietly collapses the 70/30 role-to-resume split toward 100%
+	role — losing the exact guarantee INTERVIEW_QUESTION_TARGETING.md exists to
+	provide, with no error anywhere.
+	"""
+
+	def _context(self, stored_key: str) -> dict:
+		return {
+			"skill_profile": {
+				"skill_scores": {stored_key: {"tier": "strong", "origin": "resume"}}
+			}
+		}
+
+	def test_origin_and_tier_survive_key_whitespace_and_case(self) -> None:
+		variants = [
+			("exact", "Verilog", "Verilog"),
+			("stored padded", " Verilog ", "Verilog"),
+			("stored lowercase", "verilog", "Verilog"),
+			("queried padded", "Verilog", "  Verilog  "),
+			("both differ", " verilog ", "VERILOG"),
+		]
+		for label, stored, queried in variants:
+			with self.subTest(case=label):
+				context = self._context(stored)
+				self.assertEqual(_resolve_skill_origin(context, queried), "resume")
+				self.assertEqual(_resolve_skill_tier(context, queried), "strong")
+
+	def test_a_genuinely_absent_skill_still_defaults_to_role(self) -> None:
+		"""The permissive default is deliberate — an untagged profile must
+		degrade to tier-only allocation rather than starve the role bucket. The
+		fix must not turn a real miss into a match."""
+
+		context = self._context("Verilog")
+
+		self.assertEqual(_resolve_skill_origin(context, "Kubernetes"), "role")
+		self.assertEqual(_resolve_skill_tier(context, "Kubernetes"), "general")
+
+	def test_an_empty_skill_name_does_not_match_anything(self) -> None:
+		"""Otherwise a blank focus_skill would fuzzy-match the first entry."""
+
+		context = self._context("Verilog")
+
+		self.assertEqual(_resolve_skill_origin(context, ""), "role")
+		self.assertEqual(_resolve_skill_origin(context, "   "), "role")
+
+	def test_a_malformed_profile_is_tolerated(self) -> None:
+		for label, profile in (
+			("no profile", {}),
+			("profile is not a mapping", {"skill_profile": "nope"}),
+			("scores is not a mapping", {"skill_profile": {"skill_scores": []}}),
+			("entry is not a mapping", {"skill_profile": {"skill_scores": {"X": "nope"}}}),
+		):
+			with self.subTest(case=label):
+				self.assertEqual(_resolve_skill_origin(profile, "X"), "role")
+
+	def test_the_split_holds_when_keys_are_padded(self) -> None:
+		"""End to end: with padded keys the allocator used to see every skill as
+		role-origin. Ten slots against six role and six resume skills gives 6/4,
+		because the role bucket runs dry at six and the leftover budget is spent
+		from whichever bucket still has candidates."""
+
+		role_skills = [f"role_skill_{index}" for index in range(6)]
+		resume_skills = [f"resume_skill_{index}" for index in range(6)]
+		skill_scores = {}
+		for skill in role_skills:
+			skill_scores[f" {skill} "] = {"tier": "strong", "origin": "role"}
+		for skill in resume_skills:
+			skill_scores[f" {skill} "] = {"tier": "strong", "origin": "resume"}
+
+		context = {
+			"skill_profile": {"skill_scores": skill_scores},
+			"strong_skills": [f" {skill} " for skill in role_skills + resume_skills],
+			"familiar_skills": [],
+			"mentioned_skills": [],
+			"absent_skills": [],
+			"soft_gap_skills": [],
+			"priority_focus_areas": [],
+		}
+
+		plan = _build_skill_allocation_plan(context, 10)
+		resume_count = sum(
+			1
+			for slot in plan
+			if _resolve_skill_origin(context, slot["focus_skill"]) == "resume"
+		)
+
+		self.assertEqual(len(plan), 10)
+		# The point of the test: resume_count was 0 before the fix.
+		self.assertEqual(resume_count, 4)
