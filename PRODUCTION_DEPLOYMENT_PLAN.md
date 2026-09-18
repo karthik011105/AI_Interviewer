@@ -1832,3 +1832,149 @@ rather than changed mid-audit.
 - **Route-level code splitting is in place** — `ReportPage`, `DSAPage`,
   `InterviewPage` and others are separate chunks, so the 437 KB interview bundle
   is not paid for on first load.
+
+---
+
+## 22. Change log — Phase 1.14, scripts and data assets
+
+Completed 2026-09-18. **No defects found, no code changed.** Suite unchanged at
+452 backend / 26 frontend.
+
+### The scripts are healthy
+
+`PRODUCTION_READINESS.md` §17 recorded that the Supabase→MongoDB migration left
+three scripts broken, and that they were repaired. That repair holds: all nine
+scripts under `scripts/` parse **and import cleanly** against the current
+codebase, which is the check that actually catches a stale import.
+
+### No hardcoded credentials
+
+A credential-shaped-string sweep across `scripts/` returned exactly one hit: the
+throwaway `AUTH_JWT_SECRET` in `run_tests.ps1`, which is labelled in place as
+not used outside tests. Every real credential is read from the environment —
+`GROQ_API_KEY`, `QUIZ_API_KEY`, and the DSA smoke-flow overrides.
+
+### The model checkpoints are never loaded
+
+`models/job_matcher_model.pth`, `parser_model.pth`, and `t5_model.pth` are
+**never loaded by any code**. The only reference to a `.pth` anywhere is the
+extension list in `research_assets.py`, which indexes filenames and sizes
+without opening them — consistent with what Phase 1.5 established about that
+module being genuinely inert.
+
+They are research artifacts from the notebooks, they total 184 KB, and
+`.dockerignore` excludes `/models/` from the image. Harmless. This settles the
+open question from §3, which listed them as "appear unused at runtime": they
+are unused at runtime, deliberately, and that is fine.
+
+### One orphaned file
+
+`data/clickhouse_sample.jsonl` has **zero references** anywhere in the backend,
+frontend, scripts, or tests. It is 8 KB and excluded from the image. Genuinely
+dead, and safe to delete whenever convenient — flagging rather than deleting,
+consistent with how the other housekeeping calls have been left to you.
+
+### `.dockerignore` is correct, and it isolates the one real problem
+
+The image excludes `/models/`, `/notebooks/`, `/scripts/`, `/tests/`, and
+`/data/`. What actually ships under `backend/data/`:
+
+| Directory | Size | Used at runtime? |
+|---|---|---|
+| `assessments/` | 692 KB | yes — question bank and role catalog |
+| `problems/` | 28 KB | yes — certified DSA bank |
+| `tts_models/` | **61 MB** | **no** — the piper binary is not installed |
+
+So the single largest thing in the backend image is the one thing it cannot
+use. That is the Phase 1.10 decision, and this is independent confirmation of
+it from the packaging side: removing it would cut the image by 61 MB with no
+functional loss unless piper is installed to match.
+
+---
+
+## 23. Phase 1 complete — consolidated findings
+
+All **fourteen** subsystems audited. Backend suite **341 → 452** tests
+(+111, +33%); frontend **19 → 26** (+7). Every phase is committed and pushed.
+
+### The defects, by what they would have cost
+
+**Silent degradation — the system reports healthy while doing the wrong thing.**
+This was the dominant pattern, five of them, and none would have shown up in a
+health check:
+
+| Phase | Defect |
+|---|---|
+| 1.5 | A missing semantic encoder silently downgraded role matching to token overlap, while the Dockerfile's comment claimed startup would fail |
+| 1.6 | A skill name with a stray space collapsed the 70/30 targeting toward 100% role, with no error |
+| 1.6 | An uncapped digest quietly made the prompt token budget advisory, on every director turn, against metered spend |
+| 1.10 | The deployment used a different TTS engine than it was configured for, logged below the default level |
+| 1.1 | Failed requests were absent from the metrics entirely, so a route failing every request looked like a route with no traffic |
+
+**Data integrity.**
+
+| Phase | Defect |
+|---|---|
+| 1.2 | The optimistic-concurrency version counter could be moved **backwards**, after which a stale writer overwrote newer state |
+| 1.2 | A unique-index violation escaped the domain error hierarchy and became an unhandled 500 |
+
+**User-facing failure.**
+
+| Phase | Defect |
+|---|---|
+| 1.7 | Any unexpected error dropped a candidate mid-interview with no frame, no close, and no metric |
+| 1.13 | No error boundary anywhere: one render exception produced a white screen |
+| 1.9 | The DSA gate rejected `list.remove`, `str.replace`, and `std::sprintf` — correct solutions failed |
+| 1.4 | A 9-byte upload caused an unhandled 500 and burned the user's hourly quota |
+| 1.8 | The report's "degrade gracefully" path did not degrade on the write failure most likely on a 512 MB tier |
+
+**Security and abuse.**
+
+| Phase | Defect |
+|---|---|
+| 1.3 | Behind a proxy every user shared one rate-limit bucket: one 10-per-minute budget for the entire deployment |
+| 1.3 | Both throttles leaked keys forever — 10,000 one-off callers left 10,000 entries after every window lapsed |
+
+### What the audit method was worth
+
+Phase 0 found the test suite's own runner was mis-wired: CI ran a command that
+**crashed the interpreter** rather than running tests, and the tests README
+recommended that same command. Nothing downstream could be trusted until that
+was fixed.
+
+Two things recur and are worth carrying into Phase 2:
+
+- **Mocked boundaries drift.** Phase 1.3 caught a regression I introduced in
+  1.2 — the signup race handler became unreachable while its test kept passing,
+  because the test mocked the old exception. A mocked boundary is only as good
+  as the exception it mocks.
+- **"Unused" is a claim about a module, not a repository.** Phase 1.7 removed 14
+  dead imports and broke three tests that were reaching through the module for a
+  function defined elsewhere.
+
+Every fix was verified **non-vacuous** by reverting it and confirming the new
+tests fail, then restoring. A regression test that has never been seen to fail
+is not yet a regression test.
+
+### Two things I corrected about my own plan
+
+- §3 called the DSA safety gate "what stands between a user and arbitrary
+  execution". Wrong — Judge0's container is the boundary; the gate is a
+  pre-filter. That inverted the risk priority and led directly to finding the
+  false-positive defects instead of hunting a non-existent RCE.
+- §3 listed `sample_resume.pdf` as unused. It is referenced by the README demo,
+  and it contains a real person's name, phone number, and email.
+
+### Open decisions for you
+
+1. **`sample_resume.pdf`** — third-party personal data in git (Phase 1.4).
+2. **The 61 MB piper voice model** — install piper, drop the model, or leave it
+   (Phase 1.10).
+3. **`data/clickhouse_sample.jsonl`** — orphaned, safe to delete (Phase 1.14).
+4. **An email provider** for password reset, still `console` (Phase 2.4).
+
+### Phase 2 is now well-specified
+
+Thirteen items, four of which the audit added with evidence: **2.11** turn-commit
+durability, **2.12** the systemic driver-error translation affecting 46
+handlers, **2.13** the access token in the WebSocket URL, plus the original ten.
