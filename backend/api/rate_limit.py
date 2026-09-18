@@ -14,13 +14,17 @@ Two complementary protections live here:
 
 Scope and limitations
 ---------------------
-State is held in memory in this process. Under multiple uvicorn workers each
-worker keeps its own counters, so the effective limit is multiplied by the
-worker count; across multiple instances they are not shared at all. That is
-still a large improvement over no limiting, but a horizontally scaled
-deployment should back these counters with a shared store (Redis) or enforce
-the limits at the reverse proxy / API gateway instead. The classes below are
-deliberately small and clock-injectable so that swap stays cheap.
+The two classes below hold state in memory in this process, so under multiple
+uvicorn workers each worker keeps its own counters and the effective limit is
+multiplied by the worker count.
+
+That swap is no longer hypothetical: ``rate_limit_store.py`` provides
+MongoDB-backed equivalents with the same interface, and
+``create_rate_limiter`` / ``create_failure_tracker`` below choose between them
+from ``RATE_LIMIT_BACKEND``. Memory stays the default so local development and
+the test suite need no database; ``backend/Dockerfile`` sets ``mongo``, and
+``warn_if_throttles_are_process_local`` complains at startup about the one
+genuinely dangerous combination -- memory plus more than one worker.
 
 Both classes are safe to call from FastAPI's sync threadpool: all mutation
 happens under a lock.
@@ -28,10 +32,54 @@ happens under a lock.
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from collections import deque
-from typing import Callable, Deque, Dict
+from collections.abc import Mapping
+from typing import Callable, Deque, Dict, Protocol
+
+
+class RateLimiter(Protocol):
+    """The contract both the in-process and MongoDB limiters satisfy.
+
+    Stated as a Protocol rather than a base class because the two
+    implementations share no code — one holds a dict under a lock, the other
+    issues a single atomic aggregation update — and what matters is that call
+    sites can be handed either without caring which.
+    """
+
+    def check(self, key: str) -> None:
+        """Record an attempt; raise RateLimitExceeded if over budget."""
+
+    def reset(self, key: str) -> None:
+        """Forget one key's history."""
+
+    def clear(self) -> None:
+        """Forget everything. Used by tests."""
+
+    def tracked_key_count(self) -> int:
+        """How many keys are currently held."""
+
+
+class FailureBackoff(Protocol):
+    """The contract both failed-sign-in trackers satisfy."""
+
+    def check(self, key: str) -> None:
+        """Raise RateLimitExceeded while the key is locked out."""
+
+    def record_failure(self, key: str) -> None:
+        """Count one failed attempt against the key."""
+
+    def reset(self, key: str) -> None:
+        """Clear the streak, on a successful sign-in."""
+
+    def clear(self) -> None:
+        """Forget everything. Used by tests."""
+
+    def tracked_key_count(self) -> int:
+        """How many keys are currently held."""
 
 
 class RateLimitExceeded(Exception):
@@ -248,7 +296,122 @@ class FailureTracker:
 
 
 __all__ = [
+    "FailureBackoff",
     "FailureTracker",
+    "RateLimiter",
     "FixedWindowRateLimiter",
     "RateLimitExceeded",
+]
+
+
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
+RATE_LIMIT_BACKEND_ENV_VAR = "RATE_LIMIT_BACKEND"
+
+
+def rate_limit_backend(env: Mapping[str, str] | None = None) -> str:
+    """Which throttle store to use: ``"memory"`` (default) or ``"mongo"``.
+
+    Defaults to memory so that local development and the test suite need no
+    database — the suite deliberately points ``MONGO_URI`` at a dead port, and
+    a throttle that required Mongo would turn every auth test into a
+    connection error.
+
+    A real deployment sets ``RATE_LIMIT_BACKEND=mongo``. ``backend/Dockerfile``
+    does. Memory is safe for a single worker and actively wrong for more than
+    one, which is what ``warn_if_throttles_are_process_local`` exists to say
+    out loud.
+    """
+
+    source = os.environ if env is None else env
+    value = (source.get(RATE_LIMIT_BACKEND_ENV_VAR) or "memory").strip().casefold()
+    return "mongo" if value == "mongo" else "memory"
+
+
+def create_rate_limiter(*, max_events: int, window_seconds: float):
+    """Build the configured rate limiter."""
+
+    if rate_limit_backend() == "mongo":
+        from backend.api.rate_limit_store import (
+            RATE_LIMIT_COLLECTION,
+            MongoFixedWindowRateLimiter,
+        )
+        from backend.database.mongo_client import get_repository
+
+        return MongoFixedWindowRateLimiter(
+            max_events=max_events,
+            window_seconds=window_seconds,
+            collection=get_repository().db[RATE_LIMIT_COLLECTION],
+        )
+
+    return FixedWindowRateLimiter(
+        max_events=max_events, window_seconds=window_seconds
+    )
+
+
+def create_failure_tracker(*, max_failures: int, lockout_seconds: float):
+    """Build the configured failed-sign-in tracker."""
+
+    if rate_limit_backend() == "mongo":
+        from backend.api.rate_limit_store import (
+            FAILURE_TRACKER_COLLECTION,
+            MongoFailureTracker,
+        )
+        from backend.database.mongo_client import get_repository
+
+        return MongoFailureTracker(
+            max_failures=max_failures,
+            lockout_seconds=lockout_seconds,
+            collection=get_repository().db[FAILURE_TRACKER_COLLECTION],
+        )
+
+    return FailureTracker(
+        max_failures=max_failures, lockout_seconds=lockout_seconds
+    )
+
+
+def warn_if_throttles_are_process_local(env: Mapping[str, str] | None = None) -> bool:
+    """Warn when the in-memory store is paired with more than one worker.
+
+    This is the specific misconfiguration the in-process limiters have always
+    carried a caveat about: with N workers each keeps its own counters, so every
+    configured limit is silently multiplied by N. A deployment that scales
+    workers for throughput without switching the store gets N times the auth
+    budget and N times the spend quota, with nothing to indicate it.
+
+    Returns True when the warning fired, so startup code and tests can tell.
+    """
+
+    source = os.environ if env is None else env
+    if rate_limit_backend(source) == "mongo":
+        return False
+
+    raw_workers = (source.get("UVICORN_WORKERS") or "1").strip()
+    try:
+        workers = int(raw_workers)
+    except ValueError:
+        workers = 1
+    if workers <= 1:
+        return False
+
+    logging.getLogger(__name__).warning(
+        "UVICORN_WORKERS=%s but %s is 'memory', so rate limits and spend quotas "
+        "are per-process: every configured limit is effectively multiplied by %s. "
+        "Set %s=mongo to share them.",
+        workers,
+        RATE_LIMIT_BACKEND_ENV_VAR,
+        workers,
+        RATE_LIMIT_BACKEND_ENV_VAR,
+    )
+    return True
+
+
+__all__ += [
+    "RATE_LIMIT_BACKEND_ENV_VAR",
+    "create_failure_tracker",
+    "create_rate_limiter",
+    "rate_limit_backend",
+    "warn_if_throttles_are_process_local",
 ]

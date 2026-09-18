@@ -192,7 +192,7 @@ Cross-cutting work that is not any one subsystem's fault.
 
 | # | Task | Notes |
 |---|---|---|
-| 2.1 | **Move rate limits and quotas into MongoDB** | Removes the reset-on-restart hole and the multi-worker multiplication caveat in `backend/Dockerfile`. No new infrastructure — Mongo is already required |
+| 2.1 | ~~**Move rate limits and quotas into MongoDB**~~ | **Done** — see §24. Shared, durable, atomic. `RATE_LIMIT_BACKEND=mongo` set in the image; memory stays the default so local runs need no database |
 | 2.2 | **Split `/health` from `/ready`** | `/health` stays a liveness check. `/ready` pings Mongo and reports Groq and Judge0 reachability. Platform health checks point at `/ready` |
 | 2.3 | **Protect `/metrics`** | Bearer token or network restriction. Today anyone can enumerate the API surface and read traffic volumes |
 | 2.4 | **Choose and wire a real email provider** | `EMAIL_PROVIDER=console` means password reset writes to a log instead of sending mail. The reset flow is built (§28) but is not functional in production until this is set |
@@ -1978,3 +1978,110 @@ is not yet a regression test.
 Thirteen items, four of which the audit added with evidence: **2.11** turn-commit
 durability, **2.12** the systemic driver-error translation affecting 46
 handlers, **2.13** the access token in the WebSocket URL, plus the original ten.
+
+---
+
+## 24. Change log — Phase 2.1, shared throttle state
+
+Completed 2026-09-18. Suite: **452 → 479 tests**, all passing — and now passing
+**twice**, once per throttle store.
+
+### What was wrong
+
+`rate_limit.py` held its counters in process memory and said so in a docstring.
+Three consequences, and the docstring is the wrong place for any of them to be
+noticed:
+
+- With N uvicorn workers each worker keeps its own counters, so **every
+  configured limit is silently multiplied by N**.
+- A restart resets everything. That matters most for the quotas, which exist to
+  bound a Groq and Judge0 bill — "wait for the next deploy" is not an obstacle.
+- Nothing is shared across instances at all.
+
+### The implementation, and why it is shaped this way
+
+`backend/api/rate_limit_store.py` adds MongoDB-backed equivalents with the same
+interface. Two design points are load-bearing.
+
+**Each check is one atomic update, not a read followed by a write.** Counting
+and then deciding is a time-of-check/time-of-use race. This is not theoretical
+— measured against the real database with 12 concurrent callers and a budget of
+5:
+
+| Implementation | Admitted | Correct? |
+|---|---|---|
+| Naive count-then-insert | **12 of 12** | no — the limit was bypassed entirely |
+| Atomic pipeline update | **5 of 12** | yes |
+
+The naive version let every single caller through. Instead each check is a
+single `find_one_and_update` whose aggregation pipeline prunes expired entries
+and conditionally appends the new one **inside the server**; the caller learns
+whether it was admitted by looking for its own unique token in the returned
+array, so the decision cannot be separated from the mutation.
+
+**Wall clock, not monotonic.** The in-process limiters use `time.monotonic()`,
+which is right there because it ignores clock adjustments — and useless for
+shared state, since monotonic clocks have a per-process origin and two workers
+cannot compare values. The shared store uses epoch seconds, so a large NTP
+correction could briefly widen or narrow a window. That is the price of sharing
+at all, and a far smaller problem than counters that do not.
+
+Growth is bounded by a TTL index on `expires_at` in both collections, which is
+the server-side equivalent of the periodic sweep Phase 1.3 had to add to the
+in-process versions.
+
+### Configuration: safe default, explicit opt-in
+
+`RATE_LIMIT_BACKEND` selects the store, defaulting to `memory` so local
+development and the test suite need no database — the suite deliberately points
+`MONGO_URI` at a dead port, and a throttle that required Mongo would turn every
+auth test into a connection error. `backend/Dockerfile` sets `mongo`.
+
+Anything unrecognised falls back to `memory` rather than failing closed, because
+a typo in an environment variable should not take authentication down.
+
+The genuinely dangerous combination is memory **plus** more than one worker, so
+`warn_if_throttles_are_process_local()` runs at startup and says so, naming the
+variable to set. The stale `UVICORN_WORKERS` comment in the Dockerfile — which
+still warned about the multiplication this change removes — was corrected.
+
+Call sites now go through `create_rate_limiter` / `create_failure_tracker`, and
+the annotations are `Protocol`s (`RateLimiter`, `FailureBackoff`) rather than
+concrete classes, because the two implementations share no code and what matters
+is that either can be handed to a call site.
+
+### A real bug the switch exposed
+
+Running the suite with `RATE_LIMIT_BACKEND=mongo` produced **5 failures and 4
+errors** on the first attempt. The cause was not the new store:
+
+`reset_auth_throttles()` set the cached limiter to `None`. For the in-process
+store that *is* a reset, because a fresh instance starts empty. For a shared
+store a rebuilt instance reads the same collection, so **"reset" silently did
+nothing** and throttle state leaked between tests — the visible symptom being a
+login assertion getting `429` where it expected `401`.
+
+Both `reset_auth_throttles()` and `reset_quotas()` now clear the underlying
+state before dropping the instances, so "reset" means reset on either backend.
+This is the same class of problem as the Phase 1.3 finding, where a mocked
+boundary kept passing after the contract behind it changed.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Full suite, default `memory` store | 479 pass |
+| Full suite, `RATE_LIMIT_BACKEND=mongo` against real MongoDB | **479 pass** |
+| All 72 auth tests through the real route path with the shared store | pass |
+| 12 concurrent callers against a budget of 5 | exactly 5 admitted |
+| 8 concurrent failed sign-ins | all counted, lockout triggered |
+| State survives a new limiter instance (a restart or second worker) | yes |
+| TTL index present on both collections | yes, `expireAfterSeconds=0` |
+
+27 tests added: 19 driving the store against a real database, 8 covering
+backend selection and the startup warning.
+
+**CI now runs the suite twice**, the second time with `RATE_LIMIT_BACKEND=mongo`.
+That is not belt-and-braces: the default run exercises a configuration
+production does not use, and the reset bug above is exactly what the second run
+catches. It costs about a minute.

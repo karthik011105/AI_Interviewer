@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import secrets
@@ -24,9 +25,11 @@ from backend.api.auth import (
 	serialize_authenticated_user,
 )
 from backend.api.rate_limit import (
-	FailureTracker,
-	FixedWindowRateLimiter,
+	FailureBackoff,
 	RateLimitExceeded,
+	RateLimiter,
+	create_failure_tracker,
+	create_rate_limiter,
 )
 from backend.config import get_settings
 from backend.database.db_errors import DuplicateRecordError
@@ -44,28 +47,28 @@ _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"invalid-placeholder-password", bcrypt.gen
 _INVALID_CREDENTIALS_DETAIL = "Invalid email or password."
 
 _throttle_lock = threading.Lock()
-_ip_rate_limiter: FixedWindowRateLimiter | None = None
-_login_failure_tracker: FailureTracker | None = None
+_ip_rate_limiter: RateLimiter | None = None
+_login_failure_tracker: FailureBackoff | None = None
 
 
-def _get_ip_rate_limiter() -> FixedWindowRateLimiter:
+def _get_ip_rate_limiter() -> RateLimiter:
 	global _ip_rate_limiter
 	with _throttle_lock:
 		if _ip_rate_limiter is None:
 			auth_settings = get_settings().auth
-			_ip_rate_limiter = FixedWindowRateLimiter(
+			_ip_rate_limiter = create_rate_limiter(
 				max_events=auth_settings.rate_limit_max_attempts,
 				window_seconds=auth_settings.rate_limit_window_seconds,
 			)
 		return _ip_rate_limiter
 
 
-def _get_login_failure_tracker() -> FailureTracker:
+def _get_login_failure_tracker() -> FailureBackoff:
 	global _login_failure_tracker
 	with _throttle_lock:
 		if _login_failure_tracker is None:
 			auth_settings = get_settings().auth
-			_login_failure_tracker = FailureTracker(
+			_login_failure_tracker = create_failure_tracker(
 				max_failures=auth_settings.login_max_failures,
 				lockout_seconds=auth_settings.login_lockout_seconds,
 			)
@@ -73,13 +76,28 @@ def _get_login_failure_tracker() -> FailureTracker:
 
 
 def reset_auth_throttles() -> None:
-	"""Drop the cached throttles.
+	"""Clear the throttles and drop the cached instances.
 
 	Tests use this to get a clean slate and to pick up overridden settings.
+
+	The state is cleared before the instances are dropped, and that ordering is
+	the whole point. Dropping the reference alone was equivalent to a reset only
+	for the in-process store, where a fresh instance starts empty. With the
+	MongoDB-backed store a new instance points at the same collection, so the
+	old state is still there — "reset" would have silently done nothing, which
+	is how a shared backend turns passing tests into failing ones for reasons
+	that have nothing to do with the code under test.
 	"""
 
 	global _ip_rate_limiter, _login_failure_tracker
 	with _throttle_lock:
+		for throttle in (_ip_rate_limiter, _login_failure_tracker):
+			if throttle is None:
+				continue
+			# Best effort: this runs in test teardown and in a reset path, and
+			# an unreachable database there should not mask the real failure.
+			with contextlib.suppress(Exception):
+				throttle.clear()
 		_ip_rate_limiter = None
 		_login_failure_tracker = None
 

@@ -22,6 +22,7 @@ from backend.logging_config import (
 	request_id_var,
 )
 from backend.metrics import http_request_duration_seconds, http_requests_total
+from backend.api.rate_limit import warn_if_throttles_are_process_local
 from backend.api.routes_assessment import router as assessment_router
 from backend.api.routes_auth import router as auth_router
 from backend.api.routes_dsa import router as dsa_router
@@ -200,6 +201,12 @@ def create_app() -> FastAPI:
 	# running triggers an intermittent access violation on Windows.
 	warmup_semantic_encoder()
 	warmup_research_asset_registry()
+
+	# Say it out loud if the throttles are per-process while more than one
+	# worker is running: every configured limit is then silently multiplied by
+	# the worker count. This is the caveat rate_limit.py has always carried in
+	# a docstring, which is exactly the wrong place for it to be noticed.
+	warn_if_throttles_are_process_local()
 
 	settings = get_settings()
 

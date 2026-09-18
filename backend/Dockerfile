@@ -90,12 +90,14 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 
 # No --reload: that is a development-only flag.
 #
-# Two caveats when raising UVICORN_WORKERS:
-#   1. The auth rate limiter in backend/api/rate_limit.py keeps its counters in
-#      process memory, so N workers multiply the effective limit by N. See
-#      README section 7.7 before scaling this up.
-#   2. Each worker loads its own copy of the sentence-transformers and whisper
-#      models, so memory scales roughly linearly with worker count.
+# One caveat when raising UVICORN_WORKERS: each worker loads its own copy of the
+# sentence-transformers and whisper models, so memory scales roughly linearly
+# with worker count. On a 2 vCPU / 16 GB free tier that is the binding limit.
+#
+# The other caveat that used to live here — that the rate limiter keeps its
+# counters in process memory, so N workers multiply every limit by N — no longer
+# applies to this image, because RATE_LIMIT_BACKEND=mongo below shares them.
+# The backend warns at startup if that combination is ever reintroduced.
 ENV UVICORN_WORKERS=1
 
 # Rate limiting keys on the direct peer address, because backend/api/routes_auth.py
@@ -117,5 +119,14 @@ ENV UVICORN_WORKERS=1
 # Do not set "*" anywhere the container port is reachable directly, or the header
 # becomes forgeable again and the rate limit can be bypassed per request.
 ENV UVICORN_FORWARDED_ALLOW_IPS=127.0.0.1
+
+# Share rate limits and spend quotas through MongoDB rather than process memory.
+# The in-process store is correct for exactly one worker: with N workers each
+# keeps its own counters, so every configured limit is silently multiplied by N,
+# and a restart resets them all -- which matters because the quotas exist to
+# bound a Groq/Judge0 bill, and "wait for the next deploy" is not an obstacle.
+# Set here rather than defaulted in code so local development and the test suite
+# need no database.
+ENV RATE_LIMIT_BACKEND=mongo
 
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS} --proxy-headers --forwarded-allow-ips \"${UVICORN_FORWARDED_ALLOW_IPS}\""]

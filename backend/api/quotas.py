@@ -13,16 +13,17 @@ and an IP key would both punish shared networks and be trivially evaded.
 
 Scope and limitations
 ---------------------
-Counters live in this process's memory, inheriting the caveat documented in
-``rate_limit.py``: with N uvicorn workers the effective allowance is N times the
-configured value, and nothing is shared across instances. That is acceptable for
-bounding a runaway bill — the order of magnitude is what matters — but a
-multi-instance deployment that needs exact accounting should back these with
-Redis or enforce them at the gateway.
+Counters live wherever ``RATE_LIMIT_BACKEND`` points. With the default
+``memory`` store they are per-process, so with N uvicorn workers the effective
+allowance is N times the configured value and a restart clears them — which
+matters here more than for the auth throttles, because these exist to bound a
+bill. With ``mongo`` they are shared and durable. ``backend/Dockerfile`` sets
+``mongo``; see ``rate_limit.py`` for the trade-off.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from typing import Callable
@@ -30,7 +31,7 @@ from typing import Callable
 from fastapi import Depends, HTTPException, status
 
 from backend.api.auth import AuthenticatedUser, require_current_user
-from backend.api.rate_limit import FixedWindowRateLimiter, RateLimitExceeded
+from backend.api.rate_limit import RateLimiter, RateLimitExceeded, create_rate_limiter
 from backend.config import get_settings
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ VOICE = "voice"
 INTERVIEW_TURN = "interview_turn"
 
 _lock = threading.Lock()
-_limiters: dict[str, FixedWindowRateLimiter] = {}
+_limiters: dict[str, RateLimiter] = {}
 
 
 def _max_events_for(quota_name: str) -> int:
@@ -65,11 +66,11 @@ def _max_events_for(quota_name: str) -> int:
 	raise ValueError(f"Unknown quota name: {quota_name!r}")
 
 
-def _get_limiter(quota_name: str) -> FixedWindowRateLimiter:
+def _get_limiter(quota_name: str) -> RateLimiter:
 	with _lock:
 		limiter = _limiters.get(quota_name)
 		if limiter is None:
-			limiter = FixedWindowRateLimiter(
+			limiter = create_rate_limiter(
 				max_events=_max_events_for(quota_name),
 				window_seconds=get_settings().quotas.quota_window_seconds,
 			)
@@ -78,12 +79,21 @@ def _get_limiter(quota_name: str) -> FixedWindowRateLimiter:
 
 
 def reset_quotas() -> None:
-	"""Drop all cached quota limiters.
+	"""Clear all quota counters and drop the cached limiters.
 
 	Tests use this to get a clean slate and to pick up overridden settings.
+
+	Each limiter's own state is cleared before the registry is emptied. Dropping
+	the registry alone was a reset only for the in-process store; with the
+	MongoDB-backed store a rebuilt limiter reads the same collection, so the
+	counters would survive a "reset" and leak between tests.
 	"""
 
 	with _lock:
+		for limiter in _limiters.values():
+			# Best effort — see the equivalent note in routes_auth.
+			with contextlib.suppress(Exception):
+				limiter.clear()
 		_limiters.clear()
 
 

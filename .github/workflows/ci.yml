@@ -113,10 +113,28 @@ jobs:
       # to tests/ instead of the repository root, which puts tests/ on sys.path
       # in place of the root. On Windows that combination crashes the
       # interpreter outright — an access violation (0xC0000005) with zero
-      # output, not a test failure. With -t . the same suite reports 452
+      # output, not a test failure. With -t . the same suite reports 479
       # passing tests. This job had never run, so nothing caught it.
       - name: Run tests
         run: python -m unittest discover -s tests -t . -p "test_*.py" --verbose
+
+      # The suite again, with the throttle store the deployment actually uses.
+      # RATE_LIMIT_BACKEND defaults to 'memory' so contributors need no
+      # database, but backend/Dockerfile sets 'mongo' — so the default run
+      # exercises a configuration production does not use.
+      #
+      # This is not belt-and-braces. Switching the store broke five auth tests
+      # the first time, because `reset_auth_throttles()` dropped the cached
+      # limiter instead of clearing it: a fresh in-process instance starts
+      # empty, but a rebuilt MongoDB-backed one reads the same collection, so
+      # "reset" silently did nothing and state leaked between tests. A second
+      # run costs about a minute and catches exactly that class of divergence.
+      - name: Run tests against the shared throttle store
+        env:
+          RATE_LIMIT_BACKEND: mongo
+          MONGO_URI: mongodb://127.0.0.1:27017
+          MONGO_DB_NAME: interview_simulator_ci_throttles
+        run: python -m unittest discover -s tests -t . -p "test_*.py"
 
   frontend:
     name: Frontend build
