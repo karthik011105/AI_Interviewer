@@ -120,7 +120,8 @@ For normal checking, run:
 
 1. backend startup
 2. frontend tests and build (`npm test` then `npm run build`, Node 21+ — the
-   test script uses a glob that older Node passes through as a literal path)
+   test script uses a glob that older Node passes through as a literal path).
+   26 tests across 7 suites.
 3. the full backend suite via `scripts/run_tests`
 
 That combination shows the repository installs, compiles, and exercises the

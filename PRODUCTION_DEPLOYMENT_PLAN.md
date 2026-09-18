@@ -204,6 +204,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
 | 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
 | 2.12 | **Translate driver errors into the domain hierarchy at one boundary** | Found in Phase 1.8, and systemic. **46 handlers across 7 route modules** catch `DatabaseClientError`, but `MongoRepository` calls pymongo directly in most methods, so a raw `PyMongoError` escapes all of them. Measured: `AutoReconnect` (what an Atlas failover produces) and `ExecutionTimeout` (a slow query on a shared-tier cluster) each become a **500 instead of a 503**. Both are expected events on Atlas M0, which is the chosen deployment. The fix is one translation boundary in the repository, not 46 edits — extending the `DuplicateKeyError` translation added in Phase 1.2 to the rest of the driver's error tree |
+| 2.13 | **Stop sending the access token in the WebSocket URL** | Found in Phase 1.13. The browser cannot set headers on a WebSocket handshake, so the token rides in `?access_token=...` — and query strings are recorded by reverse-proxy and access logs, including the platform ingress the deployment sits behind. The JWT's 24-hour expiry means a token captured from a log stays valid for a day. Fix with a short-lived single-use ticket exchanged for the socket, or a much shorter TTL scoped to this path |
 
 ---
 
@@ -1721,3 +1722,113 @@ assessment cleared but DSA not. The operation is idempotent, so a retry
 completes it, and the alternative (a multi-document transaction) would require
 a replica set that the free-tier target may not provide. Acceptable, but worth
 knowing it is a deliberate trade rather than an oversight.
+
+---
+
+## 21. Change log — Phase 1.13, the frontend
+
+Completed 2026-09-18. Backend suite unchanged at **452**; frontend **19 → 26
+tests**. The largest single item in the audit (~13,600 lines) and the first one
+where changes landed in `frontend/`.
+
+### Defect 1 — no error boundary anywhere
+
+Across the whole frontend there was **not one** `ErrorBoundary`,
+`componentDidCatch`, or `getDerivedStateFromError`. React unmounts the entire
+tree when a render throws and nothing catches it, so any render-time exception
+produced a **white screen with no explanation**.
+
+The worst moment for that is mid-interview: a candidate answering questions
+loses the whole page with no indication of whether their answers were saved.
+Given Phase 1.7 established that a dropped socket can already lose an in-flight
+answer, "the page vanished and I don't know what survived" is a genuinely bad
+combination.
+
+Added `components/ErrorBoundary.jsx`, wired around `<App/>` in `main.jsx`
+(inside `BrowserRouter`, so its navigation has a router above it). It:
+
+- logs the exception **and** the component stack to the console, always —
+  a boundary that swallows the error turns a visible crash into an invisible
+  one, which is harder to diagnose, not easier;
+- tells the user their progress is stored server-side and that reloading should
+  restore it, which is true and is the single most useful thing to say;
+- offers reload and back-to-start, the two escapes that actually work;
+- shows the error message in a collapsed `<details>` rather than hiding it —
+  it is what a user pastes into a bug report and it is in the console anyway;
+- styles itself from the existing design tokens (`--surface`, `--border`,
+  `--accent`), so it matches the rest of the app rather than looking foreign;
+- exposes an `onError` hook, unused for now, so wiring frontend error tracking
+  in Phase 2.8 is additive rather than a refactor.
+
+It deliberately does **not** attempt to re-render the failed subtree. A
+component that just threw usually throws again, and a boundary that loops is
+worse than one that stops.
+
+**Verification, stated precisely:** the boundary's contract and its wiring are
+verified structurally — it extends `React.Component`, implements both required
+lifecycle methods, returns `children` when there is no error, renders
+`role="alert"`, logs, and is mounted around `<App/>`. A *live* render test
+(throwing child, asserting the fallback appears) needs a DOM environment, and
+the project has no `jsdom` dev dependency. I did not add one rather than
+quietly expand the test toolchain, so this is the one change in the audit whose
+runtime behaviour is argued rather than executed. Adding `jsdom` and a real
+mount test is a small, worthwhile follow-up.
+
+### Defect 2 — a byte-identical duplicate of the socket URL builder
+
+`resolveInterviewSocketUrl` existed twice: exported from
+`interview/useInterviewSocket.js` and copied verbatim into
+`interview/ScriptedInterview.jsx`. The two were **still identical**, so nothing
+was broken yet — but this function decides the WebSocket scheme, and a fix
+applied to one copy would silently miss the other.
+
+`ScriptedInterview.jsx` now imports the exported one and the duplicate is gone.
+
+Seven tests now cover it, focused on the part that only fails in production: a
+page served over HTTPS **cannot** open a `ws://` socket, because browsers block
+it as mixed content. Local development runs on plain HTTP where `ws://` is
+correct, so this bug is invisible locally by construction — and the deployment
+puts the frontend on Cloudflare Pages and the API on Hugging Face Spaces, both
+HTTPS. The tests also pin base-path preservation, percent-encoding of the
+session id and round, and that a stray query or fragment in
+`VITE_API_BASE_URL` is discarded rather than riding along with the token.
+
+### Phase 1.8's open question: resolved, and the answer is good
+
+Phase 1.8 established that a partial round reports the mean over **answered**
+questions, and left open whether the UI makes that honest. It does:
+
+| Card | Content |
+|---|---|
+| Round Score | value, subtitled "Average score across the saved answers in this round." |
+| Answers Logged | `responseCount / totalQuestions` as a ratio, immediately beside it |
+
+It goes further than required — when the backend flags
+`response_count_source: "progress_fallback"`, the card relabels to "Progress"
+and says the per-answer detail is unavailable, rather than presenting an
+estimate as a measurement. The score is never shown as a bare number divorced
+from how much of the round it covers. No change needed.
+
+### A finding for Phase 2, not fixed here
+
+**The access token is sent as a WebSocket URL query parameter**
+(`?access_token=...`). Browsers cannot set custom headers on a WebSocket
+handshake, so this is the common workaround — but query strings are recorded in
+reverse-proxy and access logs, and the deployment sits behind Hugging Face
+Spaces' ingress. The JWT has a **24-hour** expiry, so a token captured from a
+log line stays valid for up to a day.
+
+The standard mitigations are a short-lived single-use ticket exchanged for the
+socket, or a much shorter token TTL for this path. Both are design changes to
+the auth flow rather than bug fixes, so this is recorded as **Phase 2.13**
+rather than changed mid-audit.
+
+### What was verified as already correct
+
+- **The WSS upgrade itself is right:** `url.protocol === "https:" ? "wss:" : "ws:"`.
+  The scheme follows the API's, which is what mixed-content rules require.
+- **`VITE_API_BASE_URL` has a sane local default** and is read consistently in
+  both `App.jsx` and `authClient.js`.
+- **Route-level code splitting is in place** — `ReportPage`, `DSAPage`,
+  `InterviewPage` and others are separate chunks, so the 437 KB interview bundle
+  is not paid for on first load.

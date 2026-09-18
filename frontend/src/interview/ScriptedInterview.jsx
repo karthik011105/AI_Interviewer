@@ -4,6 +4,7 @@ import { MicVAD, utils } from "@ricky0123/vad-web";
 import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
+import { resolveInterviewSocketUrl } from "./useInterviewSocket";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
 const MAX_CLARIFICATIONS_PER_QUESTION = 2;
@@ -164,17 +165,6 @@ function getTierSortIndex(value) {
 	const normalized = String(value || "").trim().toLowerCase();
 	const index = TECHNICAL_TIER_ORDER.indexOf(normalized);
 	return index === -1 ? TECHNICAL_TIER_ORDER.length : index;
-}
-
-function resolveInterviewSocketUrl(baseUrl, sessionId, roundType, accessToken) {
-	const url = new URL(trimSlash(baseUrl || API_DEFAULT));
-	const normalizedPath = url.pathname.replace(/\/+$/, "");
-	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-	url.pathname = `${normalizedPath}/interview/ws/${encodeURIComponent(sessionId)}/${encodeURIComponent(roundType)}`;
-	url.search = "";
-	url.hash = "";
-	url.searchParams.set("access_token", accessToken);
-	return url.toString();
 }
 
 function countQuestionsInRoundSession(roundSession, roundType) {
