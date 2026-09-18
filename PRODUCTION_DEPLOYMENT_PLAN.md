@@ -202,6 +202,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.8 | **Turn on error tracking** | Sentry is wired and inert without `SENTRY_DSN` (§26). Set it for the deployment so production errors are visible |
 | 2.9 | **Data lifecycle** | Atlas M0 is 512 MB. Resume text, transcripts, and reports accumulate. Needs TTL indexes or a retention policy, plus a backup/export path |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
+| 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
 
 ---
 
@@ -1144,3 +1145,125 @@ candidate has already answered and orphan their recorded responses. Left alone.
 Reverting them produced 5 failures in `test_conversation_memory` and 5 in
 `test_question_generator_skill_profile`, in exactly the new tests, before
 restoring.
+
+---
+
+## 16. Change log — Phase 1.7, interview runtime and WebSocket
+
+Completed 2026-09-18. Suite: **404 → 414 tests**, all passing.
+
+### The finding: no middleware protects the interview socket
+
+Every middleware in this application is a `BaseHTTPMiddleware` subclass, and
+those **never see a websocket scope**. Verified against the live stack:
+
+| Middleware | Sees websockets? |
+|---|---|
+| `CORSMiddleware` | yes |
+| `RequestIdMiddleware` | no |
+| `RequestMetricsMiddleware` | no |
+| `ErrorHandlingMiddleware` | **no** |
+
+So the catch-all added in Phase 1.1 does not apply here, and neither do the
+request metrics from §27. The handler was solely responsible for reporting and
+for being observable — and it did neither.
+
+It caught exactly two exception types. For anything else, driving the real
+handler with a fake socket showed:
+
+| Exception | Frame sent | `close()` called | Escaped handler |
+|---|---|---|---|
+| `WebSocketInterviewError` | yes, with detail | 1008 | no |
+| `DatabaseClientError` | **none** | **never** | **yes** |
+| `ConcurrentUpdateError` | **none** | **never** | **yes** |
+| `ValueError` (an ordinary bug) | **none** | **never** | **yes** |
+
+The socket had already been accepted, so mid-interview a MongoDB blip, two tabs
+racing one round, or any bug dropped the candidate with an abrupt 1006 and
+nothing to show them. `DatabaseClientError` and `RecordNotFoundError` were even
+imported into the module, which reads like an intention to handle them that was
+never finished.
+
+And because the metrics middleware cannot see this route, **the single most
+important user-facing flow in the application was the one flow with no metrics
+at all.** A week of failing interviews would leave no trace in
+`http_requests_total`.
+
+Fixed with a catch-all that logs the exception with a traceback, sends a generic
+error frame, and closes with **1011** rather than 1008 — "internal error", not
+"policy violation", which is what 1008 means and is right for a rejected round
+type but wrong for an outage. The message is deliberately generic, with the
+detail going to the log: a test asserts a connection string in the exception
+does not reach the candidate.
+
+Plus a new `interview_ws_sessions_total{round, outcome}` counter, with outcomes
+`completed`, `client_disconnect`, `rejected`, `already_complete`, and `error`.
+Rejections and errors are counted separately on purpose — otherwise a spike in
+"my session was not found" would be indistinguishable from a spike in real
+failures. `round` is closed to three values by the route, so it cannot become
+the unbounded label that makes a metrics endpoint fall over.
+
+One subtlety worth recording: the `already_complete` outcome is counted
+explicitly rather than left to the `else` clause, because a `return` inside a
+`try` skips `else` entirely, and reconnecting to a finished round would
+otherwise have been missing from the counter.
+
+### Dead code removed, and what that surfaced
+
+14 of the module's 34 imports were unused — residue from the refactor that moved
+transport into `interview_runtime.py` and per-round behaviour into
+`interview_engines/`.
+
+Removing them **broke three tests**, which is the interesting part. They did
+`from backend.api.ws_interview import _quota_blocked`, reaching through this
+module for a function that actually lives in `interview_runtime.py`. The unused
+import was acting as an accidental re-export, and the tests had come to depend
+on it.
+
+The tests were repointed at the real home rather than the import being restored.
+Worth noting as a hazard: "unused import" is a claim about the module, not about
+the repository, and a test can quietly make dead code load-bearing.
+
+### What was verified as already correct
+
+- **The §23 WebSocket quota metering is real and complete.** `INTERVIEW_TURN` is
+  charged at all three engine turn paths (two dynamic, one scripted), and
+  `VOICE` at both the synthesis and the transcription paths — six sites, sharing
+  one allowance with the equivalent REST routes.
+- **An exhausted quota does not tear down the socket.** It sends an error frame
+  and returns the runtime to listening, so a candidate mid-interview is not
+  disconnected because a budget rolled over. That was §23's stated intent and it
+  holds.
+- **An unsupported round type is refused before `accept()`.** Nothing is
+  accepted for a round that does not exist.
+- **A clean client disconnect is not reported as an error**, and now has its own
+  counter outcome.
+- **Cleanup runs on every path.** The `finally` cancels any in-flight turn
+  commit and stops TTS regardless of how the handler exits.
+- **Reconnect and resume work** for a conversational round — established in
+  Phase 1.2, where the `_load_or_create_round_session` guard was confirmed to be
+  a genuine XOR that returns the existing record rather than rebuilding it.
+
+### A real risk, documented rather than half-fixed
+
+`_transcribe_captured_audio` consumes the captured audio **immediately**:
+
+```python
+pcm_blob = b"".join(runtime.pending_pcm_frames)
+runtime.reset_audio_capture()
+```
+
+And the socket handler's `finally` cancels the turn-commit task. Together that
+means a disconnect during the 1.5-second end-of-turn grace, or during
+transcription and scoring, **loses that answer**: the audio is already cleared,
+so there is nothing to retry from. If the cancellation lands between persisting
+the response and advancing the question index, the candidate can also be
+re-asked a question that already has a recorded answer.
+
+I have not changed this, deliberately. Fixing it properly means choosing between
+disconnect latency and durability — most likely shielding the commit once
+transcription has begun, the way `_stop_tts` already shields its task, and making
+the persist step idempotent so a retry cannot double-record. Both are design
+decisions about what a dropped connection should mean mid-answer, not bug fixes,
+and they want the engine code in scope. It belongs in Phase 2 alongside the other
+state-durability work, and it is listed there now.

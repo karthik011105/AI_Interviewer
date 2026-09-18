@@ -266,7 +266,7 @@ class QuotaBlockedBehaviourTests(IsolatedAsyncioTestCase):
 		return FakeRuntime()
 
 	async def test_allows_calls_within_the_allowance(self) -> None:
-		from backend.api.ws_interview import _quota_blocked
+		from backend.api.interview_runtime import _quota_blocked
 
 		runtime = self._runtime()
 		self.assertFalse(await _quota_blocked(runtime, INTERVIEW_TURN))
@@ -274,7 +274,7 @@ class QuotaBlockedBehaviourTests(IsolatedAsyncioTestCase):
 		self.assertEqual(runtime.sent, [], "no error frame should be sent while under quota")
 
 	async def test_blocks_and_reports_once_exhausted(self) -> None:
-		from backend.api.ws_interview import _quota_blocked
+		from backend.api.interview_runtime import _quota_blocked
 
 		runtime = self._runtime()
 		await _quota_blocked(runtime, INTERVIEW_TURN)
@@ -294,7 +294,7 @@ class QuotaBlockedBehaviourTests(IsolatedAsyncioTestCase):
 
 	async def test_refusal_keeps_the_socket_usable(self) -> None:
 		"""A spent quota must not tear down a live interview."""
-		from backend.api.ws_interview import _quota_blocked
+		from backend.api.interview_runtime import _quota_blocked
 
 		runtime = self._runtime()
 		runtime.state = "EVALUATING"

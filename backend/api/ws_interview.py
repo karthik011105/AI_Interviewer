@@ -10,41 +10,36 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from typing import Any
+import logging
 
 from anyio import ClosedResourceError
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.api.interview_engines import select_engine
 from backend.api.interview_runtime import (
-	_MIC_SAMPLE_RATE,
 	InterviewRuntime,
 	WebSocketInterviewError,
 	_authenticate_websocket_user,
 	_cancel_turn_commit,
 	_handle_audio_frame,
-	_handle_speech_end,
-	_handle_speech_start,
-	_iter_prompt_sentences,
 	_load_or_create_round_session,
 	_load_parent_session,
-	_quota_blocked,
 	_stop_tts,
-	_transcribe_captured_audio,
-	speak_stream,
 )
 from backend.api.auth import ensure_session_access
 from backend.api.routes_interview import _fetch_round_responses, _total_question_count
-from backend.database.db_errors import DatabaseClientError, RecordNotFoundError
-from backend.nlp.question_generator import (
-	QuestionGeneratorLlmError,
-	QuestionGeneratorUnavailableError,
-)
-from backend.voice.tts import TTSSynthesisError, synthesize_detailed
+from backend.metrics import interview_ws_sessions_total
 
 router = APIRouter(prefix="/interview", tags=["interview"])
 
+_LOGGER = logging.getLogger(__name__)
+
 _VALID_ROUNDS = {"hr", "technical", "project_discussion"}
+
+# WebSocket close code for "the server hit an unexpected condition". 1008 is
+# "policy violation", which is right for a rejected round type or a session the
+# caller may not touch, but wrong for a database outage or a bug.
+_WS_INTERNAL_ERROR = 1011
 
 
 @router.websocket("/ws/{session_id}/{round_type}")
@@ -124,6 +119,13 @@ async def interview_websocket(
 					"round_session": round_record,
 				}
 			)
+			# Counted here rather than left to the `else` clause below: a
+			# `return` inside a `try` skips `else` entirely, so reconnecting to
+			# an already-finished round would otherwise be missing from the
+			# counter despite being a perfectly normal outcome.
+			interview_ws_sessions_total.labels(
+				round=round_type, outcome="already_complete"
+			).inc()
 			return
 
 		await runtime.engine.start(runtime)
@@ -145,12 +147,50 @@ async def interview_websocket(
 				payload = {"type": text_payload}
 			await runtime.engine.handle_control(runtime, payload)
 	except WebSocketDisconnect:
+		interview_ws_sessions_total.labels(
+			round=round_type, outcome="client_disconnect"
+		).inc()
 		return
 	except WebSocketInterviewError as exc:
+		interview_ws_sessions_total.labels(round=round_type, outcome="rejected").inc()
 		with contextlib.suppress(RuntimeError):
 			await websocket.send_json({"type": "error", "code": "session_error", "message": str(exc)})
 		with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
 			await websocket.close(code=1008, reason=str(exc))
+	except Exception as exc:
+		# Everything that is not a clean disconnect or a rejection the candidate
+		# can act on. Before this existed, such an exception escaped the handler
+		# entirely: the socket had been accepted, no frame was sent, close() was
+		# never called, and the browser saw an abrupt 1006 with nothing to show
+		# the candidate. Verified for DatabaseClientError, ConcurrentUpdateError
+		# (two tabs racing one round), and a plain ValueError.
+		#
+		# It is also invisible: every other middleware in this app is a
+		# BaseHTTPMiddleware subclass, and those never see a websocket scope, so
+		# neither the catch-all handler nor the request metrics apply here. This
+		# handler is the only place that can log or count a failed interview.
+		#
+		# The message is deliberately generic — the detail goes to the log, not
+		# to the candidate — but a frame is sent, because "something broke, this
+		# is not your fault" is far better than a socket that simply dies.
+		interview_ws_sessions_total.labels(round=round_type, outcome="error").inc()
+		_LOGGER.exception(
+			"Unhandled error in interview websocket for session %s round %s",
+			session_id,
+			round_type,
+		)
+		with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
+			await websocket.send_json(
+				{
+					"type": "error",
+					"code": "internal_error",
+					"message": "The interview service hit an unexpected error. Please reconnect.",
+				}
+			)
+		with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
+			await websocket.close(code=_WS_INTERNAL_ERROR, reason="Internal error.")
+	else:
+		interview_ws_sessions_total.labels(round=round_type, outcome="completed").inc()
 	finally:
 		if runtime is not None:
 			with contextlib.suppress(RuntimeError, WebSocketDisconnect, asyncio.CancelledError):

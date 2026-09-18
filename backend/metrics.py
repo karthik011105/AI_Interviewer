@@ -49,6 +49,21 @@ judge0_request_duration_seconds = Histogram(
 	"Judge0 API call latency in seconds.",
 )
 
+# The interview WebSocket needs its own counter because it cannot reuse the
+# HTTP ones. RequestMetricsMiddleware is a BaseHTTPMiddleware subclass, and
+# those never see a websocket scope — so a live interview that fails is
+# completely absent from http_requests_total. Without this, the single most
+# important user-facing flow in the application was the one flow with no
+# metrics at all.
+#
+# `round` is bounded to hr / technical / project_discussion by the route, so it
+# cannot become an unbounded label the way a session id would.
+interview_ws_sessions_total = Counter(
+	"interview_ws_sessions_total",
+	"Interview WebSocket sessions, by round and how the session ended.",
+	["round", "outcome"],  # completed | client_disconnect | rejected | error
+)
+
 __all__ = [
 	# The two HTTP metrics were missing from this list even though
 	# backend/main.py imports them by name. Importing by name works either
@@ -56,6 +71,7 @@ __all__ = [
 	# exports was told the wrong answer.
 	"http_requests_total",
 	"http_request_duration_seconds",
+	"interview_ws_sessions_total",
 	"groq_requests_total",
 	"groq_request_duration_seconds",
 	"judge0_requests_total",
