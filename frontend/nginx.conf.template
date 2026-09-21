@@ -1,0 +1,92 @@
+# Rendered to /etc/nginx/conf.d/default.conf at container start by the official
+# nginx image's envsubst step (see /etc/nginx/templates in frontend/Dockerfile).
+# Only variables matching NGINX_ENVSUBST_FILTER are substituted, which is pinned
+# to ^CSP_ so nginx's own $uri / $host are never touched.
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ------------------------------------------------------------------
+    # Security headers
+    # ------------------------------------------------------------------
+    # READ THIS BEFORE EDITING. nginx's add_header is NOT inherited into a
+    # child block that declares an add_header of its own — it *replaces* the
+    # inherited set. Two location blocks below set Cache-Control, so headers
+    # declared only here would silently not apply to /assets/ or /index.html:
+    # every script, stylesheet, and the HTML document itself would be served
+    # with no security headers at all, while a spot check of "/" looked fine.
+    #
+    # That is why the identical block is repeated in those two locations. The
+    # repetition is deliberate; do not "tidy" it away.
+    #
+    # `always` makes them apply to error responses too, not just 2xx/3xx.
+
+    # Stops a browser from MIME-sniffing a response into something executable.
+    add_header X-Content-Type-Options "nosniff" always;
+    # Referrers leak the full URL of the page a user came from. Same-origin
+    # keeps the path; cross-origin sends only the origin.
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # Clickjacking. frame-ancestors in the CSP below is the modern equivalent,
+    # but this is still honoured by older browsers.
+    add_header X-Frame-Options "DENY" always;
+    # The interview needs the microphone, so it is allowed for this origin and
+    # denied to any embedded frame. Everything else is switched off rather than
+    # left at the browser default.
+    add_header Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=(), usb=()" always;
+    # HSTS. Harmless when the container is reached over plain HTTP behind a
+    # TLS-terminating proxy, because browsers ignore it on non-HTTPS responses.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header ${CSP_HEADER_NAME} "${CSP_POLICY}" always;
+
+    # React Router uses client-side routing, so a deep link such as
+    # /technical-interview has no matching file on disk. Without this fallback a
+    # page refresh on any route other than "/" would return 404.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Vite emits content-hashed filenames for everything under /assets, so those
+    # are safe to cache indefinitely. index.html must never be cached, otherwise
+    # clients keep loading an old bundle after a deploy.
+    location /assets/ {
+        # Set Cache-Control once. Using `expires 1y` here as well would emit a
+        # second, separate Cache-Control header, which browsers handle
+        # inconsistently.
+        add_header Cache-Control "public, max-age=31536000, immutable";
+
+        # Repeated because this block declares an add_header — see the note at
+        # the top of this file.
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=(), usb=()" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header ${CSP_HEADER_NAME} "${CSP_POLICY}" always;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+
+        # Repeated for the same reason. This one matters most: it is the
+        # document the policy actually governs.
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "microphone=(self), camera=(), geolocation=(), payment=(), usb=()" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header ${CSP_HEADER_NAME} "${CSP_POLICY}" always;
+    }
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # The API lives on a separate origin and is called directly by the browser
+    # using VITE_API_BASE_URL, so no proxy block is defined here. If you prefer
+    # same-origin API calls, add a `location /api/` proxy_pass block and build
+    # the frontend with VITE_API_BASE_URL=/api.
+}

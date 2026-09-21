@@ -196,7 +196,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.2 | ~~**Split `/health` from `/ready`**~~ | **Done** — see §25. `/ready` pings Mongo and returns 503 when it is unreachable; `/health` stays dependency-free because the container HEALTHCHECK uses it. Judge0 deliberately not probed |
 | 2.3 | ~~**Protect `/metrics`**~~ | **Done** — see §25. Bearer token via `METRICS_TOKEN`, 404 (not 403) when unauthorized, `METRICS_PUBLIC` to opt out. `/health` filename disclosure removed too |
 | 2.4 | **Choose and wire a real email provider** | `EMAIL_PROVIDER=console` means password reset writes to a log instead of sending mail. The reset flow is built (§28) but is not functional in production until this is set |
-| 2.5 | **Security headers and TLS** | Review `frontend/nginx.conf` for CSP, HSTS, `X-Content-Type-Options`, `Referrer-Policy`. Confirm the deployed frontend is HTTPS-only and the socket is WSS |
+| 2.5 | ~~**Security headers**~~ | **Done** — see §26. Five headers enforced on every path, verified against a running container. CSP ships report-only pending a browser session. TLS itself is a Phase 3 deployment step |
 | 2.6 | **Secrets** | Rotate the Judge0 Postgres/Redis passwords committed in `1f249f5` (§22.3) before anything is public. Decide explicitly whether to rewrite history; that needs a force-push, and a `backup-before-rewrite` branch already exists |
 | 2.7 | **Slim the image** | Drop the 63 MB piper voice if piper is not installed (0.2), and purge it from history in the same rewrite as 2.6 if we do one |
 | 2.8 | **Turn on error tracking** | Sentry is wired and inert without `SENTRY_DSN` (§26). Set it for the deployment so production errors are visible |
@@ -205,6 +205,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
 | 2.12 | **Translate driver errors into the domain hierarchy at one boundary** | Found in Phase 1.8, and systemic. **46 handlers across 7 route modules** catch `DatabaseClientError`, but `MongoRepository` calls pymongo directly in most methods, so a raw `PyMongoError` escapes all of them. Measured: `AutoReconnect` (what an Atlas failover produces) and `ExecutionTimeout` (a slow query on a shared-tier cluster) each become a **500 instead of a 503**. Both are expected events on Atlas M0, which is the chosen deployment. The fix is one translation boundary in the repository, not 46 edits — extending the `DuplicateKeyError` translation added in Phase 1.2 to the rest of the driver's error tree |
 | 2.13 | **Stop sending the access token in the WebSocket URL** | Found in Phase 1.13. The browser cannot set headers on a WebSocket handshake, so the token rides in `?access_token=...` — and query strings are recorded by reverse-proxy and access logs, including the platform ingress the deployment sits behind. The JWT's 24-hour expiry means a token captured from a log stays valid for a day. Fix with a short-lived single-use ticket exchanged for the socket, or a much shorter TTL scoped to this path |
+| 2.14 | **Self-host Monaco instead of loading it from a CDN** | Found in Phase 2.5. `CodeEditor.jsx` never calls `loader.config()`, so `@monaco-editor/react` fetches the editor from `cdn.jsdelivr.net` at runtime — confirmed in the shipped bundle. The DSA editor therefore breaks wherever that CDN is unreachable, and `script-src` must permit a third-party origin for the whole app. Point `loader.config()` at a local copy and have Vite emit the assets |
 
 ---
 
@@ -2185,3 +2186,109 @@ passes after the thing it protects has changed underneath it.
 493 under both `RATE_LIMIT_BACKEND=memory` and `mongo`. `docker compose config`
 validates, and both new variables are wired through compose and documented in
 `.env.example` alongside a note on which endpoint a probe should use.
+
+---
+
+## 26. Change log — Phase 2.5, security headers
+
+Completed 2026-09-19. No test-count change: this is nginx configuration, and it
+was verified by **building the image and curling a running container** rather
+than by unit test.
+
+### The starting point
+
+`frontend/nginx.conf` set **no security headers at all** — no CSP, HSTS,
+`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, or
+`Permissions-Policy`.
+
+### The trap that made this less trivial than it looks
+
+nginx's `add_header` is **not inherited** into a child block that declares an
+`add_header` of its own — it replaces the inherited set. Two location blocks
+here set `Cache-Control`:
+
+- `location /assets/` — every script and stylesheet
+- `location = /index.html` — the document the policy actually governs
+
+So headers declared only at `server` level would have applied to essentially
+nothing that matters, while a spot check of `/` looked perfectly fine. The
+block is therefore repeated in both locations, with a comment saying the
+repetition is deliberate.
+
+### Verified against a running container, every path
+
+The image was built and exercised with `curl`:
+
+| Path | Security headers | Cache-Control |
+|---|---|---|
+| `/` | all 6 | `no-cache, no-store` |
+| `/index.html` | all 6 | `no-cache, no-store` |
+| `/assets/index-*.js` | all 6 | `public, max-age=31536000, immutable` |
+| `/technical-interview` (SPA fallback) | all 6 | `no-cache, no-store` |
+
+Headers shipped: `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,
+`Permissions-Policy` (microphone allowed for self — the interview needs it —
+everything else off), `Strict-Transport-Security`, and the CSP. All use
+`always`, so they apply to error responses too.
+
+**Honest note on the negative control:** I twice tried to demonstrate the
+inheritance trap empirically — once with a variant image, once with a minimal
+bind-mounted config — and neither produced a valid control (the template did
+not render in the first, the bind mount did not take under Docker Desktop in
+the second). The positive case is thoroughly verified; the inheritance rule
+itself is documented nginx behaviour that I did **not** independently
+demonstrate here.
+
+### The CSP was derived from the bundle, not from a template
+
+Reading what the built output actually loads changed the policy materially:
+
+| Requirement | Why |
+|---|---|
+| `script-src https://cdn.jsdelivr.net` | **Monaco is fetched from a CDN at runtime** (below) |
+| `'wasm-unsafe-eval'` | onnxruntime, behind the browser-side Silero VAD, compiles WebAssembly — without it the microphone path dies |
+| `style-src 'unsafe-inline' https://fonts.googleapis.com` | `styles.css` `@import`s Google Fonts; React inline styles (including the new error boundary) are inline by construction |
+| `font-src https://fonts.gstatic.com` | where Google Fonts actually serves the files |
+| `worker-src blob:` | Monaco creates workers from blob URLs |
+| `media-src blob:` | interview audio playback |
+
+### It ships report-only, deliberately
+
+An enforcing CSP that is even slightly wrong breaks the app **silently in a
+browser**, and this policy has not been exercised against a real session with
+the editor and microphone in use. Report-only surfaces the same violations in
+the console so it can be tuned against real traffic first. Switching is one
+environment variable, and Phase 3.7's live smoke test is the natural place to
+do it.
+
+The config is now an nginx **template**, rendered by the official image's
+envsubst step, so a deployment can put its real API origin in `connect-src`
+without rebuilding. `NGINX_ENVSUBST_FILTER=^CSP_` restricts substitution to
+CSP variables so nginx's own `$uri` is never a candidate — verified by
+confirming the SPA deep-link fallback still returns 200, which depends on
+`try_files $uri`. Both the enforcing mode and a deployment-specific
+`connect-src` were confirmed to take effect at container start.
+
+### A finding worth more than the headers: Monaco loads from a third-party CDN
+
+`monaco-editor` is a declared dependency, but `CodeEditor.jsx` uses
+`@monaco-editor/react` without calling `loader.config()`. The default is to
+fetch the editor from `https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs`
+**at runtime**. Confirmed in the shipped bundle.
+
+Two consequences:
+
+1. **Availability.** The DSA round's code editor breaks if jsdelivr is
+   unreachable — which includes corporate networks that block public CDNs.
+   Nothing in the app degrades gracefully for that.
+2. **Supply chain.** Executable code is fetched from a third party on every
+   session, and `script-src` has to permit that origin, which weakens the
+   policy for the whole application.
+
+The fix is to self-host: point `loader.config()` at a local copy and have Vite
+emit `monaco-editor`'s assets. That is a build change needing browser
+verification, so it is **not** done here. Recorded as **Phase 2.14**.
+
+TLS itself is not a code change — the platform terminates it — so it stays part
+of the Phase 3 deployment steps.
