@@ -26,6 +26,7 @@ from backend.logging_config import (
 )
 from backend.metrics import http_request_duration_seconds, http_requests_total
 from backend.api.rate_limit import warn_if_throttles_are_process_local
+from backend.email_provider import validate_email_configuration
 from backend.api.routes_assessment import router as assessment_router
 from backend.api.routes_auth import router as auth_router
 from backend.api.routes_dsa import router as dsa_router
@@ -271,6 +272,7 @@ def create_app() -> FastAPI:
 	# a docstring, which is exactly the wrong place for it to be noticed.
 	warn_if_throttles_are_process_local()
 	warn_if_metrics_are_public()
+	validate_email_configuration()
 
 	settings = get_settings()
 

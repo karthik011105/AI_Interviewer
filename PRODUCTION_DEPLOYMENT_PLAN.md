@@ -195,7 +195,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.1 | ~~**Move rate limits and quotas into MongoDB**~~ | **Done** — see §24. Shared, durable, atomic. `RATE_LIMIT_BACKEND=mongo` set in the image; memory stays the default so local runs need no database |
 | 2.2 | ~~**Split `/health` from `/ready`**~~ | **Done** — see §25. `/ready` pings Mongo and returns 503 when it is unreachable; `/health` stays dependency-free because the container HEALTHCHECK uses it. Judge0 deliberately not probed |
 | 2.3 | ~~**Protect `/metrics`**~~ | **Done** — see §25. Bearer token via `METRICS_TOKEN`, 404 (not 403) when unauthorized, `METRICS_PUBLIC` to opt out. `/health` filename disclosure removed too |
-| 2.4 | **Choose and wire a real email provider** | `EMAIL_PROVIDER=console` means password reset writes to a log instead of sending mail. The reset flow is built (§28) but is not functional in production until this is set |
+| 2.4 | ~~**Make email delivery production-safe**~~ | **Done in code** — see §28. TLS now actually verifies certificates, port 465 works, and misconfiguration warns at startup. **Choosing the provider and supplying credentials is yours** |
 | 2.5 | ~~**Security headers**~~ | **Done** — see §26. Five headers enforced on every path, verified against a running container. CSP ships report-only pending a browser session. TLS itself is a Phase 3 deployment step |
 | 2.6 | **Secrets** | Rotate the Judge0 Postgres/Redis passwords committed in `1f249f5` (§22.3) before anything is public. Decide explicitly whether to rewrite history; that needs a force-push, and a `backup-before-rewrite` branch already exists |
 | 2.7 | **Slim the image** | Drop the 63 MB piper voice if piper is not installed (0.2), and purge it from history in the same rewrite as 2.6 if we do one |
@@ -2395,3 +2395,65 @@ they are unrelated to this change — the work here was verified against a real
 MongoDB, with the cap proven non-vacuous by removing it and watching four tests
 fail. Worth flagging rather than reporting "499 passing" and leaving the skips
 unmentioned.
+
+---
+
+## 28. Change log — Phase 2.4, email delivery
+
+Completed 2026-10-06. Suite: **499 → 516 tests** (3 Judge0 tests skipping while
+Docker Desktop is stopped, as in §27).
+
+The SMTP provider already existed, so this phase was hardening rather than
+integration. Three defects, one of them a security hole.
+
+### Defect 1 — TLS was decorative
+
+`starttls()` and `SMTP_SSL` were called without a context, and smtplib's default
+is `ssl._create_stdlib_context()`, which verifies **neither the certificate nor
+the hostname**. Confirmed by inspecting the stdlib, then demonstrated: a local
+SMTP server on implicit TLS presenting a **self-signed certificate** — exactly
+what an on-path attacker would present.
+
+| Code | Result against the forged certificate |
+|---|---|
+| Previous default (no context) | **delivered** the message — token included |
+| Now (`ssl.create_default_context()`) | refused: `CERTIFICATE_VERIFY_FAILED`, 0 messages received |
+
+The message is a password-reset link, so this was a credential handed to anyone
+able to intercept the connection. There is deliberately no setting to disable
+verification.
+
+### Defect 2 — port 465 hung
+
+Implicit TLS needs `SMTP_SSL`; the code always opened plaintext `SMTP` and then
+issued STARTTLS, which a port-465 server never answers. Several free providers
+document 465 first (Resend among them). `SMTP_SECURITY` (`starttls` | `ssl` |
+`none`) now selects the mode, defaulting to `ssl` on 465 and `starttls`
+otherwise. The legacy `SMTP_USE_TLS=false` still means `none`.
+
+### Defect 3 — every misconfiguration was silent
+
+Forgot-password returns an identical response whether or not delivery worked —
+correctly, since anything else reveals which addresses have accounts. The cost
+is that a wrong or missing provider produced **no error anywhere**: users are
+told to check their inbox and nothing arrives. `validate_email_configuration()`
+now runs at startup and warns about: `console` with `APP_ENV=production`, an
+unrecognised provider, SMTP without a host, an invalid port or security mode, a
+username without a password, and unencrypted SMTP in production.
+
+### Verification
+
+17 tests in `tests/test_email_provider.py`, including assertions that both the
+STARTTLS and implicit-TLS paths receive a context with `CERT_REQUIRED` and
+hostname checking. Removing the verifying context fails both of those, so they
+are not vacuous. All 72 existing auth tests, which exercise the reset flow,
+still pass.
+
+### What remains yours
+
+Choosing a provider and supplying credentials. `.env.example` lists three free
+options with their SMTP endpoints (Brevo ~300/day, Resend ~3,000/month, Gmail
+with an App Password for low volume). Whichever you pick, the From address must
+be on a sender the provider has verified, or mail is rejected or filtered — and
+a real send from the deployed backend belongs in Phase 3.7's smoke test, since
+that is the only check that proves the whole path end to end.
