@@ -93,7 +93,16 @@ def build_dsa_question_report(
 		question_score = _coerce_numeric(resolved_evaluation.get("pass_ratio"))
 	if question_score is not None:
 		question_score = round(question_score, 4)
-	submission_count = len(record.get("all_code_submissions") or [])
+	# Prefer the stored counter: all_code_submissions is trimmed to the most
+	# recent few, so its length understates how many attempts were actually
+	# made. Falls back to the list length for records written before the
+	# counter existed.
+	stored_count = record.get("submission_count")
+	submission_count = (
+		int(stored_count)
+		if isinstance(stored_count, (int, float))
+		else len(record.get("all_code_submissions") or [])
+	)
 	strengths: list[str] = []
 	risks: list[str] = []
 	recommendations: list[str] = []

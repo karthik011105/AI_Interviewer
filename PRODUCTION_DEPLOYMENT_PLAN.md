@@ -200,7 +200,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.6 | **Secrets** | Rotate the Judge0 Postgres/Redis passwords committed in `1f249f5` (§22.3) before anything is public. Decide explicitly whether to rewrite history; that needs a force-push, and a `backup-before-rewrite` branch already exists |
 | 2.7 | **Slim the image** | Drop the 63 MB piper voice if piper is not installed (0.2), and purge it from history in the same rewrite as 2.6 if we do one |
 | 2.8 | **Turn on error tracking** | Sentry is wired and inert without `SENTRY_DSN` (§26). Set it for the deployment so production errors are visible |
-| 2.9 | **Data lifecycle** | Atlas M0 is 512 MB. Resume text, transcripts, and reports accumulate. Needs TTL indexes or a retention policy, plus a backup/export path |
+| 2.9 | ~~**Data lifecycle**~~ | **Partly done** — see §27. The hard failure is fixed: DSA submissions were unbounded against MongoDB's 16 MB document limit. Retention is now a tool (`scripts/prune_old_sessions.py`), not an imposed policy — the window is your call. A backup/export path is still open |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
 | 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
 | 2.12 | **Translate driver errors into the domain hierarchy at one boundary** | Found in Phase 1.8, and systemic. **46 handlers across 7 route modules** catch `DatabaseClientError`, but `MongoRepository` calls pymongo directly in most methods, so a raw `PyMongoError` escapes all of them. Measured: `AutoReconnect` (what an Atlas failover produces) and `ExecutionTimeout` (a slow query on a shared-tier cluster) each become a **500 instead of a 503**. Both are expected events on Atlas M0, which is the chosen deployment. The fix is one translation boundary in the repository, not 46 edits — extending the `DuplicateKeyError` translation added in Phase 1.2 to the rest of the driver's error tree |
@@ -2292,3 +2292,106 @@ verification, so it is **not** done here. Recorded as **Phase 2.14**.
 
 TLS itself is not a code change — the platform terminates it — so it stays part
 of the Phase 3 deployment steps.
+
+---
+
+## 27. Change log — Phase 2.9, data lifecycle
+
+Completed 2026-10-06. Suite: **493 → 499 tests**.
+
+### Measured, not estimated
+
+A realistic completed session was seeded into a real MongoDB and every document
+encoded to BSON:
+
+| Collection | Docs | Bytes |
+|---|---|---|
+| `sessions` | 1 | 159 |
+| `resume_data` | 1 | 23,485 |
+| `assessment_sessions` | 1 | 13,280 |
+| `interview_round_sessions` | 3 | 84,794 |
+| `interview_responses` | 18 | 45,570 |
+| `final_reports` | 1 | 12,949 |
+| **total per session** | | **180,237 (~176 KB)** |
+
+Against Atlas M0's 512 MB that is a runway of roughly **2,978 sessions**, after
+which writes start failing. Of eleven collections holding candidate data, only
+the two token collections had any expiry — everything else grew forever.
+
+### The defect: an unbounded array against a hard 16 MB ceiling
+
+`append_dsa_submission` read `all_code_submissions`, appended, and wrote the
+whole array back with **no cap**. Each entry carries source code up to
+`JUDGE0_MAX_SOURCE_CHARACTERS` (50,000). Measured growth:
+
+| Submissions | Document size |
+|---|---|
+| 1 | 101,140 bytes |
+| 10 | 551,761 bytes |
+| 20 | 1,052,461 bytes |
+| 40 | 2,053,861 bytes |
+
+That is **~50 KB per submission**. MongoDB refuses any document over **16 MB**,
+so about **333 submissions on a single problem makes the document unwritable** —
+`find_one_and_update` starts failing and that DSA session is **permanently
+broken**. At the configured 60-per-hour execution quota a user can do that to
+themselves in a few hours, and it consumes a 512 MB cluster long before.
+
+This is the part that made it a correctness bug rather than a storage
+inefficiency: the failure is hard, user-reachable, and unrecoverable for that
+session.
+
+**Fixed** with `MAX_STORED_DSA_SUBMISSIONS = 20`, oldest dropped first. Verified
+against a real database: the document stops growing at ~1.05 MB and stays there
+through 60 appends.
+
+The subtlety worth recording: `report_engine.py` reads the submission **count**,
+so trimming the history would have made the report under-state how many attempts
+a candidate made. A separate monotonic `submission_count` now carries that, and
+the report prefers it — falling back to the array length for records written
+before the field existed, which a test covers.
+
+### Retention is a tool, not an imposed policy
+
+`scripts/prune_old_sessions.py` deletes session-scoped data older than a window
+you choose. Two deliberate decisions:
+
+**It is a script, not a TTL index.** MongoDB TTL only acts on BSON *date*
+fields, and every `created_at` in this schema is an ISO **string** — making TTL
+work would mean adding a date field to every session-scoped write path. More to
+the point, how long a candidate's interview history is kept is a product and
+privacy decision, so the window is an argument rather than a default.
+
+**Dry run is the default.** Nothing is deleted without `--apply`. Verified end to
+end against a real database:
+
+| Check | Result |
+|---|---|
+| Dry run with a 90-day window | matched 2 of 4 sessions, **changed nothing** |
+| `--apply` | removed exactly those 2 and their child rows |
+| A session with an unparseable `created_at` | **never deleted** — age cannot be established |
+| A fresh session | untouched |
+| `--user-id u3 --apply` | removed only u3, left u1 |
+
+`users` is never touched, because accounts must outlive their interview data.
+Sessions are deleted last so an interruption leaves findable orphans rather than
+child rows whose parent is gone. The `--user-id` path also gives you a way to
+honour an individual deletion request.
+
+### Still open in 2.9
+
+A **backup/export path**. Pruning is destructive and there is currently nothing
+to export a report to before it goes. Atlas M0 has no automated backup on the
+free tier, so this needs a deliberate answer — most likely a `mongodump` of the
+session-scoped collections before a prune, or letting a candidate download their
+own report.
+
+### A note on verification state
+
+The suite is green at 499, but **3 tests skipped**: the Judge0 execution tests,
+because Docker Desktop stopped partway through this session. Those three passed
+earlier (Phase 1.9 verified Python and C++ end to end against a live Judge0), and
+they are unrelated to this change — the work here was verified against a real
+MongoDB, with the cap proven non-vacuous by removing it and watching four tests
+fail. Worth flagging rather than reporting "499 passing" and leaving the skips
+unmentioned.

@@ -26,6 +26,13 @@ from .db_errors import (
 )
 
 
+# How many DSA code submissions are retained per problem. See the note in
+# append_dsa_submission: the array was unbounded, each entry can carry 50 KB of
+# source, and MongoDB refuses documents over 16 MB — so this is a correctness
+# bound, not just a storage one. The count of attempts is preserved separately.
+MAX_STORED_DSA_SUBMISSIONS = 20
+
+
 class MongoRepository:
 	"""A repository providing persistence via MongoDB."""
 
@@ -589,6 +596,7 @@ class MongoRepository:
 			"approach_text": approach_text,
 			"current_code_draft": current_code_draft,
 			"all_code_submissions": [],
+			"submission_count": 0,
 			"last_submission_id": state.get("last_submission_id"),
 			"last_judge_status": state.get(
 				"last_judge_status",
@@ -738,11 +746,35 @@ class MongoRepository:
 
 		submissions = list(record.get("all_code_submissions") or [])
 		submissions.append(dict(submission))
+
+		# Keep a monotonic count BEFORE trimming. The report only ever needed
+		# the number of attempts, not their text, so trimming the history must
+		# not make the report under-report effort. Falls back to the list length
+		# for records written before this field existed.
+		submission_count = int(
+			record.get("submission_count") or len(record.get("all_code_submissions") or [])
+		) + 1
+
+		# Trim to the most recent N. Unbounded before this, and the ceiling is
+		# hard rather than merely wasteful: each submission carries source code
+		# up to JUDGE0_MAX_SOURCE_CHARACTERS (50,000), which measured at ~50 KB
+		# of BSON per entry. MongoDB refuses any document over 16 MB, so around
+		# 333 submissions on a single problem makes this document unwritable and
+		# breaks that DSA session permanently — a user can do that to themselves
+		# in a few hours at the configured 60-per-hour execution quota, and it
+		# eats a 512 MB Atlas M0 cluster long before that.
+		#
+		# Oldest dropped first: the recent attempts are the ones worth reviewing,
+		# and the count above preserves the only aggregate anything reads.
+		if len(submissions) > MAX_STORED_DSA_SUBMISSIONS:
+			submissions = submissions[len(submissions) - MAX_STORED_DSA_SUBMISSIONS :]
+
 		next_version = current_version + 1
 		state["state_version"] = next_version
 
 		payload = {
 			"all_code_submissions": submissions,
+			"submission_count": submission_count,
 			"current_code_draft": current_code_draft,
 			"last_submission_id": last_submission_id,
 			"last_judge_status": state["last_judge_status"],

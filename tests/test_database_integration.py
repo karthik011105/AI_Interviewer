@@ -487,3 +487,143 @@ class SessionRoundTripTests(_RepositoryTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DsaSubmissionRetentionTests(_RepositoryTestBase):
+    """``all_code_submissions`` was unbounded, and the ceiling is hard.
+
+    Each entry carries source code up to ``JUDGE0_MAX_SOURCE_CHARACTERS``
+    (50,000), which measured at roughly 50 KB of BSON per entry. MongoDB refuses
+    any document over 16 MB, so around 333 submissions on a single problem made
+    the document unwritable and broke that DSA session permanently — reachable
+    in a few hours at the configured 60-per-hour execution quota, and ruinous to
+    a 512 MB Atlas M0 cluster well before that.
+
+    The array is now capped. The count of attempts is kept separately, because
+    the report reads the number of submissions and trimming history must not
+    make it under-report effort.
+    """
+
+    def _session_with_submissions(self, count: int, *, code_size: int = 2_000) -> str:
+        session_id = self._new_session()
+        self.repo.create_dsa_session(
+            session_id=session_id, problem_id="p1", question_number=1
+        )
+        code = "c" * code_size
+        for _ in range(count):
+            self.repo.append_dsa_submission(
+                session_id=session_id,
+                question_number=1,
+                submission={"code": code},
+                current_code_draft=code,
+            )
+        return session_id
+
+    def _record(self, session_id: str) -> dict:
+        return self.repo.require_dsa_session(
+            session_id=session_id, question_number=1
+        )
+
+    def test_the_stored_array_is_capped(self) -> None:
+        from backend.database.mongo_client import MAX_STORED_DSA_SUBMISSIONS
+
+        session_id = self._session_with_submissions(MAX_STORED_DSA_SUBMISSIONS + 15)
+
+        stored = self._record(session_id)["all_code_submissions"]
+
+        self.assertEqual(len(stored), MAX_STORED_DSA_SUBMISSIONS)
+
+    def test_the_attempt_count_keeps_rising_past_the_cap(self) -> None:
+        """The report reads this. Trimming the history must not make it look
+        like the candidate tried fewer times than they did."""
+
+        from backend.database.mongo_client import MAX_STORED_DSA_SUBMISSIONS
+
+        total = MAX_STORED_DSA_SUBMISSIONS + 15
+        session_id = self._session_with_submissions(total)
+
+        record = self._record(session_id)
+
+        self.assertEqual(record["submission_count"], total)
+        self.assertLess(len(record["all_code_submissions"]), total)
+
+    def test_the_most_recent_submissions_are_the_ones_kept(self) -> None:
+        """Oldest dropped first: recent attempts are what is worth reviewing."""
+
+        from backend.database.mongo_client import MAX_STORED_DSA_SUBMISSIONS
+
+        session_id = self._new_session()
+        self.repo.create_dsa_session(
+            session_id=session_id, problem_id="p1", question_number=1
+        )
+        for index in range(MAX_STORED_DSA_SUBMISSIONS + 5):
+            self.repo.append_dsa_submission(
+                session_id=session_id,
+                question_number=1,
+                submission={"code": f"attempt-{index}"},
+                current_code_draft=f"attempt-{index}",
+            )
+
+        stored = [s["code"] for s in self._record(session_id)["all_code_submissions"]]
+
+        self.assertEqual(stored[-1], f"attempt-{MAX_STORED_DSA_SUBMISSIONS + 4}")
+        self.assertNotIn("attempt-0", stored)
+
+    def test_the_document_stops_growing_once_capped(self) -> None:
+        """The property that matters: the 16 MB ceiling is no longer reachable
+        by submitting more."""
+
+        import bson
+
+        from backend.database.mongo_client import MAX_STORED_DSA_SUBMISSIONS
+
+        session_id = self._session_with_submissions(
+            MAX_STORED_DSA_SUBMISSIONS, code_size=20_000
+        )
+        at_cap = len(bson.BSON.encode(self._record(session_id)))
+
+        for _ in range(20):
+            self.repo.append_dsa_submission(
+                session_id=session_id,
+                question_number=1,
+                submission={"code": "c" * 20_000},
+                current_code_draft="c" * 20_000,
+            )
+        after_more = len(bson.BSON.encode(self._record(session_id)))
+
+        self.assertEqual(at_cap, after_more)
+
+    def test_a_new_session_starts_the_counter_at_zero(self) -> None:
+        session_id = self._new_session()
+        self.repo.create_dsa_session(
+            session_id=session_id, problem_id="p1", question_number=1
+        )
+
+        self.assertEqual(self._record(session_id)["submission_count"], 0)
+
+    def test_a_legacy_record_without_the_counter_is_handled(self) -> None:
+        """Records written before the counter existed have no submission_count.
+        Appending to one must derive it from the existing array rather than
+        restarting at 1 and losing the earlier attempts."""
+
+        session_id = self._new_session()
+        self.repo.create_dsa_session(
+            session_id=session_id, problem_id="p1", question_number=1
+        )
+        # Simulate the old shape: three submissions, no counter.
+        self.repo.db.dsa_sessions.update_one(
+            {"session_id": session_id, "question_number": 1},
+            {
+                "$set": {"all_code_submissions": [{"code": "a"}, {"code": "b"}, {"code": "c"}]},
+                "$unset": {"submission_count": ""},
+            },
+        )
+
+        self.repo.append_dsa_submission(
+            session_id=session_id,
+            question_number=1,
+            submission={"code": "d"},
+            current_code_draft="d",
+        )
+
+        self.assertEqual(self._record(session_id)["submission_count"], 4)
