@@ -202,7 +202,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.8 | **Turn on error tracking** | Sentry is wired and inert without `SENTRY_DSN` (§26). Set it for the deployment so production errors are visible |
 | 2.9 | ~~**Data lifecycle**~~ | **Partly done** — see §27. The hard failure is fixed: DSA submissions were unbounded against MongoDB's 16 MB document limit. Retention is now a tool (`scripts/prune_old_sessions.py`), not an imposed policy — the window is your call. A backup/export path is still open |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
-| 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
+| 2.11 | ~~**Make the interview turn commit survive a disconnect**~~ | **Done** — see §30. Once transcription has begun the commit is shielded and drained rather than cancelled, so a disconnect no longer destroys the answer |
 | 2.12 | ~~**Translate driver errors into the domain hierarchy at one boundary**~~ | **Done** — see §29. One proxy on `MongoRepository.db` covers all ~41 direct driver call sites plus the direct `repo.db.users` access in the auth routes. An Atlas failover is now a 503, not a 500 |
 | 2.13 | **Stop sending the access token in the WebSocket URL** | Found in Phase 1.13. The browser cannot set headers on a WebSocket handshake, so the token rides in `?access_token=...` — and query strings are recorded by reverse-proxy and access logs, including the platform ingress the deployment sits behind. The JWT's 24-hour expiry means a token captured from a log stays valid for a day. Fix with a short-lived single-use ticket exchanged for the socket, or a much shorter TTL scoped to this path |
 | 2.14 | **Self-host Monaco instead of loading it from a CDN** | Found in Phase 2.5. `CodeEditor.jsx` never calls `loader.config()`, so `@monaco-editor/react` fetches the editor from `cdn.jsdelivr.net` at runtime — confirmed in the shipped bundle. The DSA editor therefore breaks wherever that CDN is unreachable, and `script-src` must permit a third-party origin for the whole app. Point `loader.config()` at a local copy and have Vite emit the assets |
@@ -2513,3 +2513,50 @@ the wrong reason. My fake cursor delegated `sort()` to the real one, which hande
 the caller a healthy cursor and quietly defeated the test. Caught because it
 failed when it should have passed, rather than the reverse — but the same shape
 as the vacuous tests this audit keeps finding.
+
+
+---
+
+## 30. Change log — Phase 2.11, turn-commit durability
+
+Completed 2026-10-06. Suite: **528 → 533 tests**.
+
+### The problem
+
+`_transcribe_captured_audio` joins the buffered frames and immediately calls
+`reset_audio_capture()`, so **the audio is gone as soon as the commit starts**.
+The socket's `finally` called `_cancel_turn_commit`, which cancelled
+unconditionally. Two consequences, both found in Phase 1.7:
+
+- A disconnect mid-commit **destroyed the candidate's answer** outright, with
+  nothing to retry from.
+- A cancel landing between persisting the response and advancing the question
+  index left them re-asked a question that already had a recorded answer.
+
+### The fix
+
+The distinction that matters is whether the commit has started consuming audio.
+Before that, cancelling is free and correct — nothing has been taken. After it,
+the commit is **shielded and awaited with a bound** instead, the same approach
+`_stop_tts` already used.
+
+`runtime.turn_commit_started` is set immediately before transcription begins, and
+`_cancel_turn_commit` branches on it. The 10-second bound exists because this
+runs on the disconnect path and must not hold socket teardown open; if the commit
+is slower, the shield has already detached it so it still completes in the
+background rather than being thrown away.
+
+### Verification
+
+5 tests, three of which fail without the change: a started commit is allowed to
+finish, an unstarted one is still cancelled promptly (otherwise every disconnect
+would wait out the grace period), a commit slower than the bound keeps running
+and lands afterwards, a failing commit does not break teardown — which matters
+because an exception there would mask whatever actually caused the disconnect.
+
+### What this does not fix
+
+A disconnect during the 1.5-second end-of-turn grace, *before* transcription
+starts, still discards that audio. That is correct: nothing has been transcribed,
+the socket is gone, and there is no one to tell. Making it recoverable would mean
+persisting raw audio, which is a much larger change and a privacy decision.

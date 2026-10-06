@@ -76,6 +76,10 @@ _MIC_SAMPLE_RATE = 16000
 # re-derives from audio energy. This debounce lets a candidate string several
 # utterances into one answer ("Um... so the way it works is...") before commit.
 _END_OF_TURN_GRACE_SEC = 1.5
+# How long a disconnect waits for an already-started turn commit to finish.
+# Long enough for a transcription plus evaluation to land, short enough not to
+# hold socket teardown open; past it the shielded task finishes on its own.
+_TURN_COMMIT_DRAIN_SEC = 10.0
 _MAX_CLARIFICATIONS_PER_QUESTION = 2
 
 # CPU-bound work (Whisper decode, SBERT encode) runs in worker threads. The
@@ -125,6 +129,11 @@ class InterviewRuntime:
 	interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
 	tts_task: asyncio.Task[None] | None = None
 	turn_commit_task: asyncio.Task[None] | None = None
+	# Set once the commit has passed its grace period and begun transcribing.
+	# From that point the captured audio has already been consumed, so
+	# cancelling would destroy the answer with nothing to retry from — see
+	# _cancel_turn_commit.
+	turn_commit_started: bool = False
 	send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 	last_question_completed: bool = False
 	prompt_phase: str = "idle"
@@ -367,12 +376,37 @@ def _load_or_create_round_session(
 
 
 async def _cancel_turn_commit(runtime: InterviewRuntime) -> None:
+	"""Stop a pending turn commit — unless it has already started committing.
+
+	The distinction matters because the commit is destructive at its start:
+	``_transcribe_captured_audio`` joins the buffered frames and immediately
+	calls ``reset_audio_capture()``, so once it is running the audio is gone.
+	Cancelling at that point loses the candidate's answer outright, with nothing
+	to retry from, and a cancel landing between persisting the response and
+	advancing the question index leaves them re-asked a question that already
+	has a recorded answer.
+
+	So: before transcription has begun, cancelling is free and correct — nothing
+	has been consumed. After it has begun, the commit is shielded and awaited
+	with a bound instead, the same approach ``_stop_tts`` already takes. The
+	bound exists because this runs on the disconnect path and must not hang the
+	socket teardown; if the commit is slower than that, it still completes in the
+	background because the shield detaches it from this cancellation.
+	"""
+
 	task = runtime.turn_commit_task
 	if task is None:
 		return
 	if task is asyncio.current_task():
 		runtime.turn_commit_task = None
 		return
+
+	if runtime.turn_commit_started:
+		with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+			await asyncio.wait_for(asyncio.shield(task), timeout=_TURN_COMMIT_DRAIN_SEC)
+		runtime.turn_commit_task = None
+		return
+
 	task.cancel()
 	with contextlib.suppress(asyncio.CancelledError):
 		await task
@@ -400,12 +434,16 @@ def _schedule_turn_commit(runtime: InterviewRuntime) -> None:
 				return
 			if not runtime.pending_pcm_frames:
 				return
+			# Past this point the audio is about to be consumed, so a cancel
+			# would destroy the answer. _cancel_turn_commit drains instead.
+			runtime.turn_commit_started = True
 			await _transcribe_captured_audio(runtime)
 		except asyncio.CancelledError:
 			raise
 		finally:
 			if runtime.turn_commit_task is asyncio.current_task():
 				runtime.turn_commit_task = None
+				runtime.turn_commit_started = False
 
 	runtime.turn_commit_task = asyncio.create_task(_commit_after_pause())
 
