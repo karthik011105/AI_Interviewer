@@ -203,7 +203,7 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.9 | ~~**Data lifecycle**~~ | **Partly done** — see §27. The hard failure is fixed: DSA submissions were unbounded against MongoDB's 16 MB document limit. Retention is now a tool (`scripts/prune_old_sessions.py`), not an imposed policy — the window is your call. A backup/export path is still open |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
 | 2.11 | **Make the interview turn commit survive a disconnect** | Found in Phase 1.7. `_transcribe_captured_audio` clears the captured audio before transcribing, and the socket's `finally` cancels the commit task, so a disconnect mid-answer loses it with nothing to retry from. A cancel between persisting the response and advancing the index can also re-ask an already-answered question. Needs the commit shielded once transcription starts and the persist step made idempotent |
-| 2.12 | **Translate driver errors into the domain hierarchy at one boundary** | Found in Phase 1.8, and systemic. **46 handlers across 7 route modules** catch `DatabaseClientError`, but `MongoRepository` calls pymongo directly in most methods, so a raw `PyMongoError` escapes all of them. Measured: `AutoReconnect` (what an Atlas failover produces) and `ExecutionTimeout` (a slow query on a shared-tier cluster) each become a **500 instead of a 503**. Both are expected events on Atlas M0, which is the chosen deployment. The fix is one translation boundary in the repository, not 46 edits — extending the `DuplicateKeyError` translation added in Phase 1.2 to the rest of the driver's error tree |
+| 2.12 | ~~**Translate driver errors into the domain hierarchy at one boundary**~~ | **Done** — see §29. One proxy on `MongoRepository.db` covers all ~41 direct driver call sites plus the direct `repo.db.users` access in the auth routes. An Atlas failover is now a 503, not a 500 |
 | 2.13 | **Stop sending the access token in the WebSocket URL** | Found in Phase 1.13. The browser cannot set headers on a WebSocket handshake, so the token rides in `?access_token=...` — and query strings are recorded by reverse-proxy and access logs, including the platform ingress the deployment sits behind. The JWT's 24-hour expiry means a token captured from a log stays valid for a day. Fix with a short-lived single-use ticket exchanged for the socket, or a much shorter TTL scoped to this path |
 | 2.14 | **Self-host Monaco instead of loading it from a CDN** | Found in Phase 2.5. `CodeEditor.jsx` never calls `loader.config()`, so `@monaco-editor/react` fetches the editor from `cdn.jsdelivr.net` at runtime — confirmed in the shipped bundle. The DSA editor therefore breaks wherever that CDN is unreachable, and `script-src` must permit a third-party origin for the whole app. Point `loader.config()` at a local copy and have Vite emit the assets |
 
@@ -2457,3 +2457,59 @@ with an App Password for low volume). Whichever you pick, the From address must
 be on a sender the provider has verified, or mail is rejected or filtered — and
 a real send from the deployed backend belongs in Phase 3.7's smoke test, since
 that is the only check that proves the whole path end to end.
+
+---
+
+## 29. Change log — Phase 2.12, driver error translation
+
+Completed 2026-10-06. Suite: **516 → 528 tests**, green under both throttle
+stores, and with **zero skips** — Docker Desktop was restarted, so the three
+Judge0 execution tests ran and passed too.
+
+### The gap
+
+Phase 1.8 found this and deliberately left it: 46 handlers across seven route
+modules catch `DatabaseClientError`, but `MongoRepository` calls pymongo
+directly in roughly forty places and `routes_auth` reaches `repo.db.users`
+directly, so a raw `PyMongoError` escaped every one of them. Measured: an
+`AutoReconnect` (what an Atlas failover produces) and an `ExecutionTimeout` (a
+slow shared-tier query) each surfaced as a **500 instead of a 503**. That
+decides whether a client retries, and both are expected events on Atlas M0
+rather than exotic ones.
+
+### One boundary, not 46 edits
+
+Editing the handlers would have been the wrong shape — the gap is that the data
+layer leaks a foreign exception type, so the fix belongs where the leak is.
+`MongoRepository.db` now returns a proxy that translates at the boundary, so a
+single place covers every call site **and** the direct collection access in the
+auth routes, without touching a single query.
+
+| pymongo error | Becomes | Route result |
+|---|---|---|
+| `AutoReconnect`, `ServerSelectionTimeoutError`, `NetworkTimeout`, `ExecutionTimeout`, `WTimeoutError` | `DatabaseDependencyError` | 503 |
+| `DuplicateKeyError` | `DuplicateRecordError` | as before |
+| any other `PyMongoError` | `DatabaseClientError` | 503 |
+
+**Cursors are wrapped too**, and that is the part worth noting. `find()` returns
+immediately while the server work happens during iteration, so a failover
+mid-iteration would otherwise have bypassed the translation entirely — which is
+precisely the case this exists for. `sort()` and friends return the cursor, so
+the proxy re-wraps the result to keep the chain translated.
+
+### Verification
+
+12 tests. The mapping is covered without a database; the proxy behaviour is
+driven against a real MongoDB, including a failing read, a failing write, a
+failure *during* cursor iteration, direct `repo.db.users` access, and index
+creation. Five of them fail when the proxy is removed.
+
+Equally important, four tests assert the proxy is **invisible** in the normal
+case: documents round-trip unchanged, `_id` is still mapped away, a sorted
+cursor still sorts, and a duplicate insert still reports a duplicate.
+
+One note on writing those tests: the cursor-iteration test initially passed for
+the wrong reason. My fake cursor delegated `sort()` to the real one, which handed
+the caller a healthy cursor and quietly defeated the test. Caught because it
+failed when it should have passed, rather than the reverse — but the same shape
+as the vacuous tests this audit keeps finding.

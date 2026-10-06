@@ -11,6 +11,7 @@ from pymongo.errors import DuplicateKeyError
 
 from backend.config import MongoSettings
 
+from .driver_errors import TranslatingDatabase
 from .db_errors import (
 	ConcurrentUpdateError,
 	DatabaseClientError,
@@ -44,7 +45,11 @@ class MongoRepository:
 				serverSelectionTimeoutMS=5000,
 				uuidRepresentation="standard"
 			)
-			self.db = self.client[self.settings.database_name]
+			# Wrapped so every query below — and every direct `repo.db.<coll>`
+			# use in the route layer — raises this package's errors rather than
+			# pymongo's. Without it an Atlas failover surfaced as a 500 from all
+			# 46 `except DatabaseClientError` handlers instead of a 503.
+			self.db = TranslatingDatabase(self.client[self.settings.database_name])
 			self._ensure_indexes()
 		except Exception as exc:
 			raise DatabaseDependencyError(
@@ -131,7 +136,7 @@ class MongoRepository:
 
 		try:
 			self.db[collection_name].insert_one(doc)
-		except DuplicateKeyError as exc:
+		except (DuplicateRecordError, DuplicateKeyError) as exc:
 			raise DuplicateRecordError(
 				f"A record violating a unique index already exists in "
 				f"'{collection_name}'."
@@ -158,7 +163,7 @@ class MongoRepository:
 
 		try:
 			self.db[collection_name].insert_many(docs)
-		except DuplicateKeyError as exc:
+		except (DuplicateRecordError, DuplicateKeyError) as exc:
 			# insert_many is ordered by default, so this leaves the documents
 			# before the offending one inserted. Callers must treat a failure
 			# here as "partially applied", not "nothing happened".
