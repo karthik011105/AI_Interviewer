@@ -19,6 +19,8 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from pymongo.errors import DuplicateKeyError
 
 from backend.api.auth import (
+	WS_TICKET_TTL_SECONDS,
+	issue_websocket_ticket,
 	AuthenticatedUser,
 	get_optional_current_user,
 	require_current_user,
@@ -466,6 +468,22 @@ def auth_status(
 	return {
 		"authenticated": current_user is not None,
 		"user": serialize_authenticated_user(current_user) if current_user else None,
+	}
+
+
+@router.post("/ws-ticket")
+def auth_ws_ticket(
+	current_user: AuthenticatedUser = Depends(require_current_user),
+) -> dict[str, object]:
+	"""Trade the access token (sent as a header) for a single-use socket ticket.
+
+	See ``issue_websocket_ticket`` for why the socket never sees the access
+	token itself.
+	"""
+
+	return {
+		"ticket": issue_websocket_ticket(current_user),
+		"expires_in": WS_TICKET_TTL_SECONDS,
 	}
 
 

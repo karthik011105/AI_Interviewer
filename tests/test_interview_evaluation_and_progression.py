@@ -587,7 +587,7 @@ class WebSocketInterviewTests(TestCase):
 			 patch("backend.api.interview_engines.scripted.advance_interview_question", side_effect=_advance_round) as mock_advance_question:
 			app = create_app()
 			with TestClient(app) as client:
-				with client.websocket_connect("/interview/ws/session-123/technical?access_token=test-token") as websocket:
+				with client.websocket_connect("/interview/ws/session-123/technical?ticket=test-ticket") as websocket:
 					connected_payload = self._receive_until_type(websocket, "connected")
 					question_payload = self._receive_until_type(websocket, "question")
 

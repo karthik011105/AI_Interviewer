@@ -222,6 +222,28 @@ class MongoRepository:
 			upsert=True,
 		)
 
+	def consume_token_once(self, *, jti: str, user_id: str, expires_at: Any) -> bool:
+		"""Mark a single-use token as spent; True only for the first caller.
+
+		Reuses revoked_tokens, so a spent token is also a revoked one and the
+		same TTL index cleans it up. The upsert is atomic and jti is uniquely
+		indexed, so two racing callers cannot both see a first use — the loser
+		either matches the existing row or hits the unique index.
+		"""
+		result = self.db.revoked_tokens.update_one(
+			{"jti": jti},
+			{
+				"$setOnInsert": {
+					"jti": jti,
+					"user_id": user_id,
+					"expires_at": expires_at,
+					"revoked_at": _utcnow_iso(),
+				}
+			},
+			upsert=True,
+		)
+		return result.upserted_id is not None
+
 	def is_token_revoked(self, *, jti: str) -> bool:
 		"""Return True when this token has been revoked.
 

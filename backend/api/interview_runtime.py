@@ -26,7 +26,12 @@ from anyio import ClosedResourceError
 from fastapi import HTTPException
 from fastapi import WebSocket, WebSocketDisconnect
 
-from backend.api.auth import AuthenticatedUser, authenticate_access_token, ensure_session_access
+from backend.api.auth import (
+	AuthenticatedUser,
+	authenticate_access_token,
+	authenticate_websocket_ticket,
+	ensure_session_access,
+)
 from backend.api.quotas import INTERVIEW_TURN, VOICE, try_consume_quota
 from backend.api.routes_interview import (
 	_build_round_context,
@@ -230,28 +235,32 @@ def _pcm16le_to_wav_bytes(pcm_bytes: bytes, *, sample_rate: int = _MIC_SAMPLE_RA
 	)
 
 
-def _extract_websocket_access_token(websocket: WebSocket) -> str:
-	query_token = str(websocket.query_params.get("access_token") or "").strip()
-	if query_token:
-		return query_token
-
-	authorization = str(websocket.headers.get("authorization") or "").strip()
-	if authorization:
-		scheme, _, token = authorization.partition(" ")
-		if scheme.casefold() != "bearer" or not token.strip():
-			raise WebSocketInterviewError("Authorization must use a bearer token.")
-		return token.strip()
-
-	raise WebSocketInterviewError(
-		"Missing access token. Connect with ?access_token=<jwt_access_token>."
-	)
-
-
 def _authenticate_websocket_user(websocket: WebSocket) -> AuthenticatedUser:
+	"""Browsers connect with ``?ticket=`` from ``POST /auth/ws-ticket``;
+	non-browser clients, which can set headers, may send a bearer token instead.
+
+	``?access_token=`` is deliberately no longer accepted: it put the 24-hour
+	access token into every proxy and access log the URL passed through.
+	"""
+
 	try:
-		return authenticate_access_token(_extract_websocket_access_token(websocket))
+		ticket = str(websocket.query_params.get("ticket") or "").strip()
+		if ticket:
+			return authenticate_websocket_ticket(ticket)
+
+		authorization = str(websocket.headers.get("authorization") or "").strip()
+		if authorization:
+			scheme, _, token = authorization.partition(" ")
+			if scheme.casefold() != "bearer" or not token.strip():
+				raise WebSocketInterviewError("Authorization must use a bearer token.")
+			return authenticate_access_token(token.strip())
 	except HTTPException as exc:
 		raise WebSocketInterviewError(str(exc.detail)) from exc
+
+	raise WebSocketInterviewError(
+		"Missing connection ticket. Request one from POST /auth/ws-ticket and "
+		"connect with ?ticket=<ticket>."
+	)
 
 
 def _load_parent_session(session_id: str) -> dict[str, Any]:

@@ -8,14 +8,34 @@ function trimSlash(value) {
 	return String(value || "").replace(/\/+$/, "");
 }
 
-export function resolveInterviewSocketUrl(baseUrl, sessionId, roundType, accessToken) {
+/**
+ * The socket is opened with a single-use ticket, never the access token.
+ * Browsers cannot set headers on a WebSocket handshake, so whatever
+ * authenticates it rides in the URL - and URLs end up in proxy and access logs.
+ * A ticket is good for one connection within a minute, so a logged one is
+ * already spent. Fetch a fresh one for every connect, including reconnects.
+ */
+export async function fetchInterviewSocketTicket(baseUrl, accessToken) {
+	const response = await fetch(`${trimSlash(baseUrl || API_DEFAULT)}/auth/ws-ticket`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${accessToken}` },
+	});
+	if (!response.ok) {
+		const detail = await response.json().catch(() => ({}));
+		throw new Error(detail.detail || "Could not authorize the interview connection.");
+	}
+	const payload = await response.json();
+	return String(payload.ticket || "");
+}
+
+export function resolveInterviewSocketUrl(baseUrl, sessionId, roundType, ticket) {
 	const url = new URL(trimSlash(baseUrl || API_DEFAULT));
 	const normalizedPath = url.pathname.replace(/\/+$/, "");
 	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 	url.pathname = `${normalizedPath}/interview/ws/${encodeURIComponent(sessionId)}/${encodeURIComponent(roundType)}`;
 	url.search = "";
 	url.hash = "";
-	url.searchParams.set("access_token", accessToken);
+	url.searchParams.set("ticket", ticket);
 	return url.toString();
 }
 

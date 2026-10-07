@@ -8,7 +8,11 @@ import ConversationThread from "./ConversationThread";
 import CoverageRail from "./CoverageRail";
 import MicControlBar from "./MicControlBar";
 import { INITIAL_STATE, currentQuestionIndex, interviewReducer } from "./interviewReducer.js";
-import { resolveInterviewSocketUrl, useInterviewSocket } from "./useInterviewSocket.js";
+import {
+	fetchInterviewSocketTicket,
+	resolveInterviewSocketUrl,
+	useInterviewSocket,
+} from "./useInterviewSocket.js";
 import { useAudioPlayback } from "./useAudioPlayback.js";
 import { useMicVad } from "./useMicVad.js";
 import "./conversation.css";
@@ -148,8 +152,9 @@ export default function ConversationalInterview({
 				// interview must not be held hostage to that: the thread is
 				// readable without sound, and the first audio chunk re-primes.
 				playback.ensureContext();
+				const ticket = await fetchInterviewSocketTicket(apiBaseUrl, accessToken);
 				socket.connect(
-					resolveInterviewSocketUrl(apiBaseUrl, sessionId, forcedRound, accessToken),
+					resolveInterviewSocketUrl(apiBaseUrl, sessionId, forcedRound, ticket),
 				);
 			} catch (error) {
 				dispatch({ type: "NOTICE", error: String(error.message || error) });

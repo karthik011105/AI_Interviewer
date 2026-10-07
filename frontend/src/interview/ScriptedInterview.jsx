@@ -4,7 +4,7 @@ import { MicVAD, utils } from "@ricky0123/vad-web";
 import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
-import { resolveInterviewSocketUrl } from "./useInterviewSocket";
+import { fetchInterviewSocketTicket, resolveInterviewSocketUrl } from "./useInterviewSocket";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
 const MAX_CLARIFICATIONS_PER_QUESTION = 2;
@@ -1231,8 +1231,9 @@ export default function ScriptedInterview({
 		}
 	}
 
-	function openRoundSocket() {
-		const socketUrl = resolveInterviewSocketUrl(baseUrl, sessionId, selectedRound, accessToken);
+	async function openRoundSocket() {
+		const ticket = await fetchInterviewSocketTicket(baseUrl, accessToken);
+		const socketUrl = resolveInterviewSocketUrl(baseUrl, sessionId, selectedRound, ticket);
 		const socket = new WebSocket(socketUrl);
 		socket.binaryType = "arraybuffer";
 		manualSocketCloseRef.current = false;
@@ -1368,7 +1369,12 @@ export default function ScriptedInterview({
 
 		await ensurePlaybackContext();
 		await prepareCapture();
-		openRoundSocket();
+		try {
+			await openRoundSocket();
+		} catch (error) {
+			setBusyState("idle");
+			setErrorMessage(error.message || "Could not open the interview stream.");
+		}
 	}
 
 	function interruptPlayback() {

@@ -94,7 +94,8 @@ describe("resolveInterviewSocketUrl", () => {
 
 		assert.equal(url.searchParams.get("foo"), null);
 		assert.equal(url.hash, "");
-		assert.equal(url.searchParams.get("access_token"), "token-abc");
+		assert.equal(url.searchParams.get("ticket"), "token-abc");
+		assert.equal(url.searchParams.get("access_token"), null);
 	});
 
 	it("falls back to the local default when no base url is given", () => {
