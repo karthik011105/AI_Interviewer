@@ -1,0 +1,538 @@
+/* Conversational interview UI.
+ *
+ * Every colour is a :root token from styles.css (light "Quiet Paper" by
+ * default, dark "Low-Glare" via [data-theme="dark"]), so this follows the
+ * app-wide theme instead of carrying its own fixed palette.
+ */
+
+.conversation-shell {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+	gap: 20px;
+	align-items: start;
+}
+
+@media (max-width: 1080px) {
+	.conversation-shell {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+.conversation-main {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	min-width: 0;
+}
+
+/* -- thread ---------------------------------------------------------------- */
+
+.interview-thread {
+	border-radius: var(--radius-lg);
+	border: 1px solid var(--border);
+	background: var(--surface);
+	overflow: hidden;
+}
+
+.interview-thread__scroller {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 22px;
+	max-height: min(58vh, 560px);
+	overflow-y: auto;
+	scroll-behavior: smooth;
+}
+
+.interview-thread__empty,
+.interview-thread__thinking {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.92rem;
+	font-style: italic;
+}
+
+.turn-bubble {
+	max-width: 82%;
+	padding: 14px 16px;
+	border-radius: var(--radius-md);
+	border: 1px solid var(--border);
+	background: var(--surface-sunken);
+}
+
+.turn-bubble--interviewer {
+	align-self: flex-start;
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.turn-bubble--candidate {
+	align-self: flex-end;
+	border-color: var(--success);
+	background: var(--success-bg);
+}
+
+.turn-bubble--caption {
+	opacity: 0.72;
+	border-style: dashed;
+}
+
+.turn-bubble__meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.turn-bubble__who {
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 0.72rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.turn-bubble__chip {
+	font-size: 0.68rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	background: var(--surface);
+}
+
+.turn-bubble__chip--followup {
+	color: var(--warning);
+	border-color: var(--warning);
+}
+
+.turn-bubble__chip--tier {
+	color: var(--success);
+	border-color: var(--success);
+}
+
+.turn-bubble__chip--pending {
+	color: var(--muted);
+	animation: turn-pulse 1.4s ease-in-out infinite;
+}
+
+.turn-bubble__chip--failed {
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+.turn-bubble__text {
+	margin: 0;
+	white-space: pre-wrap;
+	color: var(--text);
+}
+
+.turn-bubble__cursor {
+	display: inline-block;
+	width: 7px;
+	height: 1em;
+	margin-left: 3px;
+	vertical-align: text-bottom;
+	background: var(--accent);
+	animation: turn-pulse 1s steps(2, start) infinite;
+}
+
+.turn-bubble__score {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 0.78rem;
+	padding: 2px 9px;
+	border-radius: 999px;
+	cursor: pointer;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	color: var(--text);
+}
+
+.turn-bubble__score--good {
+	color: var(--success);
+	border-color: var(--success);
+}
+
+.turn-bubble__score--warn {
+	color: var(--warning);
+	border-color: var(--warning);
+}
+
+.turn-bubble__score--bad {
+	color: var(--danger);
+	border-color: var(--danger);
+}
+
+.turn-bubble__score-caret {
+	font-size: 0.62rem;
+	opacity: 0.75;
+}
+
+.turn-bubble__detail {
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid var(--border);
+	display: grid;
+	gap: 10px;
+}
+
+.turn-bubble__rubric {
+	display: grid;
+	gap: 6px;
+}
+
+.turn-bubble__rubric-row {
+	display: grid;
+	grid-template-columns: 74px minmax(0, 1fr) 28px;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.74rem;
+	color: var(--muted);
+}
+
+.turn-bubble__rubric-track {
+	height: 5px;
+	border-radius: 999px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.turn-bubble__rubric-fill {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--accent);
+}
+
+.turn-bubble__rubric-value {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.turn-bubble__feedback {
+	margin: 0;
+	font-size: 0.88rem;
+	color: var(--muted);
+}
+
+@keyframes turn-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+/* -- mic control bar ------------------------------------------------------- */
+
+.mic-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	padding: 14px 18px;
+	border-radius: var(--radius-lg);
+	border: 1px solid var(--border);
+	background: var(--surface);
+}
+
+.mic-bar__status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 210px;
+}
+
+.mic-bar__orb {
+	width: 11px;
+	height: 11px;
+	border-radius: 50%;
+	background: var(--muted);
+}
+
+.mic-bar__orb--listening {
+	background: var(--success);
+	animation: mic-ping 1.8s ease-out infinite;
+}
+
+.mic-bar__orb--speaking {
+	background: var(--accent);
+}
+
+.mic-bar__orb--thinking {
+	background: var(--warning);
+	animation: turn-pulse 1.2s ease-in-out infinite;
+}
+
+.mic-bar__orb--transcribing {
+	background: var(--warning);
+}
+
+.mic-bar__orb--complete {
+	background: var(--success);
+}
+
+@keyframes mic-ping {
+	0% {
+		box-shadow: 0 0 0 0 var(--success-bg);
+	}
+	70% {
+		box-shadow: 0 0 0 9px transparent;
+	}
+	100% {
+		box-shadow: 0 0 0 0 transparent;
+	}
+}
+
+.mic-bar__labels {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.25;
+}
+
+.mic-bar__labels strong {
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 0.9rem;
+}
+
+.mic-bar__labels small {
+	color: var(--muted);
+	font-size: 0.75rem;
+}
+
+.mic-bar__wave {
+	display: inline-flex;
+	align-items: flex-end;
+	gap: 2px;
+	height: 18px;
+}
+
+.mic-bar__wave span {
+	width: 3px;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--border-strong);
+}
+
+.mic-bar__wave--active span {
+	background: var(--success);
+	animation: mic-wave 1s ease-in-out infinite;
+}
+
+@keyframes mic-wave {
+	0%,
+	100% {
+		height: 4px;
+	}
+	50% {
+		height: 16px;
+	}
+}
+
+.mic-bar__typed {
+	display: flex;
+	flex: 1 1 320px;
+	gap: 10px;
+	align-items: flex-start;
+}
+
+.mic-bar__textarea {
+	flex: 1;
+	resize: vertical;
+	padding: 9px 12px;
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--border);
+	background: var(--surface-sunken);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 0.9rem;
+}
+
+.mic-bar__textarea:focus {
+	outline: none;
+	border-color: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.mic-bar__actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.mic-bar__end {
+	margin-left: auto;
+}
+
+/* -- coverage rail --------------------------------------------------------- */
+
+.coverage-rail {
+	padding: 20px;
+	display: grid;
+	gap: 14px;
+	align-content: start;
+}
+
+.coverage-rail__turns {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.86rem;
+}
+
+.coverage-rail__turns strong {
+	color: var(--text);
+}
+
+.coverage-rail__tiers {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 10px;
+}
+
+.coverage-rail__tier-head {
+	display: flex;
+	justify-content: space-between;
+	font-size: 0.8rem;
+	color: var(--muted);
+	margin-bottom: 4px;
+}
+
+.coverage-rail__count {
+	font-variant-numeric: tabular-nums;
+	color: var(--text);
+}
+
+.coverage-rail__bar {
+	display: block;
+	height: 6px;
+	border-radius: 999px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.coverage-rail__bar span {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--success);
+}
+
+.coverage-rail__bar--absent span {
+	background: var(--accent);
+}
+
+.coverage-rail__bar--familiar span {
+	background: var(--warning);
+}
+
+.coverage-rail__remaining-label {
+	font-size: 0.7rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.coverage-rail__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.coverage-rail__chip {
+	font-size: 0.74rem;
+	padding: 3px 9px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	color: var(--muted);
+	background: var(--surface);
+}
+
+.coverage-rail__chip--absent {
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+.coverage-rail__chip--familiar {
+	color: var(--warning);
+	border-color: var(--warning);
+}
+
+.coverage-rail__done {
+	margin: 0;
+	color: var(--success);
+	font-size: 0.85rem;
+}
+
+.coverage-rail__pending {
+	margin: 0;
+	color: var(--muted, inherit);
+	font-size: 0.85rem;
+}
+
+/* Push-to-talk: round mic button + round send arrow. */
+.mic-bar__round {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 52px;
+	height: 52px;
+	border-radius: 50%;
+	border: 1px solid var(--border, currentColor);
+	cursor: pointer;
+	transition: transform 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+}
+
+.mic-bar__round:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.mic-bar__round:not(:disabled):hover {
+	transform: scale(1.05);
+}
+
+.mic-bar__mic {
+	background: var(--accent);
+	color: #fff;
+	border-color: var(--accent);
+}
+
+.mic-bar__mic--recording {
+	background: var(--danger, #c0392b);
+	border-color: var(--danger, #c0392b);
+	opacity: 1;
+	animation: mic-bar-pulse 1.2s ease-in-out infinite;
+}
+
+.mic-bar__send {
+	background: var(--accent-soft, transparent);
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+.mic-bar__send:not(:disabled) {
+	background: var(--accent);
+	color: #fff;
+}
+
+@keyframes mic-bar-pulse {
+	0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45); }
+	50% { box-shadow: 0 0 0 10px rgba(192, 57, 43, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.mic-bar__mic--recording { animation: none; }
+}

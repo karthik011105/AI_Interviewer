@@ -26,6 +26,7 @@ from backend.database.queries import (
 	advance_interview_question,
 	complete_interview_round,
 	create_interview_round_session,
+	get_interview_context,
 	get_interview_round_session,
 	list_interview_responses,
 	list_sessions_for_user,
@@ -568,6 +569,43 @@ def _get_parsed_resume(session_id: str) -> dict[str, Any]:
 	return parsed
 
 
+def _humanize_role_key(role_key: str) -> str:
+	return " ".join(part.capitalize() for part in role_key.split("_") if part)
+
+
+def _resolve_role_match(
+	parent_session: Mapping[str, Any],
+	role_key: str | None,
+) -> dict[str, Any] | None:
+	"""Recover the role title and skill gaps that `/resume/select-role` computed.
+
+	Without this, `role_match` was hardcoded to None, so the technical context
+	always got `selected_role_title=None` and `skill_gaps=[]` even though
+	`/resume/select-role` had already computed and persisted both into
+	`interview_round_contexts` — a collection this module never read from.
+	"""
+	if not role_key:
+		return None
+
+	session_id = str(parent_session.get("id") or "").strip()
+	if session_id:
+		try:
+			stored_context = get_interview_context(session_id=session_id, round="technical")
+		except DatabaseClientError:
+			stored_context = None
+		if isinstance(stored_context, Mapping):
+			title = str(stored_context.get("selected_role_title") or "").strip()
+			if title:
+				skill_gaps = stored_context.get("skill_gaps")
+				return {
+					"role_key": role_key,
+					"title": title,
+					"skill_gaps": skill_gaps if isinstance(skill_gaps, list) else [],
+				}
+
+	return {"role_key": role_key, "title": _humanize_role_key(role_key)}
+
+
 def _build_round_context(
 	round_name: str,
 	parsed_resume: dict[str, Any],
@@ -575,7 +613,7 @@ def _build_round_context(
 ) -> dict[str, Any]:
 	"""Build the round-specific context from a parsed resume and session data."""
 	role_key = str(parent_session.get("role_selected") or "").strip() or None
-	role_match: dict[str, Any] | None = None  # role_match detail not needed here
+	role_match = _resolve_role_match(parent_session, role_key)
 
 	if round_name == "hr":
 		return build_hr_round_context(
@@ -602,7 +640,9 @@ def _get_question_at_index(
 	index: int,
 ) -> dict[str, Any] | None:
 	"""Return the question dict at the given index, or None if out of range."""
-	if round_name == "project_discussion":
+	# A conversational (dynamic) project round stores a flat "questions" list
+	# like every other round; only the scripted one groups them by project.
+	if round_name == "project_discussion" and questions_json.get("mode") != "dynamic":
 		# project_discussion stores a list of ProjectQuestionSet; flatten to get question
 		all_qs: list[Any] = []
 		for proj in (questions_json.get("projects") or []):
@@ -618,7 +658,7 @@ def _get_question_at_index(
 
 
 def _total_question_count(questions_json: dict[str, Any], round_name: str) -> int:
-	if round_name == "project_discussion":
+	if round_name == "project_discussion" and questions_json.get("mode") != "dynamic":
 		count = 0
 		for proj in (questions_json.get("projects") or []):
 			count += len(proj.get("questions") or [])
@@ -797,6 +837,45 @@ def start_interview_round(
 	parsed_resume = _get_parsed_resume(request.session_id)
 	context = _build_round_context(request.round, parsed_resume, parent_session)
 
+	# Imported here: interview_engines imports this module.
+	from backend.api.interview_engines import dynamic_rounds
+
+	if request.round in dynamic_rounds():
+		# A conversational round plans itself and asks its questions live over
+		# the socket. Generating a scripted batch here cost a Groq call (~5 s)
+		# that the socket then discarded on seeing the mode mismatch.
+		from backend.nlp.round_plans import build_round_coverage_plan
+
+		questions_json = _prepare_questions_json_for_persistence(
+			request.round,
+			{
+				"questions": [],
+				"mode": "dynamic",
+				"coverage_plan": build_round_coverage_plan(request.round, context),
+				"_dialogue": [],
+				"_dialogue_digest": [],
+			},
+			context,
+		)
+		try:
+			round_session = create_interview_round_session(
+				session_id=request.session_id,
+				round=request.round,
+				role_key=str(parent_session.get("role_selected") or "").strip() or "unknown",
+				questions_json=questions_json,
+				started_at=_utcnow_iso(),
+			)
+		except DatabaseClientError as exc:
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=str(exc),
+			) from exc
+		return {
+			"created": True,
+			"round_session": round_session,
+			"questions_json": questions_json,
+		}
+
 	cached_questions_json = None
 	if existing and not request.force_restart:
 		existing_questions_json = dict(existing.get("questions_json") or {})
@@ -939,6 +1018,15 @@ def clarify_interview_question(
 		raise HTTPException(
 			status_code=status.HTTP_409_CONFLICT,
 			detail="This interview round is already complete.",
+		)
+
+	if str((round_record.get("questions_json") or {}).get("mode") or "") == "dynamic":
+		# A conversational round has no stable question index to answer against:
+		# the interviewer may already have moved on. Accepting an answer here
+		# would silently corrupt the transcript rather than fail loudly.
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="This round runs in conversational mode; answer over the WebSocket.",
 		)
 
 	persisted_index = int(round_record.get("current_question_index") or 0)

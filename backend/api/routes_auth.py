@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import logging
+import os
+import secrets
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -16,18 +20,24 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from pymongo.errors import DuplicateKeyError
 
 from backend.api.auth import (
+	WS_TICKET_TTL_SECONDS,
+	issue_websocket_ticket,
 	AuthenticatedUser,
 	get_optional_current_user,
 	require_current_user,
 	serialize_authenticated_user,
 )
 from backend.api.rate_limit import (
-	FailureTracker,
-	FixedWindowRateLimiter,
+	FailureBackoff,
 	RateLimitExceeded,
+	RateLimiter,
+	create_failure_tracker,
+	create_rate_limiter,
 )
 from backend.config import get_settings
+from backend.database.db_errors import DuplicateRecordError
 from backend.database.mongo_client import get_repository
+from backend.email_provider import EmailDeliveryError, send_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _LOGGER = logging.getLogger(__name__)
@@ -40,28 +50,28 @@ _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"invalid-placeholder-password", bcrypt.gen
 _INVALID_CREDENTIALS_DETAIL = "Invalid email or password."
 
 _throttle_lock = threading.Lock()
-_ip_rate_limiter: FixedWindowRateLimiter | None = None
-_login_failure_tracker: FailureTracker | None = None
+_ip_rate_limiter: RateLimiter | None = None
+_login_failure_tracker: FailureBackoff | None = None
 
 
-def _get_ip_rate_limiter() -> FixedWindowRateLimiter:
+def _get_ip_rate_limiter() -> RateLimiter:
 	global _ip_rate_limiter
 	with _throttle_lock:
 		if _ip_rate_limiter is None:
 			auth_settings = get_settings().auth
-			_ip_rate_limiter = FixedWindowRateLimiter(
+			_ip_rate_limiter = create_rate_limiter(
 				max_events=auth_settings.rate_limit_max_attempts,
 				window_seconds=auth_settings.rate_limit_window_seconds,
 			)
 		return _ip_rate_limiter
 
 
-def _get_login_failure_tracker() -> FailureTracker:
+def _get_login_failure_tracker() -> FailureBackoff:
 	global _login_failure_tracker
 	with _throttle_lock:
 		if _login_failure_tracker is None:
 			auth_settings = get_settings().auth
-			_login_failure_tracker = FailureTracker(
+			_login_failure_tracker = create_failure_tracker(
 				max_failures=auth_settings.login_max_failures,
 				lockout_seconds=auth_settings.login_lockout_seconds,
 			)
@@ -69,13 +79,28 @@ def _get_login_failure_tracker() -> FailureTracker:
 
 
 def reset_auth_throttles() -> None:
-	"""Drop the cached throttles.
+	"""Clear the throttles and drop the cached instances.
 
 	Tests use this to get a clean slate and to pick up overridden settings.
+
+	The state is cleared before the instances are dropped, and that ordering is
+	the whole point. Dropping the reference alone was equivalent to a reset only
+	for the in-process store, where a fresh instance starts empty. With the
+	MongoDB-backed store a new instance points at the same collection, so the
+	old state is still there — "reset" would have silently done nothing, which
+	is how a shared backend turns passing tests into failing ones for reasons
+	that have nothing to do with the code under test.
 	"""
 
 	global _ip_rate_limiter, _login_failure_tracker
 	with _throttle_lock:
+		for throttle in (_ip_rate_limiter, _login_failure_tracker):
+			if throttle is None:
+				continue
+			# Best effort: this runs in test teardown and in a reset path, and
+			# an unreachable database there should not mask the real failure.
+			with contextlib.suppress(Exception):
+				throttle.clear()
 		_ip_rate_limiter = None
 		_login_failure_tracker = None
 
@@ -125,27 +150,36 @@ def _enforce_ip_rate_limit(request: Request, scope: str) -> None:
 		_raise_rate_limited(exc)
 
 
+def _validate_password_policy(value: str) -> str:
+	"""Shared by SignupRequest and ResetPasswordRequest — a new password from
+	either path must meet the same bar."""
+	auth_settings = get_settings().auth
+	if len(value) < auth_settings.password_min_length:
+		raise ValueError(
+			f"Password must be at least {auth_settings.password_min_length} "
+			"characters long."
+		)
+	encoded_length = len(value.encode("utf-8"))
+	if encoded_length > auth_settings.password_max_bytes:
+		raise ValueError(
+			f"Password must be at most {auth_settings.password_max_bytes} bytes "
+			"once UTF-8 encoded. Accented, emoji, and non-Latin characters each "
+			"count as more than one byte."
+		)
+	return value
+
+
 class SignupRequest(BaseModel):
 	email: EmailStr
 	password: str
+	# Optional so existing clients (and the API docs) keep working unchanged.
+	first_name: str | None = Field(default=None, max_length=60)
+	last_name: str | None = Field(default=None, max_length=60)
 
 	@field_validator("password")
 	@classmethod
-	def _validate_password_policy(cls, value: str) -> str:
-		auth_settings = get_settings().auth
-		if len(value) < auth_settings.password_min_length:
-			raise ValueError(
-				f"Password must be at least {auth_settings.password_min_length} "
-				"characters long."
-			)
-		encoded_length = len(value.encode("utf-8"))
-		if encoded_length > auth_settings.password_max_bytes:
-			raise ValueError(
-				f"Password must be at most {auth_settings.password_max_bytes} bytes "
-				"once UTF-8 encoded. Accented, emoji, and non-Latin characters each "
-				"count as more than one byte."
-			)
-		return value
+	def _validate_password(cls, value: str) -> str:
+		return _validate_password_policy(value)
 
 
 class LoginRequest(BaseModel):
@@ -212,14 +246,28 @@ def signup(request: SignupRequest, http_request: Request) -> dict[str, str]:
 			{
 				"email": email,
 				"password_hash": hashed.decode("utf-8"),
+				"first_name": (request.first_name or "").strip() or None,
+				"last_name": (request.last_name or "").strip() or None,
+				"display_name": " ".join(
+					part for part in ((request.first_name or "").strip(), (request.last_name or "").strip()) if part
+				)
+				or None,
 				"created_at": datetime.now(timezone.utc).isoformat(),
 			},
 		)
-	except DuplicateKeyError as exc:
+	except (DuplicateRecordError, DuplicateKeyError) as exc:
 		# The check above is not atomic: two concurrent signups for the same
 		# address can both pass it, and the unique index on users.email then
 		# rejects the loser. Report that as the same conflict rather than
 		# letting it surface as an unhandled 500.
+		#
+		# DuplicateRecordError is what MongoRepository.insert_one raises, having
+		# translated pymongo's DuplicateKeyError into the domain hierarchy so
+		# that `except DatabaseClientError` handlers elsewhere can see it. The
+		# raw DuplicateKeyError is still caught here because this route is the
+		# one place where letting a duplicate through would create a second
+		# account for an address that already has one; a caller reaching the
+		# driver by another path must not bypass this.
 		raise HTTPException(
 			status_code=status.HTTP_409_CONFLICT,
 			detail="User with this email already exists.",
@@ -267,6 +315,202 @@ def login(request: LoginRequest, http_request: Request) -> dict[str, str]:
 
 	failure_tracker.reset(email)
 	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
+
+
+# ---------------------------------------------------------------------------
+# Sign in with Google
+# ---------------------------------------------------------------------------
+#
+# The browser gets an ID token (a JWT signed by Google) from Google Identity
+# Services and posts it here. Everything that makes it trustworthy is checked
+# server-side: Google's signature, that it was issued FOR THIS APP (aud), by
+# Google (iss), not expired, and that Google verified the email. Only then is
+# the email treated as proven, so it can sign in to an existing password
+# account with the same address — the same trust a password-reset email gives.
+
+_GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
+_google_jwks_client: jwt.PyJWKClient | None = None
+
+
+def _google_client_id() -> str:
+	return (os.environ.get("GOOGLE_CLIENT_ID") or "").strip()
+
+
+def _verify_google_id_token(credential: str, client_id: str) -> dict[str, object]:
+	global _google_jwks_client
+	if _google_jwks_client is None:
+		# Caches Google's rotating signing keys between requests.
+		_google_jwks_client = jwt.PyJWKClient(_GOOGLE_CERTS_URL, cache_keys=True)
+	signing_key = _google_jwks_client.get_signing_key_from_jwt(credential)
+	claims = jwt.decode(
+		credential,
+		signing_key.key,
+		algorithms=["RS256"],
+		audience=client_id,
+		issuer=_GOOGLE_ISSUERS,
+		options={"require": ["exp", "iat", "aud", "iss", "sub"]},
+	)
+	if claims.get("email_verified") is not True or not claims.get("email"):
+		raise jwt.InvalidTokenError("Google has not verified this email address.")
+	return claims
+
+
+class GoogleSignInRequest(BaseModel):
+	credential: str = Field(min_length=20, max_length=4096)
+
+
+@router.get("/config")
+def auth_config() -> dict[str, object]:
+	"""Public sign-in options for the login page. The client ID is not secret:
+	Google requires it in the browser to render the button."""
+
+	client_id = _google_client_id()
+	return {"google_client_id": client_id or None}
+
+
+@router.post("/google")
+def google_sign_in(request: GoogleSignInRequest, http_request: Request) -> dict[str, str]:
+	_enforce_ip_rate_limit(http_request, "login")
+
+	client_id = _google_client_id()
+	if not client_id:
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Google sign-in is not configured on this server.",
+		)
+	try:
+		claims = _verify_google_id_token(request.credential, client_id)
+	except jwt.PyJWKClientError as exc:
+		_LOGGER.warning("Could not fetch Google signing keys: %s", exc)
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Could not reach Google to verify the sign-in. Please try again.",
+		) from exc
+	except jwt.InvalidTokenError as exc:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="Google sign-in could not be verified.",
+		) from exc
+
+	email = _normalize_email(str(claims["email"]))
+	repo = get_repository()
+	user = repo.db.users.find_one({"email": email})
+	if user is None:
+		try:
+			created = repo.insert_one(
+				"users",
+				{
+					"email": email,
+					# No password: this account signs in with Google. Password login
+					# fails cleanly for it, and "forgot password" can add one.
+					"password_hash": None,
+					"auth_provider": "google",
+					"google_sub": str(claims["sub"]),
+					"display_name": str(claims.get("name") or "").strip() or None,
+					"created_at": datetime.now(timezone.utc).isoformat(),
+				},
+			)
+			return {"access_token": _create_jwt(str(created["id"]), email)}
+		except (DuplicateRecordError, DuplicateKeyError):
+			# Raced another first sign-in for the same address; use that account.
+			user = repo.db.users.find_one({"email": email})
+			if user is None:
+				raise
+
+	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
+
+
+class ForgotPasswordRequest(BaseModel):
+	email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+	token: str = Field(min_length=1, max_length=512)
+	new_password: str
+
+	@field_validator("new_password")
+	@classmethod
+	def _validate_new_password(cls, value: str) -> str:
+		return _validate_password_policy(value)
+
+
+_PASSWORD_RESET_EMAIL_SUBJECT = "Reset your password"
+_GENERIC_FORGOT_PASSWORD_DETAIL = (
+	"If an account exists for that address, a password reset link has been sent."
+)
+
+
+def _hash_reset_token(raw_token: str) -> str:
+	# SHA-256 of a 32-byte random token, not bcrypt: this is a lookup key for a
+	# high-entropy single-use secret, not a low-entropy password an attacker
+	# could feasibly brute-force offline — bcrypt's deliberate slowness buys
+	# nothing here and would cost every legitimate reset a real delay.
+	return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+@router.post("/forgot-password")
+def forgot_password(request: ForgotPasswordRequest, http_request: Request) -> dict[str, str]:
+	_enforce_ip_rate_limit(http_request, "forgot_password")
+
+	email = _normalize_email(request.email)
+	repo = get_repository()
+	user = repo.db.users.find_one({"email": email})
+
+	# Identical response whether or not the account exists — the same
+	# enumeration-resistance shape login already has. A response that varied
+	# here would reopen exactly the oracle that hardening closed.
+	if user is not None:
+		auth_settings = get_settings().auth
+		raw_token = secrets.token_urlsafe(32)
+		expires_at = datetime.now(timezone.utc) + timedelta(
+			minutes=auth_settings.password_reset_token_ttl_minutes
+		)
+		repo.create_password_reset_token(
+			token_hash=_hash_reset_token(raw_token),
+			user_id=str(user["_id"]),
+			expires_at=expires_at,
+		)
+		reset_url = f"{auth_settings.password_reset_url_base}?token={raw_token}"
+		try:
+			send_email(
+				to=email,
+				subject=_PASSWORD_RESET_EMAIL_SUBJECT,
+				body=(
+					"A password reset was requested for this account.\n\n"
+					f"Reset it here (expires in "
+					f"{auth_settings.password_reset_token_ttl_minutes} minutes):\n"
+					f"{reset_url}\n\n"
+					"If you did not request this, no action is needed — the link "
+					"expires on its own and your password is unchanged."
+				),
+			)
+		except EmailDeliveryError:
+			# Must not surface to the caller: doing so would disclose that the
+			# address exists (the generic branch below never fails this way).
+			_LOGGER.exception("Failed to send password reset email for user %s.", user["_id"])
+
+	return {"detail": _GENERIC_FORGOT_PASSWORD_DETAIL}
+
+
+@router.post("/reset-password")
+def reset_password(request: ResetPasswordRequest) -> dict[str, str]:
+	repo = get_repository()
+	record = repo.consume_password_reset_token(
+		token_hash=_hash_reset_token(request.token),
+		now=datetime.now(timezone.utc),
+	)
+	if record is None:
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="This password reset link is invalid, expired, or already used.",
+		)
+
+	hashed = bcrypt.hashpw(request.new_password.encode("utf-8"), bcrypt.gensalt())
+	repo.db.users.update_one(
+		{"_id": record["user_id"]}, {"$set": {"password_hash": hashed.decode("utf-8")}}
+	)
+	return {"detail": "Password updated. Sign in with your new password."}
 
 
 @router.post("/logout")
@@ -338,6 +582,22 @@ def auth_status(
 	return {
 		"authenticated": current_user is not None,
 		"user": serialize_authenticated_user(current_user) if current_user else None,
+	}
+
+
+@router.post("/ws-ticket")
+def auth_ws_ticket(
+	current_user: AuthenticatedUser = Depends(require_current_user),
+) -> dict[str, object]:
+	"""Trade the access token (sent as a header) for a single-use socket ticket.
+
+	See ``issue_websocket_ticket`` for why the socket never sees the access
+	token itself.
+	"""
+
+	return {
+		"ticket": issue_websocket_ticket(current_user),
+		"expires_in": WS_TICKET_TTL_SECONDS,
 	}
 
 

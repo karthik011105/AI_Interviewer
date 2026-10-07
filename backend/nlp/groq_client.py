@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from functools import lru_cache
 from importlib import import_module
 from typing import Any
 
 from backend.config import GroqSettings
+from backend.metrics import groq_request_duration_seconds, groq_requests_total
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _record_groq_attempt(started_at: float, outcome: str) -> None:
+	groq_requests_total.labels(outcome=outcome).inc()
+	groq_request_duration_seconds.observe(time.monotonic() - started_at)
 
 
 class GroqClientError(RuntimeError):
@@ -54,12 +61,32 @@ def _load_groq_sdk() -> Any:
 		) from exc
 
 
+# The SDK retries on its own (max_retries=2 by default) underneath the retry
+# loops below, which multiplied every failing call: GROQ_MAX_RETRIES=3 meant up
+# to 12 HTTP requests and ~4 minutes at the 20 s timeout, and a 429 was retried
+# by the SDK before the fail-fast branch here ever saw it. Measured: 2 configured
+# attempts produced 6 requests. These loops are the one retry policy.
+_SDK_MAX_RETRIES = 0
+
+
 @lru_cache(maxsize=4)
 def get_groq_client(api_key: str, api_base_url: str) -> Any:
 	"""Return a cached Groq client for the configured API key and base URL."""
 
 	groq_module = _load_groq_sdk()
-	return groq_module.Groq(api_key=api_key, base_url=api_base_url)
+	return groq_module.Groq(
+		api_key=api_key, base_url=api_base_url, max_retries=_SDK_MAX_RETRIES
+	)
+
+
+@lru_cache(maxsize=4)
+def get_async_groq_client(api_key: str, api_base_url: str) -> Any:
+	"""Return a cached async Groq client for the configured key and base URL."""
+
+	groq_module = _load_groq_sdk()
+	return groq_module.AsyncGroq(
+		api_key=api_key, base_url=api_base_url, max_retries=_SDK_MAX_RETRIES
+	)
 
 
 def create_chat_completion(
@@ -88,12 +115,15 @@ def create_chat_completion(
 		request_kwargs["response_format"] = dict(response_format)
 
 	for attempt in range(1, max_attempts + 1):
+		started_at = time.monotonic()
 		try:
-			return client.chat.completions.create(**request_kwargs)
+			result = client.chat.completions.create(**request_kwargs)
 		except Exception as exc:
 			last_error = exc
 			if _is_rate_limit_error(exc):
+				_record_groq_attempt(started_at, "rate_limited")
 				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
+			_record_groq_attempt(started_at, "error")
 			if attempt >= max_attempts:
 				break
 
@@ -106,11 +136,99 @@ def create_chat_completion(
 				sleep_seconds,
 			)
 			time.sleep(sleep_seconds)
+		else:
+			_record_groq_attempt(started_at, "success")
+			return result
 
 	message = f"Groq completion failed after {max_attempts} attempt(s)."
 	if last_error is not None:
 		message = f"{message} Last error: {last_error}"
 		raise GroqCompletionError(message) from last_error
+	raise GroqCompletionError(message)
+
+
+async def stream_chat_completion(
+	*,
+	settings: GroqSettings,
+	model: str,
+	temperature: float,
+	messages: Sequence[Mapping[str, Any]],
+	timeout: float | None = None,
+	max_tokens: int | None = None,
+) -> AsyncIterator[str]:
+	"""Yield content deltas from a streaming Groq chat completion.
+
+	Retries follow the same backoff schedule as `create_chat_completion`, but
+	only until the first delta is yielded. Once a token has been handed to the
+	caller it may already have been spoken aloud, and restarting the request
+	would make the interviewer repeat itself mid-sentence. After that point a
+	failure ends the stream and the caller keeps whatever it received.
+	"""
+
+	client = get_async_groq_client(settings.api_key, settings.api_base_url)
+	request_timeout = settings.timeout_seconds if timeout is None else timeout
+	max_attempts = settings.max_retries + 1
+	last_error: Exception | None = None
+
+	request_kwargs: dict[str, Any] = {
+		"model": model,
+		"temperature": temperature,
+		"messages": list(messages),
+		"timeout": request_timeout,
+		"stream": True,
+	}
+	if max_tokens is not None:
+		request_kwargs["max_tokens"] = max_tokens
+
+	for attempt in range(1, max_attempts + 1):
+		emitted = False
+		started_at = time.monotonic()
+		try:
+			stream = await client.chat.completions.create(**request_kwargs)
+			_record_groq_attempt(started_at, "success")
+			async for event in stream:
+				choices = getattr(event, "choices", None) or []
+				if not choices:
+					continue
+				delta = getattr(choices[0], "delta", None)
+				content = getattr(delta, "content", None) if delta is not None else None
+				if not content:
+					continue
+				emitted = True
+				yield content
+			return
+		except Exception as exc:
+			if emitted:
+				# Mid-stream failure: the caller already has partial output, so
+				# surface the truncation in the log rather than replaying it.
+				# The connection itself already recorded as "success" above —
+				# this counts separately since the failure is not a retryable
+				# connection error.
+				groq_requests_total.labels(outcome="partial").inc()
+				_LOGGER.warning("Groq stream ended early after partial output: %s", exc)
+				return
+
+			last_error = exc
+			if _is_rate_limit_error(exc):
+				_record_groq_attempt(started_at, "rate_limited")
+				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
+			_record_groq_attempt(started_at, "error")
+			if attempt >= max_attempts:
+				break
+
+			sleep_seconds = settings.backoff_base_seconds * (2 ** (attempt - 1))
+			_LOGGER.warning(
+				"Groq stream attempt %s/%s failed: %s. Retrying in %.2fs.",
+				attempt,
+				max_attempts,
+				exc,
+				sleep_seconds,
+			)
+			await asyncio.sleep(sleep_seconds)
+
+	message = f"Groq stream failed after {max_attempts} attempt(s)."
+	if last_error is not None:
+		raise GroqCompletionError(f"{message} Last error: {last_error}") from last_error
 	raise GroqCompletionError(message)
 
 
@@ -120,5 +238,7 @@ __all__ = [
 	"GroqDependencyError",
 	"GroqRateLimitError",
 	"create_chat_completion",
+	"get_async_groq_client",
 	"get_groq_client",
+	"stream_chat_completion",
 ]

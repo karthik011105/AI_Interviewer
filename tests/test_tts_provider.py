@@ -31,7 +31,7 @@ class TTSProviderTests(TestCase):
 			self.assertEqual(reader.getsampwidth(), 2)
 			self.assertEqual(reader.readframes(reader.getnframes()), pcm_bytes)
 
-	def test_elevenlabs_failure_falls_back_to_piper_for_streaming_chunks(self) -> None:
+	def test_elevenlabs_failure_falls_back_to_piper(self) -> None:
 		pcm_bytes = b"\x01\x00\x02\x00" * 16
 
 		# The provider chain for "elevenlabs" is (elevenlabs, edge, piper), so
@@ -55,10 +55,15 @@ class TTSProviderTests(TestCase):
 				pcm_bytes=pcm_bytes,
 			),
 		):
-			sample_rate, chunks = tts.synthesize_chunks("Tell me about yourself.", chunk_ms=50)
+			output = tts.synthesize_detailed("Tell me about yourself.")
 
-		self.assertEqual(sample_rate, 22050)
-		self.assertEqual(b"".join(chunks), pcm_bytes)
+		self.assertEqual(output.provider, "piper")
+		self.assertEqual(output.sample_rate, 22050)
+		# Piper returns PCM that we wrap as WAV. The websocket advertises this
+		# value to the client, so a wrong label makes the audio undecodable.
+		self.assertEqual(output.encoding, "wav")
+		with wave.open(io.BytesIO(output.audio), "rb") as reader:
+			self.assertEqual(reader.readframes(reader.getnframes()), pcm_bytes)
 
 	def test_health_reports_piper_fallback_when_elevenlabs_is_not_configured(self) -> None:
 		with patch.dict(

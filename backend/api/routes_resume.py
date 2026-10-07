@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -107,7 +108,15 @@ async def parse_resume_upload(
 	run_role_matching: bool = Form(True),
 	use_groq_profiles: bool = Form(True),
 	persist_role_matches: bool = Form(True),
-	max_roles: int = Form(5),
+	# The bounds must be declared HERE, not only on ResumeParseRequest.
+	# This handler builds that model itself, further down, from these loose Form
+	# values. A pydantic ValidationError raised inside a handler body is not the
+	# request-parsing error FastAPI turns into a 422 — it propagates as an
+	# unhandled exception, so max_roles=0 or max_roles=99999 returned a 500.
+	# Declaring the same ge/le on the Form makes FastAPI reject it during
+	# parsing, where it belongs, and the model's own Field stays as the
+	# backstop for callers that construct it directly.
+	max_roles: int = Form(5, ge=1, le=10),
 	persist_interview_contexts: bool = Form(True),
 	# Metered: this route runs a full-resume Groq extraction, the most expensive
 	# single LLM call in the application.
@@ -136,7 +145,13 @@ async def parse_resume_upload(
 			max_roles=max_roles,
 			persist_interview_contexts=persist_interview_contexts,
 		)
-		response = _parse_resume_request(request, temp_pdf_path, current_user=current_user)
+		# Off the event loop: this is PDF parsing, a Groq extraction with
+		# retries, and embedding-based role matching — seconds at best. Called
+		# inline from this async handler it froze every live interview socket
+		# in the process until it returned.
+		response = await asyncio.to_thread(
+			_parse_resume_request, request, temp_pdf_path, current_user=current_user
+		)
 		response["uploaded_filename"] = filename
 		return response
 	finally:

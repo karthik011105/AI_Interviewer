@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -11,6 +12,7 @@ from backend.api.auth import AuthenticatedUser
 from backend.api import routes_interview
 from backend.main import create_app
 from backend.nlp import answer_evaluator
+from backend.voice import tts as tts_module
 
 
 class AnswerEvaluationTests(TestCase):
@@ -159,6 +161,28 @@ class InterviewProgressionTests(TestCase):
 		self.assertEqual(context.exception.status_code, 409)
 		self.assertIn("force_restart=true", str(context.exception.detail))
 
+	def test_starting_a_conversational_round_skips_scripted_generation(self) -> None:
+		"""The socket plans and asks a conversational round live, so the Groq
+		call that generated a scripted batch here was thrown away every time."""
+
+		request = routes_interview.InterviewStartRequest(session_id="session-123", round="hr")
+		context = {"candidate_name": "Alex", "summary": "", "interests": []}
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": "technical,hr,project_discussion"}), \
+			 patch("backend.api.routes_interview._require_parent_session", return_value={"role_selected": "r"}), \
+			 patch("backend.api.routes_interview.get_interview_round_session", return_value=None), \
+			 patch("backend.api.routes_interview._get_parsed_resume", return_value={}), \
+			 patch("backend.api.routes_interview._build_round_context", return_value=context), \
+			 patch("backend.api.routes_interview.get_or_generate_questions") as mock_generate, \
+			 patch("backend.api.routes_interview.create_interview_round_session", side_effect=lambda **kw: {"questions_json": kw["questions_json"]}) as mock_create:
+			result = routes_interview.start_interview_round(request, self.current_user)
+
+		mock_generate.assert_not_called()
+		saved = mock_create.call_args.kwargs["questions_json"]
+		self.assertEqual(saved["mode"], "dynamic")
+		self.assertEqual(saved["questions"], [])
+		self.assertEqual(saved["coverage_plan"]["round"], "hr")
+		self.assertTrue(result["created"])
+
 	def test_start_interview_round_force_restart_rebuilds_completed_round(self) -> None:
 		request = routes_interview.InterviewStartRequest(
 			session_id="session-123",
@@ -187,7 +211,9 @@ class InterviewProgressionTests(TestCase):
 			"questions_json": questions_json,
 		}
 
-		with patch("backend.api.routes_interview._require_parent_session", return_value=parent_session), \
+		# The scripted start path; technical is conversational by default now.
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": ""}), \
+			 patch("backend.api.routes_interview._require_parent_session", return_value=parent_session), \
 			 patch("backend.api.routes_interview.get_interview_round_session", return_value=existing_round), \
 			 patch("backend.api.routes_interview._get_parsed_resume", return_value={"skills": ["Python"]}), \
 			 patch("backend.api.routes_interview._build_round_context", return_value={"selected_role": "backend_python_developer"}) as mock_build_context, \
@@ -571,7 +597,10 @@ class WebSocketInterviewTests(TestCase):
 				"questions_json": kwargs["questions_json"],
 			}
 
-		with patch("backend.main.warmup_semantic_encoder"), \
+		# This exercises the scripted engine; technical now defaults to the
+		# conversational one, so pin it explicitly.
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": ""}), \
+			 patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.api.ws_interview._authenticate_websocket_user", return_value=self.current_user), \
 			 patch("backend.api.ws_interview._load_parent_session", return_value={
 				 "id": "session-123",
@@ -580,13 +609,13 @@ class WebSocketInterviewTests(TestCase):
 			 }), \
 			 patch("backend.api.ws_interview.ensure_session_access"), \
 			 patch("backend.api.ws_interview._load_or_create_round_session", return_value=(round_record, dict(round_questions_json))), \
-			 patch("backend.api.ws_interview.synthesize", return_value=b""), \
-			 patch("backend.api.ws_interview.evaluate_answer", return_value=evaluation), \
-			 patch("backend.api.ws_interview.save_interview_response") as mock_save_response, \
-			 patch("backend.api.ws_interview.advance_interview_question", side_effect=_advance_round) as mock_advance_question:
+			 patch("backend.api.interview_runtime.synthesize_detailed", return_value=tts_module.TTSOutput(b"", "wav", 22050, "piper")), \
+			 patch("backend.api.interview_engines.scripted.evaluate_answer", return_value=evaluation), \
+			 patch("backend.api.interview_engines.scripted.save_interview_response") as mock_save_response, \
+			 patch("backend.api.interview_engines.scripted.advance_interview_question", side_effect=_advance_round) as mock_advance_question:
 			app = create_app()
 			with TestClient(app) as client:
-				with client.websocket_connect("/interview/ws/session-123/technical?access_token=test-token") as websocket:
+				with client.websocket_connect("/interview/ws/session-123/technical?ticket=test-ticket") as websocket:
 					connected_payload = self._receive_until_type(websocket, "connected")
 					question_payload = self._receive_until_type(websocket, "question")
 

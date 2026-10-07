@@ -11,12 +11,19 @@
 # Web framework
 fastapi==0.136.0
 uvicorn==0.45.0
+# Required for the live interview WebSocket. Plain `uvicorn` ships with no
+# WebSocket implementation, so without this every /interview/ws handshake was
+# rejected ("No supported WebSocket library detected") — locally, in the image,
+# and in any deployment. The test suite never noticed because TestClient runs
+# the app in-process and bypasses uvicorn's protocol layer entirely.
+websockets==17.2
 python-multipart==0.0.26
 pydantic==2.13.3
 email-validator>=2.0.0
 
 # Auth
-PyJWT==2.12.1
+# [crypto] adds RS256 verification, needed to check Google sign-in ID tokens.
+PyJWT[crypto]==2.12.1
 bcrypt>=4.0.0
 
 # Database
@@ -24,6 +31,19 @@ pymongo>=4.6.0
 
 # Configuration
 python-dotenv==1.2.2
+
+# Error tracking. Inert unless SENTRY_DSN is set — see backend/logging_config.py.
+sentry-sdk==2.19.2
+
+# Metrics. /metrics is always exposed (no external service required — a
+# Prometheus server, if any, scrapes it); see backend/metrics.py.
+#
+# NOT prometheus-fastapi-instrumentator: 7.1.0 pins starlette<1.0.0, which
+# would silently downgrade the starlette this project actually runs on
+# (>=0.46.0, resolved to 1.6.0) — confirmed by installing it and watching pip
+# do exactly that. HTTP metrics are instrumented directly instead (see
+# RequestMetricsMiddleware in backend/main.py).
+prometheus-client==0.21.1
 
 # LLM
 groq==1.2.0

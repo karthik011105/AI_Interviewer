@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import shutil
 import struct
@@ -44,6 +45,8 @@ from pathlib import Path
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+
+_LOGGER = logging.getLogger(__name__)
 
 # This module reads its configuration straight from os.environ at import time,
 # so the project .env has to be loaded first. Delegate to backend.config so
@@ -117,6 +120,8 @@ def _normalize_provider(value: str | None) -> str:
     normalized = str(value or "piper").strip().casefold()
     if normalized in {"eleven", "elevenlabs", "11labs"}:
         return "elevenlabs"
+    if normalized in {"edge", "edge-tts", "edgetts"}:
+        return "edge"
     return "piper"
 
 def _resolve_piper_executable() -> str | None:
@@ -567,50 +572,27 @@ def _synthesize_with_elevenlabs_audio(text: str, *, voice: str | None = None) ->
 def _synthesize_with_edge_audio(text: str, *, voice: str | None = None) -> TTSAudioResult:
     effective_voice = (voice or "en-US-JennyNeural").strip()
     try:
-        import edge_tts
         import asyncio
-        
-        async def _run_edge():
+
+        import edge_tts
+
+        async def _run_edge() -> bytes:
             communicate = edge_tts.Communicate(text, effective_voice)
-            audio_data = b""
+            parts: list[bytes] = []
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
-                    audio_data += chunk["data"]
-            return audio_data
-            
-        # Execute async code in a new event loop if necessary, but we are often in an async context already.
-        # Wait, if we are in asyncio.to_thread, we don't have a running loop here.
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-        if loop.is_running():
-            import threading
-            def _thread_run():
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(_run_edge())
-            
-            thread_result = []
-            def target():
-                try:
-                    thread_result.append(_thread_run())
-                except Exception as e:
-                    thread_result.append(e)
-            t = threading.Thread(target=target)
-            t.start()
-            t.join()
-            if isinstance(thread_result[0], Exception):
-                raise thread_result[0]
-            audio_bytes = thread_result[0]
-        else:
-            audio_bytes = loop.run_until_complete(_run_edge())
-            
+                    parts.append(chunk["data"])
+            return b"".join(parts)
+
+        # Synthesis always runs in a worker thread (see asyncio.to_thread at the
+        # call sites), so there is no running loop here to reuse. asyncio.run
+        # creates one and — unlike the previous get_event_loop path — always
+        # closes it, instead of leaking a loop per call.
+        audio_bytes = asyncio.run(_run_edge())
+
         if not audio_bytes:
             raise TTSSynthesisError("Edge-TTS returned empty audio.")
-            
+
         return TTSAudioResult(
             provider="edge",
             sample_rate=24000,
@@ -618,10 +600,28 @@ def _synthesize_with_edge_audio(text: str, *, voice: str | None = None) -> TTSAu
         )
     except ImportError:
         raise TTSUnavailableError("edge-tts library is not installed.")
+    except TTSSynthesisError:
+        raise
     except Exception as exc:
         raise TTSSynthesisError(f"Edge-TTS synthesis failed: {exc}") from exc
 
+
 def _provider_order() -> tuple[str, ...]:
+    """The configured provider first, then the fallbacks, in preference order.
+
+    Note the asymmetry in the piper branch: it does NOT fall back to
+    ElevenLabs, while the other two branches do. That is deliberate and worth
+    stating, because it looks like an oversight. Piper is the local, offline,
+    zero-cost engine; an operator who selects it has implicitly chosen "no
+    paid API calls". Silently failing over to a metered service would spend
+    money they did not ask to spend. edge-tts is free, so it stays in the
+    chain as the safe fallback.
+
+    The inverse is not symmetrical for the same reason: choosing `edge`
+    expresses a preference for a network engine, so ElevenLabs is a reasonable
+    second, and piper remains the last-resort local option.
+    """
+
     provider = _current_tts_provider()
     if provider == "edge":
         return ("edge", "elevenlabs", "piper")
@@ -632,22 +632,64 @@ def _provider_order() -> tuple[str, ...]:
 
 def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResult | None:
     last_error: TTSSynthesisError | None = None
+    provider_order = _provider_order()
 
-    for provider in _provider_order():
+    for index, provider in enumerate(provider_order):
         try:
             if provider == "edge":
                 return _synthesize_with_edge_audio(text, voice=voice)
             if provider == "elevenlabs":
                 return _synthesize_with_elevenlabs_audio(text, voice=voice)
             return _synthesize_with_piper_audio(text, voice=voice)
-        except TTSUnavailableError:
+        except TTSUnavailableError as exc:
+            # A *fallback* provider being unconfigured is routine — most
+            # deployments set up one of the three — so those stay at debug.
+            #
+            # The FIRST entry is different: it is the provider the operator
+            # explicitly asked for via TTS_PROVIDER. Silently substituting a
+            # different engine means the deployment is not doing what its own
+            # configuration says. That happened by default: docker-compose.yml
+            # sets TTS_PROVIDER=piper, but no stage of backend/Dockerfile
+            # installs the piper binary, so every containerised synthesis
+            # quietly fell through to edge-tts with nothing at the default log
+            # level to say so.
+            if index == 0:
+                _LOGGER.warning(
+                    "Configured TTS provider %r is unavailable (%s); falling back to %s. "
+                    "Voice output is not using the engine this deployment is configured for.",
+                    provider,
+                    exc,
+                    " then ".join(provider_order[1:]) or "nothing",
+                )
+            else:
+                _LOGGER.debug(
+                    "TTS provider %r unavailable, trying the next one: %s", provider, exc
+                )
             continue
         except TTSSynthesisError as exc:
+            # The provider *was* configured and still failed (bad request,
+            # rejected by the API, quota, ...). Falling through silently here is
+            # how a real failure (e.g. a voice the account's plan can't use)
+            # turns into "the interviewer just sounds worse" with nothing in the
+            # logs to explain why.
+            _LOGGER.warning("TTS provider %r failed, falling back: %s", provider, exc)
             last_error = exc
             continue
 
     if last_error is not None:
         raise last_error
+
+    # Every provider reported itself unavailable, so there is no exception to
+    # re-raise and the caller gets None. Callers treat that as "continue the
+    # round without audio", which is the right behaviour for a candidate
+    # mid-interview — the question text is already on screen. But it means
+    # voice is entirely dead, and returning None silently made that
+    # indistinguishable from a round that simply had nothing to say.
+    _LOGGER.warning(
+        "No TTS provider is available (tried %s); continuing without audio. "
+        "Voice output is disabled for this deployment until one is configured.",
+        ", ".join(provider_order),
+    )
     return None
 
 
@@ -655,47 +697,49 @@ def _generate_tts_audio(text: str, *, voice: str | None = None) -> TTSAudioResul
 # Public synthesis entry point
 # ---------------------------------------------------------------------------
 
-def synthesize(text: str, *, voice: str | None = None) -> bytes:
-    """Synthesize text to WAV/MP3 audio bytes using the selected provider."""
+@dataclass(frozen=True)
+class TTSOutput:
+    """Synthesized audio plus the container metadata a client needs to decode it."""
+
+    audio: bytes
+    encoding: str  # "wav" | "mp3"
+    sample_rate: int
+    provider: str
+
+
+def synthesize_detailed(text: str, *, voice: str | None = None) -> TTSOutput:
+    """Synthesize text and report the container format actually produced.
+
+    Providers do not agree on format: edge-tts returns MP3, Piper and
+    ElevenLabs return PCM that we wrap as WAV. Callers that put the bytes on a
+    wire must advertise the real encoding rather than assume one.
+    """
+
     if not text or not text.strip():
-        return _silent_wav()
+        return TTSOutput(_silent_wav(), "wav", _DEFAULT_SAMPLE_RATE, "silence")
 
     try:
         audio = _generate_tts_audio(text, voice=voice)
     except TTSUnavailableError:
-        return _silent_wav()
+        return TTSOutput(_silent_wav(), "wav", _DEFAULT_SAMPLE_RATE, "silence")
 
     if audio is None or not audio.pcm_bytes:
-        return _silent_wav(sample_rate=audio.sample_rate if audio is not None else _DEFAULT_SAMPLE_RATE)
-        
+        sample_rate = audio.sample_rate if audio is not None else _DEFAULT_SAMPLE_RATE
+        return TTSOutput(_silent_wav(sample_rate=sample_rate), "wav", sample_rate, "silence")
+
     if audio.provider == "edge":
-        return audio.pcm_bytes  # Returns MP3 directly for edge-tts
-    return _pcm16le_to_wav_bytes(audio.pcm_bytes, sample_rate=audio.sample_rate)
+        return TTSOutput(audio.pcm_bytes, "mp3", audio.sample_rate, "edge")
+    return TTSOutput(
+        _pcm16le_to_wav_bytes(audio.pcm_bytes, sample_rate=audio.sample_rate),
+        "wav",
+        audio.sample_rate,
+        audio.provider,
+    )
 
 
-def synthesize_chunks(
-    text: str,
-    *,
-    voice: str | None = None,
-    chunk_ms: int = 100,
-    sample_rate: int = _DEFAULT_SAMPLE_RATE,
-) -> tuple[int, list[bytes]]:
-    """Synthesize text and return PCM chunks suitable for progressive playback."""
-    chunk_ms = max(20, int(chunk_ms))
-    if not text or not text.strip():
-        return sample_rate, []
-
-    audio = _generate_tts_audio(text, voice=voice)
-    if audio is None:
-        return sample_rate, []
-
-    effective_sample_rate = audio.sample_rate or sample_rate
-    chunk_size = max(2, effective_sample_rate * 2 * chunk_ms // 1000)
-    chunks = [
-        audio.pcm_bytes[index:index + chunk_size]
-        for index in range(0, len(audio.pcm_bytes), chunk_size)
-    ]
-    return effective_sample_rate, chunks
+def synthesize(text: str, *, voice: str | None = None) -> bytes:
+    """Synthesize text to WAV/MP3 audio bytes using the selected provider."""
+    return synthesize_detailed(text, voice=voice).audio
 
 
 def tts_health() -> dict[str, object]:

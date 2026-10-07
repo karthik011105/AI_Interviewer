@@ -1,4 +1,18 @@
-"""Lightweight energy-based voice activity detection for streaming PCM audio."""
+"""Lightweight energy-based voice activity detection for streaming PCM audio.
+
+STATUS: currently unused. Nothing in the application imports ``EnergyVAD`` —
+verified by a repository-wide search including the tests. It was superseded by
+client-side detection: the browser runs Silero VAD and sends each *whole
+utterance* as one binary frame, with turn boundaries arriving as explicit
+``speech_start`` / ``speech_end`` control messages. See the docstring on
+``_handle_audio_frame`` in ``backend/api/interview_runtime.py``, which says
+outright that there is nothing for the server to detect.
+
+It is kept rather than deleted because a server-side VAD is the natural
+fallback if a client ever cannot run Silero, and the module is small and
+self-contained. Treat it as unproven against live audio: it has no callers, so
+it has never processed a real stream.
+"""
 
 from __future__ import annotations
 
@@ -38,7 +52,16 @@ class EnergyVAD:
 		if not pcm_bytes:
 			return SpeechEvent(name="silence", is_speech=False)
 
-		samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+		# np.frombuffer with int16 raises ValueError on an odd byte count, and
+		# PCM frames arrive from a browser over a network — a truncated frame is
+		# a normal consequence of a flaky connection, not a programming error.
+		# A trailing half-sample carries no information, so drop it rather than
+		# letting a malformed frame raise into the caller.
+		usable_length = len(pcm_bytes) - (len(pcm_bytes) % 2)
+		if usable_length == 0:
+			return SpeechEvent(name="silence", is_speech=False)
+
+		samples = np.frombuffer(pcm_bytes[:usable_length], dtype=np.int16)
 		if samples.size == 0:
 			return SpeechEvent(name="silence", is_speech=False)
 

@@ -84,8 +84,14 @@ Run the full backend test suite:
 
 ```powershell
 Set-Location E:\interview_simulator
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+.\.venv\Scripts\python.exe -m unittest discover -t . -s tests -p "test_*.py"
 ```
+
+`-t .` is required, not optional. It makes discovery import the tests as a
+package, which runs `tests/__init__.py` and with it the ordered
+sentence-transformers import described in `backend/__init__.py`. Without it the
+run segfaults on Windows. To skip the semantic model entirely (about 13s
+faster, at the cost of a weaker `sbert_score`), set `DISABLE_SEMANTIC_ENCODER=1`.
 
 Run focused DSA suites:
 

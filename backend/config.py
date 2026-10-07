@@ -109,6 +109,19 @@ def _read_float(
 	return value
 
 
+def _read_csv(
+	source: Mapping[str, str],
+	name: str,
+	default: tuple[str, ...],
+) -> tuple[str, ...]:
+	raw_value = (source.get(name) or "").strip()
+	if not raw_value:
+		return default
+
+	values = tuple(item.strip() for item in raw_value.split(",") if item.strip())
+	return values or default
+
+
 def _read_bool(
 	source: Mapping[str, str],
 	name: str,
@@ -175,6 +188,23 @@ class Judge0Settings:
 
 
 @dataclass(frozen=True, slots=True)
+class CorsSettings:
+	"""Allowed browser origins for the API.
+
+	``allowed_origins`` defaults to the Vite dev server so local development
+	keeps working with zero configuration. A real deployment must set
+	CORS_ALLOWED_ORIGINS to its actual frontend domain(s) — without it, a
+	browser running the production frontend cannot call this API at all.
+	"""
+
+	allowed_origins: tuple[str, ...]
+	# Matches only http://localhost:<port> / http://127.0.0.1:<port> — useful
+	# for local dev against any Vite port, harmless in production because no
+	# real browser sends that Origin for a deployed page.
+	allow_origin_regex: str
+
+
+@dataclass(frozen=True, slots=True)
 class MongoSettings:
 	"""MongoDB connection settings."""
 	uri: str
@@ -199,6 +229,13 @@ class AuthSettings:
 	# Per-account backoff applied after consecutive failed sign-in attempts.
 	login_max_failures: int
 	login_lockout_seconds: int
+	# Password reset. The token is a one-time, single-use secret emailed to the
+	# account holder; the TTL bounds how long a leaked-but-unused email grants
+	# access. url_base is the frontend page that reads ?token=... and submits
+	# it back to POST /auth/reset-password — defaults to the Vite dev server so
+	# local development needs no configuration, same as CorsSettings.
+	password_reset_token_ttl_minutes: int
+	password_reset_url_base: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +271,7 @@ class AppSettings:
 	mongo: MongoSettings
 	auth: AuthSettings
 	quotas: QuotaSettings
+	cors: CorsSettings
 	allow_local_resume_path_api: bool
 
 	@classmethod
@@ -348,15 +386,15 @@ class AppSettings:
 				api_key=groq_api_key,
 				api_base_url=_base,
 				resume_parser_model=(
-					(source.get("GROQ_RESUME_MODEL") or "llama-3.3-70b-versatile")
+					(source.get("GROQ_RESUME_MODEL") or "openai/gpt-oss-120b")
 					.strip()
 				),
 				answer_evaluator_model=(
-					(source.get("GROQ_EVALUATOR_MODEL") or "llama-3.1-8b-instant")
+					(source.get("GROQ_EVALUATOR_MODEL") or "openai/gpt-oss-20b")
 					.strip()
 				),
 				feedback_generator_model=(
-					(source.get("GROQ_FEEDBACK_MODEL") or "llama-3.1-8b-instant")
+					(source.get("GROQ_FEEDBACK_MODEL") or "openai/gpt-oss-20b")
 					.strip()
 				),
 				timeout_seconds=_read_float(
@@ -428,6 +466,16 @@ class AppSettings:
 				300,
 				minimum=1,
 			),
+			password_reset_token_ttl_minutes=_read_int(
+				source,
+				"AUTH_PASSWORD_RESET_TOKEN_TTL_MINUTES",
+				30,
+				minimum=1,
+			),
+			password_reset_url_base=(
+				(source.get("AUTH_PASSWORD_RESET_URL_BASE") or "http://localhost:5173/reset-password")
+				.strip()
+			),
 		)
 
 		if auth_settings.password_max_bytes > 72:
@@ -480,6 +528,18 @@ class AppSettings:
 			),
 		)
 
+		cors_settings = CorsSettings(
+			allowed_origins=_read_csv(
+				source,
+				"CORS_ALLOWED_ORIGINS",
+				("http://127.0.0.1:5173", "http://localhost:5173"),
+			),
+			allow_origin_regex=(
+				source.get("CORS_ALLOW_ORIGIN_REGEX")
+				or r"http://(127\.0\.0\.1|localhost):(517[0-9]|3000)"
+			),
+		)
+
 		return cls(
 			groq=groq_settings,
 			resume_parsing=resume_parsing,
@@ -487,6 +547,7 @@ class AppSettings:
 			mongo=mongo_settings,
 			auth=auth_settings,
 			quotas=quota_settings,
+			cors=cors_settings,
 			allow_local_resume_path_api=_read_bool(
 				source,
 				"ENABLE_LOCAL_RESUME_PATH_API",
@@ -514,6 +575,7 @@ __all__ = [
 	"AppSettings",
 	"AuthSettings",
 	"ConfigurationError",
+	"CorsSettings",
 	"DOTENV_OVERRIDE_ENV_VAR",
 	"dotenv_override_enabled",
 	"load_project_dotenv",

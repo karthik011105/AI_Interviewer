@@ -16,6 +16,7 @@ latency_sec   : float — how long transcription took
 from __future__ import annotations
 
 import io
+import logging
 import os
 import time
 import wave
@@ -44,12 +45,14 @@ class TranscribeResult:
 # Internal model cache — one worker, one model load
 # ---------------------------------------------------------------------------
 
+_LOGGER = logging.getLogger(__name__)
+
 _MODEL_SIZE: str = os.environ.get("WHISPER_MODEL_SIZE", "base.en")
 _COMPUTE_TYPE: str = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 _DEVICE: str = "cpu"
 _NO_SPEECH_THRESHOLD: float = float(os.environ.get("WHISPER_NO_SPEECH_THRESHOLD", "0.6"))
-_BEAM_SIZE: int = max(1, int(os.environ.get("WHISPER_BEAM_SIZE", "5")))
-_BEST_OF: int = max(1, int(os.environ.get("WHISPER_BEST_OF", "5")))
+_BEAM_SIZE: int = max(1, int(os.environ.get("WHISPER_BEAM_SIZE", "1")))
+_BEST_OF: int = max(1, int(os.environ.get("WHISPER_BEST_OF", "1")))
 _PATIENCE: float = max(0.1, float(os.environ.get("WHISPER_PATIENCE", "1.0")))
 _TEMPERATURE: float = max(0.0, float(os.environ.get("WHISPER_TEMPERATURE", "0.0")))
 _VAD_THRESHOLD: float = float(os.environ.get("WHISPER_VAD_THRESHOLD", "0.40"))
@@ -60,6 +63,8 @@ _ENABLE_PREPROCESSING: bool = (
 )
 _INITIAL_PROMPT: str = os.environ.get("WHISPER_INITIAL_PROMPT", "").strip()
 _HOTWORDS: str = os.environ.get("WHISPER_HOTWORDS", "").strip()
+_CPU_THREADS: int = max(0, int(os.environ.get("WHISPER_CPU_THREADS", "0")))
+_NUM_WORKERS: int = max(1, int(os.environ.get("WHISPER_NUM_WORKERS", "1")))
 
 _model = None  # lazy-loaded
 _model_error: str | None = None
@@ -109,6 +114,8 @@ def _get_model():
                 candidate,
                 device=_DEVICE,
                 compute_type=_COMPUTE_TYPE,
+                cpu_threads=_CPU_THREADS,
+                num_workers=_NUM_WORKERS,
             )
             _active_model_size = candidate
             return _model
@@ -289,6 +296,7 @@ def transcribe_audio(
             temperature=_TEMPERATURE,
             initial_prompt=_INITIAL_PROMPT or None,
             hotwords=_HOTWORDS or None,
+            condition_on_previous_text=False,
         )
         # segments is a generator — materialise it now
         text_parts: list[str] = []
@@ -325,3 +333,21 @@ def stt_health() -> dict[str, object]:
         }
     except STTUnavailableError as exc:
         return {"status": "unavailable", "error": str(exc)}
+
+
+def warmup_stt() -> bool:
+    """Load the Whisper model ahead of the first real answer.
+
+    Without this the first candidate to speak in a fresh process pays the
+    model load (2-5s on CPU) inside their turn, on top of the decode.
+    """
+
+    try:
+        _get_model()
+    except STTUnavailableError as exc:
+        _LOGGER.warning("STT warmup skipped: %s", exc)
+        return False
+    except Exception:  # pragma: no cover - defensive, warmup must never break startup
+        _LOGGER.exception("STT warmup failed.")
+        return False
+    return True

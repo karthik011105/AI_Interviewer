@@ -230,156 +230,126 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
     }
   }
 
-  return (
-    <div className="page-shell assessment-shell">
-      <section className="assessment-command-center assessment-command-center--compact">
-        <section className="glass-panel assessment-command-card">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">Assessment</p>
-              <h2>{assessmentSession ? "Continue the MCQ round" : "Start the MCQ round"}</h2>
-            </div>
-          </div>
+  const answered = assessmentSession?.answered_count ?? 0;
+  const total = assessmentSession?.total_questions ?? 0;
+  const finished = Boolean(assessmentSession) && !currentQuestion;
+  const progressPct = total ? Math.round((answered / total) * 100) : 0;
 
-          {sessionId && roleKey ? (
-            <>
-              <div className="action-row">
-                <button
-                  className="primary-button action-row__button"
-                  type="button"
-                  onClick={() => startAssessment()}
-                  disabled={busyState !== "idle"}
-                >
-                  {busyState === "starting" ? "Opening assessment..." : assessmentSession ? "Resume assessment" : "Start assessment"}
-                </button>
-                <button
-                  className="secondary-button action-row__button"
-                  type="button"
-                  onClick={() => startAssessment({ forceRestart: true })}
-                  disabled={busyState !== "idle"}
-                >
-                  {busyState === "starting" ? "Restarting..." : "Restart batch"}
-                </button>
-                <button
-                  className="secondary-button action-row__button"
-                  type="button"
-                  onClick={loadAssessmentSession}
-                  disabled={busyState !== "idle"}
-                >
-                  {busyState === "loading" ? "Refreshing..." : "Refresh state"}
-                </button>
-                <WorkflowResetControl
-                  accessToken={accessToken}
-                  apiBaseUrl={baseUrl}
-                  sessionId={sessionId}
-                  currentTarget="assessment"
-                  currentLabel="Assessment"
-                  onResetApplied={handleWorkflowReset}
-                  triggerClassName="secondary-button action-row__button"
-                  triggerLabel="Reset"
-                  disabled={busyState !== "idle"}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="message-stack">
-              <p className="info-banner">Lock a session and role in Resume Intake first.</p>
-            </div>
-          )}
-
-          <div className="message-stack">
-            <p className="info-banner">{infoMessage}</p>
-            {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
-          </div>
+  if (!sessionId || !roleKey) {
+    return (
+      <div className="pp-page">
+        <section className="interview-launch-card">
+          <p className="section-kicker">Assessment</p>
+          <h2>Upload your resume first</h2>
+          <p>The assessment is built for the role you choose, so start there.</p>
+          <button className="primary-button" type="button" onClick={() => onNavigate?.("upload")}>
+            Go to resume
+          </button>
         </section>
-      </section>
+      </div>
+    );
+  }
 
-      {assessmentSession ? (
-        <section className="assessment-cockpit assessment-cockpit--compact">
-          <section className="glass-panel assessment-question-panel assessment-question-panel--stage">
-            <div className="panel-head panel-head--tight">
-              <div>
-                <p className="section-kicker">Assessment question</p>
-                <h2>
-                  {currentQuestion
-                    ? `Question ${currentQuestionIndex + 1} of ${assessmentSession.total_questions}`
-                    : "Assessment complete"}
-                </h2>
-              </div>
-            </div>
+  return (
+    <div className="pp-page pp-assessment">
+      <div className="action-row">
+        {assessmentSession ? (
+          <button
+            className="secondary-button action-row__button"
+            type="button"
+            onClick={() => startAssessment({ forceRestart: true })}
+            disabled={busyState !== "idle"}
+          >
+            {busyState === "starting" ? "Restarting…" : "Start over"}
+          </button>
+        ) : null}
+        <WorkflowResetControl
+          accessToken={accessToken}
+          apiBaseUrl={baseUrl}
+          sessionId={sessionId}
+          currentTarget="assessment"
+          currentLabel="Assessment"
+          onResetApplied={handleWorkflowReset}
+          triggerClassName="secondary-button action-row__button"
+          triggerLabel="Reset"
+          disabled={busyState !== "idle"}
+        />
+      </div>
 
-            {currentQuestion ? (
-              <div className="assessment-question-body">
-                <p className="assessment-question-prompt">{currentQuestion.prompt}</p>
+      {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
 
-                <div className="assessment-option-list" role="radiogroup" aria-label="Assessment options">
-                  {currentQuestion.options.map((option) => {
-                    const checked = selectedOptionId === option.id;
-                    return (
-                      <label
-                        key={option.id}
-                        className={`assessment-option ${checked ? "assessment-option--selected" : ""}`}
-                      >
-                        <input
-                          className="assessment-option__input"
-                          type="radio"
-                          name="assessment-option"
-                          value={option.id}
-                          checked={checked}
-                          onChange={() => setSelectedOptionId(option.id)}
-                        />
-                        <span className="assessment-option__marker">{option.id.toUpperCase()}</span>
-                        <span className="assessment-option__text">{option.text}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <div className="action-row assessment-answer-actions">
-                  <button
-                    className="primary-button action-row__button"
-                    type="button"
-                    onClick={submitCurrentAnswer}
-                    disabled={busyState !== "idle" || !selectedOptionId}
-                  >
-                    {busyState === "submitting" ? "Submitting answer..." : "Submit Answer"}
-                  </button>
-                  <button
-                    className="secondary-button action-row__button"
-                    type="button"
-                    onClick={loadAssessmentSession}
-                    disabled={busyState !== "idle"}
-                  >
-                    Refresh state
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="assessment-question-body">
-                <p className="empty-state">All questions are answered.</p>
-                <div className="action-row assessment-answer-actions">
-                  <button className="primary-button action-row__button" type="button" onClick={() => onNavigate?.("technical")}>Open Technical Interview</button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {lastSubmission ? (
-            <section className="glass-panel assessment-result-panel assessment-result-panel--inline">
-              <div className="panel-head panel-head--tight">
-                <div>
-                  <p className="section-kicker">Latest answer</p>
-                  <h2>{lastSubmission.is_correct ? "Correct answer recorded." : "Answer saved."}</h2>
-                </div>
-              </div>
-              <p className="assessment-question-prompt">{lastSubmission.explanation || "No explanation stored for this question yet."}</p>
-              <p className="dsa-message-card__summary">
-                You chose {lastSubmission.selected_option_id.toUpperCase()}. Correct option: {lastSubmission.correct_option_id.toUpperCase()}.
-              </p>
-            </section>
-          ) : null}
+      {lastSubmission && !finished ? (
+        <section className={`pp-feedback pp-feedback--${lastSubmission.is_correct ? "right" : "wrong"}`}>
+          <strong>
+            <span className="pp-feedback__label">Last question</span>
+            {lastSubmission.is_correct
+              ? "✓ Correct"
+              : `✗ Not quite - the answer was ${lastSubmission.correct_option_id.toUpperCase()}`}
+          </strong>
+          {lastSubmission.explanation ? <p>{lastSubmission.explanation}</p> : null}
         </section>
       ) : null}
+
+      {!assessmentSession ? (
+        <section className="interview-launch-card">
+          <p className="section-kicker">Assessment</p>
+          <h2>Quick skills check</h2>
+          <p>A short set of multiple-choice questions on the skills your role needs. Answer at your own pace.</p>
+          <button className="primary-button" type="button" onClick={() => startAssessment()} disabled={busyState !== "idle"}>
+            {busyState === "starting" ? "Preparing questions…" : "Start assessment"}
+          </button>
+        </section>
+      ) : finished ? (
+        <section className="interview-launch-card">
+          <p className="section-kicker">Assessment complete</p>
+          <h2>Nice work - all {total} answered</h2>
+          <p>Next up is the live technical interview with Maya.</p>
+          <button className="primary-button" type="button" onClick={() => onNavigate?.("technical")}>
+            Continue to technical interview →
+          </button>
+        </section>
+      ) : (
+        <section className="pp-card pp-question">
+          <div className="pp-question__progress">
+            <span>Question {currentQuestionIndex + 1} of {total}</span>
+            <span className="pp-question__bar" aria-hidden="true">
+              <i style={{ width: `${progressPct}%` }} />
+            </span>
+          </div>
+
+          <p className="pp-question__prompt">{currentQuestion.prompt}</p>
+
+          <div className="assessment-option-list" role="radiogroup" aria-label="Answer options">
+            {currentQuestion.options.map((option) => {
+              const checked = selectedOptionId === option.id;
+              return (
+                <label key={option.id} className={`assessment-option ${checked ? "assessment-option--selected" : ""}`}>
+                  <input
+                    className="assessment-option__input"
+                    type="radio"
+                    name="assessment-option"
+                    value={option.id}
+                    checked={checked}
+                    onChange={() => setSelectedOptionId(option.id)}
+                  />
+                  <span className="assessment-option__marker">{option.id.toUpperCase()}</span>
+                  <span className="assessment-option__text">{option.text}</span>
+                </label>
+              );
+            })}
+          </div>
+
+          <button
+            className="primary-button pp-question__submit"
+            type="button"
+            onClick={submitCurrentAnswer}
+            disabled={busyState !== "idle" || !selectedOptionId}
+          >
+            {busyState === "submitting" ? "Saving…" : "Submit answer"}
+          </button>
+        </section>
+      )}
+
     </div>
   );
 }

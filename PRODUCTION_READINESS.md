@@ -1,7 +1,7 @@
 # Production Readiness Assessment — AI Interview Simulator
 
 Assessment date: 2026-08-28
-Last updated: 2026-08-29 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes)
+Last updated: 2026-09-11 (migration cleanup, auth hardening, Docker/CI, config precedence + DSA execution fixes, spend quotas, secret rotation + Judge0 hardening, WebSocket metering, token revocation, housekeeping, CORS config + structured logging + error tracking, Prometheus metrics, frontend redesign, password reset)
 Scope: full repository (`backend/`, `frontend/`, `tests/`, config, Docker/Judge0, scripts, data assets).
 Method: direct source inspection (the `code-review-graph` MCP server failed to connect — `CONNECT_TIMEOUT` — so this pass used manual file reads, `git ls-files`, and targeted greps instead of graph queries), followed by running the backend test suite and the frontend build.
 
@@ -42,16 +42,30 @@ health. Run the suite and the build before trusting any assessment of it.
 
 ---
 
-## 0. Urgent — do this regardless of anything else below
+## 0. Credential exposure — status
 
-`.env` at the repo root (not committed — it's git-ignored and untracked, confirmed via `git ls-files`) contains live-looking credentials in plaintext:
+`.env` at the repo root contains live credentials in plaintext. It is git-ignored
+and was **never committed** to any reachable history (verified via
+`git log --all --full-history`), so despite the GitHub remote these were never
+pushed. All four were read into an assistant session during the assessment, so
+they should be considered exposed to wherever that transcript is stored.
 
-- `GROQ_API_KEY`
-- `AUTH_JWT_SECRET` (the secret that signs every session token)
-- `QUIZ_API_KEY`
-- `ELEVENLABS_API_KEY`
+| Credential | Status |
+|---|---|
+| `AUTH_JWT_SECRET` | **Rotated** (§22.1), verified — tokens signed with the old secret are now rejected |
+| `GROQ_API_KEY` | **Not rotated — accepted risk.** Owner elected to keep the existing key. |
+| `ELEVENLABS_API_KEY` | **Not rotated — accepted risk.** As above. |
+| `QUIZ_API_KEY` | **Not rotated — accepted risk.** As above. Used only by `scripts/import_questions_from_apis.py`, not at runtime. |
 
-These were read into this assistant session as part of the inspection you requested. Treat them as exposed and **rotate all four now**, then update `.env` with the new values. This is independent of the rest of the report and should not wait for a triage pass.
+The three retained keys are a deliberate decision by the project owner, recorded
+here rather than left looking like an outstanding task. Revisit it if any of them
+gains billing exposure or moves beyond a development tier, and rotate before this
+project is handed to anyone else.
+
+Separately, and **not** covered by the decision above: the Judge0 Redis and
+Postgres passwords in commit `1f249f5` *were* committed and pushed (§22.3). The
+repository is private, which bounds the exposure, but those two are a different
+class from the `.env` keys — they are in git history rather than only on disk.
 
 ---
 
@@ -72,11 +86,22 @@ All of this is fixed; see §17.
 
 **[RESOLVED] LLM and compute spend is now bounded** — per-user hourly quotas on resume parsing, role matching, DSA execution, and voice (§21), extended to the interview WebSocket (§23). Every path that spends money on Groq, ElevenLabs, or Judge0 is now metered per account.
 
+**[RESOLVED] CORS origins, structured logging, error tracking, and metrics are
+now in place** — allowed frontend origins move through `CORS_ALLOWED_ORIGINS`
+instead of a hardcoded localhost list, every log line is JSON with a
+request-id that correlates one HTTP request across every module that logs
+during it, a catch-all exception handler turns a genuinely unhandled
+exception into a structured 500 instead of an opaque one, Sentry initializes
+itself when `SENTRY_DSN` is set and stays fully inert otherwise (§26), and
+`/metrics` now exposes request counts/latency by route plus Groq/Judge0 call
+outcomes (§27).
+
 The largest remaining risks are:
 
 1. **Secrets still need rotating** (§0) — unchanged, and the only item outstanding since the first assessment.
 2. **[RESOLVED] Judge0 hardening** — authentication is now enabled and all hardcoded infrastructure passwords are parameterised (§22). **Still open:** Judge0 credentials were committed to the repository and are on the GitHub remote; they need rotating, and removing them from history requires a force-push (§22).
-3. **No email verification or password reset** (§4) — both blocked on choosing an email provider. Token revocation is done (§24).
+3. **[RESOLVED] Password reset** (§4, §28) — token-based, end to end, backend and frontend. **No email verification.** Deliberately left open: the original assessment flagged this as depending on threat model rather than an unconditional gap, and that call still belongs to the project owner, not this pass. Token revocation is done (§24).
+4. **CI has still never actually run.** The workflow now has real observability work to validate (§26), and remains unverified on GitHub's own runners — only ever run locally.
 
 None of this is unusual for a project at this stage — but it means "production" is a real project, not a config change.
 
@@ -144,7 +169,7 @@ There is no API gateway, no reverse proxy config, no CDN/static-hosting config f
 | **[RESOLVED]** ~~No password policy~~ | Medium | `backend/api/routes_auth.py`, `backend/config.py` | Signup now enforces a configurable minimum length and a maximum **UTF-8 byte** length. The byte limit closed a latent 500: bcrypt 5.0 raises `ValueError` above 72 bytes, so a long password — or a 30-character emoji/CJK password (120 bytes) — previously crashed signup. The policy is deliberately not applied at sign-in, to avoid locking out pre-policy accounts and disclosing the policy to anonymous callers. | Done | — |
 | **[RESOLVED]** ~~User enumeration via sign-in~~ | Medium | `backend/api/routes_auth.py` | Unknown-address and wrong-password now return an identical status and detail, a dummy bcrypt comparison equalises response timing when no account exists, and the lockout is keyed on the *submitted* address so attempts against non-existent accounts throttle identically. Keying it on a resolved account would have turned the lockout itself into an enumeration oracle. | Done | — |
 | No email verification | Medium | `backend/api/routes_auth.py:45-66` | Signup issues a valid session token immediately with no confirmation that the email address is owned by the requester | Add an email-verification flow before granting full access, or explicitly accept this as a deliberate trade-off for a low-stakes demo app | Depends on threat model — flag for a decision, not silently skip |
-| No password reset / account recovery, despite the frontend routing to it | Medium | `frontend/src/App.jsx:653-658` (`handleForgotPassword` — hardcoded "not implemented in custom MongoDB auth" error) | Users who forget their password have no recovery path; this was clearly a working Supabase feature before the auth migration that was never rebuilt | Implement a token-based reset flow (email + time-limited reset token) | Yes, for real users |
+| **[RESOLVED]** ~~No password reset / account recovery, despite the frontend routing to it~~ | Medium | `backend/api/routes_auth.py`, `frontend/src/pages/ResetPasswordPage.jsx` | A token-based reset flow now exists end to end: `POST /auth/forgot-password` (enumeration-resistant, identical response either way), a one-time hashed token with a TTL, `POST /auth/reset-password`, and a frontend "Forgot password?" link plus a `/reset-password?token=...` page (§28). | Done | — |
 | **[RESOLVED, with a scaling caveat]** ~~No brute-force lockout / backoff~~ | Medium | `backend/api/rate_limit.py`, `backend/api/routes_auth.py` | A per-account lockout now applies after `AUTH_LOGIN_MAX_FAILURES` consecutive failures, and follows the account rather than the source address so rotating IPs does not reset the streak. **Caveat:** counters are per-process, so multiple workers multiply the effective limit and separate instances share nothing. Documented in README §7.7; the classes take an injectable clock and a narrow interface to keep a Redis swap cheap. | Back with Redis or enforce at the gateway before scaling out | Resolved for single-process; revisit when scaling |
 | WebSocket auth token can be passed as a query parameter | Low-Medium | `backend/api/ws_interview.py:166-180` | `?access_token=<jwt>` in the connection URL is a common and largely unavoidable pattern for browser WebSockets (no custom header support), but it means the token can end up in server access logs, browser history, and Referer headers if not handled carefully | Confirm access logs don't record full query strings for the `/interview/ws/*` path, and prefer the header path (already supported) from any non-browser client | No, but worth a log-scrubbing check |
 | **[RESOLVED]** ~~No test coverage for the auth/session layer at all~~ | High | `tests/test_auth.py` (new, 48 tests) | Covers password policy (including the multibyte byte-limit case), signup success/conflict/race, sign-in success and every failure mode, user-enumeration resistance, corrupt-hash and oversized-password handling, JWT verification (valid, expired, forged signature, missing subject, malformed, and `alg: none` downgrade), session-ownership enforcement, the throttling primitives with an injected clock, and an HTTP-layer pass through the real FastAPI stack asserting 422/429/401 wiring and the `Retry-After` header. Verified non-vacuous by mutation testing: removing the duplicate-key handling and disabling the rate limiter each cause the corresponding tests to fail. | Done | — |
@@ -308,8 +333,8 @@ I did not find any other clearly-dead code paths in the routes/services I read d
 4. ~~Add a password policy + fix the signup duplicate-key race~~ — **done** (§18).
 5. ~~Write an auth/session test suite~~ — **done**: `tests/test_auth.py`, 48 tests (§18).
 6. ~~Add Dockerfiles for backend + frontend and a CI pipeline~~ — **done and verified end to end** (§19). Remaining: let CI actually run once on a push.
-7. Move CORS origins into env-driven config so a real frontend domain can be deployed (§5).
-8. Add structured logging + error tracking (Sentry or equivalent) + basic metrics (§9, §14).
+7. ~~Move CORS origins into env-driven config so a real frontend domain can be deployed~~ — **done** (§26).
+8. ~~Add structured logging + error tracking (Sentry or equivalent) + basic metrics~~ — **done** (§26, §27).
 9. Confirm/harden the Judge0 sandbox (non-privileged containers, auth enabled) before letting untrusted users execute code through it (§3).
 10. Add spend/usage caps on Groq calls per user/session (§8).
 
@@ -891,3 +916,258 @@ stop shipping unrelated tooling, not to uninstall it.
 finding was wrong (§22.2) — it is the genuine upstream Judge0 v1.13.1 release,
 and it is now the reference copy of the pristine `judge0.conf` after that file
 was untracked. It stays.
+
+---
+
+## 26. Change log — CORS config, structured logging, and error tracking
+
+Punch-list items 7 and 8. Suite: **295 → 321 passing** (the 295 baseline
+already includes the interview-question-targeting work from
+`INTERVIEW_QUESTION_TARGETING.md`, reviewed and verified in this same pass —
+see below).
+
+### CORS moved into `AppSettings`
+
+`backend/main.py` hardcoded `allow_origins` to the two Vite dev-server
+origins, with no way to add a real frontend domain short of a code change and
+redeploy (§5). `CorsSettings` in `backend/config.py` now reads
+`CORS_ALLOWED_ORIGINS` (comma-separated) and `CORS_ALLOW_ORIGIN_REGEX`, both
+defaulting to the previous hardcoded values so local development needs no new
+configuration. `tests/test_config.py` covers the default, a custom origin
+list, a blank value falling back to the default (consistent with every other
+`_read_*` helper in this file), and a custom regex.
+
+### Structured (JSON) logging with request correlation
+
+Logging was ad hoc (§9): some modules used `logging.getLogger(__name__)`, one
+route used a raw `print()`, and nothing tied separate log lines from the same
+request together. `backend/logging_config.py` is now the single place that
+configures it:
+
+- Every log line is one JSON object to stdout (`timestamp`, `level`, `logger`,
+  `message`, and `exception` when there is one) — grep-able today, and ready
+  for a log aggregator without changing the emitting code later.
+- `RequestIdMiddleware` (`backend/main.py`) mints (or reuses an inbound
+  `X-Request-ID`) an id per request, threads it through a `contextvars.ContextVar`
+  so every log line emitted anywhere during that request carries it via a
+  logging filter, and echoes it back as a response header. A user report
+  ("it broke around 2pm") now turns into an exact log query instead of a
+  guess.
+- The stray `print("!!! JUDGE0 ERROR:", ...)` in `routes_dsa.py` (§2, flagged
+  as trivial but never fixed) is now `_LOGGER.error(...)`, so it participates
+  in the same format and level filtering as everything else.
+- `LOG_LEVEL` controls verbosity (default `INFO`).
+
+### A global exception handler, and the bug in its first version
+
+`backend/main.py` had no consistent shape for an unhandled exception (§5) —
+FastAPI's default 500 leaked no traceback (confirmed good), but had no
+request id, no log line, and no fixed error envelope. A handler registered for
+the base `Exception` class now returns `{"error": {"code", "message",
+"request_id"}}` and logs the exception with its request id.
+
+**The first version of this had a real bug, caught before landing.** A
+handler registered for the base `Exception` class is installed as
+`ServerErrorMiddleware`'s `error_handler` — Starlette special-cases `Exception`
+and `500` to sit *outside every user middleware*, including
+`RequestIdMiddleware`. Concretely: the exception propagates up through
+`RequestIdMiddleware`'s `try/finally`, which resets the contextvar to `None`
+on its way out, *before* `ServerErrorMiddleware` ever calls the handler — so
+`request_id_var.get()` inside the handler always returned `None`, silently
+defeating the one thing request ids exist for on exactly the responses that
+need them most. Caught by a test asserting the 500 body's `request_id` matches
+the response header, which failed with `None != 'trace-me'`.
+
+Fixed by also stamping the id onto `request.state` in the middleware.
+Starlette's `Request.state` is backed by the ASGI `scope` dict, which is the
+same object threaded through the entire connection — so it survives even
+though `ServerErrorMiddleware` constructs its own fresh `Request` from that
+scope. The handler reads `request.state` first, falling back to the
+contextvar only for unit tests that call it directly. `RequestIdMiddleware`
+also never got a chance to stamp its own response with `X-Request-ID` in this
+path, since the exception propagated out of `call_next` before that line — the
+handler sets the header itself for the same reason.
+
+`tests/test_main_observability.py` drives this through the real FastAPI stack
+with `TestClient(app, raise_server_exceptions=False)` — needed because
+`ServerErrorMiddleware` always re-raises after building the response, by
+design, so real servers can still log it. Also covers CORS wiring end to end
+(a configured origin allowed on preflight, an unconfigured one rejected, the
+dev-server default still working) and that a normal request is unaffected.
+
+### Sentry, optional and inert by default
+
+`configure_error_tracking()` calls `sentry_sdk.init()` only when `SENTRY_DSN`
+is set; with it unset (the default), the function returns immediately and
+never imports `sentry_sdk`, so nothing changes for anyone who hasn't set up an
+account. `sentry-sdk` is now a runtime dependency (`backend/requirements.txt`)
+since it needs to be importable when a DSN is supplied, but installing it
+costs nothing when it is not.
+
+### Interview-question-targeting review
+
+Before starting the above, the uncommitted working-tree changes implementing
+`INTERVIEW_QUESTION_TARGETING.md` (the 70% role / 30% resume question
+allocation, pinned as a standing preference) were reviewed rather than taken
+on faith: ran the full suite (295 passing, matching that document's own
+verification), checked for circular imports from the new cross-module
+dependency (`resume_skill_profiler.py` now imports from
+`question_generator.py`), and ran the frontend production build. No issues
+found; that work was already correctly verified by the pass that wrote it.
+
+### Still not done
+
+- **CI has still never run for real.** The workflow now has meaningfully more
+  to validate than when §19 shipped it (this change touches `main.py`,
+  `config.py`, and adds a new runtime dependency) and remains something only
+  ever exercised locally, not on GitHub's own runners.
+- `/health` still does not check Mongo connectivity (§14) — unrelated to this
+  pass, carried forward from the original assessment.
+
+---
+
+## 27. Change log — Prometheus metrics
+
+Punch-list item 8's remaining half (§14). Suite: **321 → 331 passing.**
+
+`backend/metrics.py` adds four series: `http_requests_total` /
+`http_request_duration_seconds` (every request, labelled by method, route
+template, and status) via a new `RequestMetricsMiddleware` in `main.py`, and
+`groq_requests_total` / `judge0_requests_total` (each labelled by outcome —
+`success` / `rate_limited` / `error`) recorded at the one call site each of
+those clients actually has. `/metrics` serves them in Prometheus text format,
+unauthenticated — the same posture as `/health`, and consistent with how a
+scraper is normally kept out of reach at the network layer (a reverse proxy
+or the orchestrator's own network policy) rather than the application layer.
+
+### Not `prometheus-fastapi-instrumentator`
+
+The obvious library for the HTTP half turned out to be a real risk rather
+than a shortcut: `prometheus-fastapi-instrumentator==7.1.0` pins
+`starlette<1.0.0`, and this project resolves `starlette==1.6.0` (FastAPI
+0.136.0 only requires `>=0.46.0`, so nothing forces the newer version — it is
+just what `pip` picked when `requirements.txt` was last resolved). Installing
+the library to try it out **did exactly what the pin implies**: silently
+downgraded the installed `starlette` from 1.6.0 to 0.52.1, a transitive
+downgrade of the actual web framework this app runs on, caught only by
+`pip`'s own install log rather than by anything that would have failed
+loudly. Confirmed the app still imported at that downgraded version, then
+un-did it (`pip install starlette==1.6.0`) and wrote `RequestMetricsMiddleware`
+directly against `prometheus_client` instead — about 25 lines, no dependency
+risk, and it already had `RequestIdMiddleware` next to it as a template for
+exactly this kind of Starlette middleware. This is the second time in this
+project a library evaluated for one line of setup turned out to need throwing
+away after actually installing it and checking (§19 did the same for a
+dependency split, §20 for the DSA polling bug) — the lesson generalises: a
+library's own declared constraints are worth reading, not just its README.
+
+### Route templates, not resolved paths
+
+`RequestMetricsMiddleware` labels by `request.scope["route"].path` — the
+registered pattern (`/dsa/{session_id}/run`) — not `request.url.path` (the
+resolved URL with a real session id in it). Labelling by the resolved path
+would give every session id, submission id, and UUID this app has ever seen
+its own permanent Prometheus time series: exactly the unbounded-cardinality
+mistake that eventually takes a metrics endpoint down. `scope["route"]` is
+only populated *after* routing runs, which happens inside `call_next` — read
+after awaiting it, not before, the same ordering lesson `RequestIdMiddleware`
+already had to learn about `request.state` in §26. An unmatched route (404)
+has no `route` on its scope at all and is labelled `"unmatched"` rather than
+the arbitrary path someone probed. `tests/test_metrics.py` asserts the
+template label directly and asserts the raw-path label *never* gets written.
+
+### Verification
+
+`tests/test_metrics.py` (10 tests): Groq outcomes (success, rate-limited not
+counted as a plain error, one `error` sample per exhausted retry attempt),
+Judge0 outcomes (success, HTTP error, connection error) via the one function
+both health checks and submissions funnel through, the route-template/raw-path
+distinction above against a throwaway FastAPI app, and the `/metrics`
+endpoint itself — including that scraping `/metrics` does not inflate its own
+counter. Also started the real app with `uvicorn` and read actual scraped
+output, rather than trusting the tests alone.
+
+---
+
+## 28. Change log — password reset
+
+Punch-list item from §4: the last piece of the auth story that was fully
+buildable without a decision only the project owner can make (email
+*verification* still needs one — see below). Suite: **331 → 341 passing.**
+
+### Backend
+
+Two new routes in `routes_auth.py`:
+
+- `POST /auth/forgot-password` — looks up the address, and **returns the
+  identical response whether or not an account exists**, the same
+  enumeration-resistance shape §18 already built for sign-in. A differently
+  worded response here would have reopened exactly the oracle that hardening
+  closed, just through a second door. `tests/test_auth.py` asserts the two
+  responses are `==`, not just similarly-shaped.
+- `POST /auth/reset-password` — consumes a one-time token and updates the
+  password, subject to the same policy signup enforces (the validator was
+  extracted to `_validate_password_policy` so both paths share it rather than
+  drifting apart).
+
+The token itself: `secrets.token_urlsafe(32)` is emailed to the user, but
+only its **SHA-256 hash** is stored (`password_reset_tokens`, `_id` = the
+hash) — deliberately not bcrypt, unlike passwords. bcrypt's slowness defends
+against offline brute-forcing a *low-entropy* human-chosen password; a
+32-byte random token has nothing to brute-force, and bcrypt would only add a
+real delay to every legitimate reset. `consume_password_reset_token` is an
+atomic `find_one_and_update` gated on `used_at: None` and `expires_at > now`,
+so two concurrent requests racing the same token cannot both succeed — the
+same race class §18 fixed for signup, here for a different collection. A TTL
+index bounds the collection the same way `revoked_tokens` already does.
+
+### Email: pluggable, not a dependency on picking a provider
+
+`backend/email_provider.py` reads `EMAIL_PROVIDER`: `console` (default) logs
+the email — genuinely working for local dev and CI, not a stub to swap out
+later, and the reset link is right there in the log to test by hand. `smtp`
+sends via stdlib `smtplib` against any relay (Gmail, SendGrid, Mailgun, SES,
+Postmark all speak SMTP), configured entirely through `SMTP_*` env vars. No
+provider SDK, so no new dependency and no dependency-pin risk of the kind §27
+just found — switching providers later is a config change.
+
+A delivery failure is logged and **swallowed**, not surfaced to the caller:
+letting it reach the response would tell an attacker the address exists
+(the same reasoning as the identical-response requirement above). The
+generic response is returned either way; `tests/test_auth.py` covers this
+path explicitly with a mocked `EmailDeliveryError`.
+
+### Frontend
+
+`AuthPanel.jsx` gained a "Forgot password?" link (sign-in mode only) that
+swaps in a small email-only form, and `frontend/src/pages/ResetPasswordPage.jsx`
+is a new route at `/reset-password` that reads `?token=...`, has a distinct
+state for a missing token versus a successful reset, and enforces the
+new-password/confirm-password match client-side before calling the API.
+Both were screenshotted in a real headless browser in both themes — see the
+verification note below — not just built and assumed correct from the diff.
+
+### Deliberately not done: email verification
+
+The original assessment flagged this as depending on threat model rather
+than an unconditional gap ("flag for a decision, not silently skip"), and
+that framing still holds: signup continues to issue a session immediately
+with no proof the address is owned by the requester. Implementing it now
+would have meant choosing that trade-off unilaterally rather than building
+what was asked. The same `email_provider.py` this pass added is what a
+verification flow would send through, so adding it later is additive, not a
+rework.
+
+### Verification
+
+`tests/test_auth.py` gained three new test classes (10 tests): token-hash
+determinism, `forgot-password` (found vs. missing account get byte-identical
+responses, a delivery failure never surfaces, rate limiting applies via the
+same `_enforce_ip_rate_limit` scope mechanism already tested elsewhere), and
+`reset-password` (valid token updates the password and is verified against
+the new hash with `bcrypt.checkpw`, an invalid/expired/reused token is
+rejected with 400, the new password is still subject to the signup policy).
+Full suite green throughout. The frontend flow was driven in a real headless
+Chromium (not just `npm run build`): clicked "Forgot password?", visited
+`/reset-password?token=...` and `/reset-password` with no token, screenshotted
+all three states, and confirmed zero browser console errors.

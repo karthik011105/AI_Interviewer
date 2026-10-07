@@ -1,7 +1,11 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Moon, Sun } from "lucide-react";
 
 import AuthPanel from "./components/AuthPanel";
+import LandingPage from "./pages/LandingPage";
+import AppTopBar from "./components/AppTopBar";
+import PlatformWatermark from "./components/PlatformWatermark";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -10,6 +14,7 @@ const AssessmentPage = lazy(() => import("./pages/AssessmentPage"));
 const DSAPage = lazy(() => import("./pages/DSAPage"));
 const InterviewPage = lazy(() => import("./pages/InterviewPage"));
 const ReportPage = lazy(() => import("./pages/ReportPage"));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 
 function isLocalDevelopmentHost(hostname) {
 	return hostname === "127.0.0.1" || hostname === "localhost";
@@ -39,7 +44,19 @@ const INITIAL_WORKFLOW_STATE = {
 };
 
 const WORKFLOW_STORAGE_KEY = "ai-interview-simulator.workflow";
+const THEME_STORAGE_KEY = "ai-interview-simulator.theme";
 const VALID_ASSESSMENT_STATUSES = new Set(["idle", "active", "complete"]);
+
+function loadPersistedTheme() {
+	if (typeof window === "undefined") {
+		return "light";
+	}
+	try {
+		return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+	} catch {
+		return "light";
+	}
+}
 
 function normalizeDsaQuestionNumber(value) {
 	return Number(value) === 2 ? 2 : 1;
@@ -510,6 +527,22 @@ export default function App() {
 		infoMessage: "",
 		errorMessage: "",
 	});
+	const [theme, setTheme] = useState(loadPersistedTheme);
+
+	useEffect(() => {
+		document.documentElement.dataset.theme = theme;
+		try {
+			window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+		} catch {
+			// Best-effort only — a private window or blocked storage just means
+			// the choice doesn't persist across reloads.
+		}
+	}, [theme]);
+
+	function toggleTheme() {
+		setTheme((current) => (current === "dark" ? "light" : "dark"));
+	}
+
 	const currentPage = resolvePageFromPath(location.pathname);
 	const isStandaloneView = false;
 	const isAuthenticated = authState.status === "authenticated";
@@ -585,7 +618,7 @@ export default function App() {
 
 	useEffect(() => {
 		if (typeof document !== "undefined") {
-			document.title = `${currentPage.docTitle} | AI Interview Simulator`;
+			document.title = `${currentPage.docTitle} | PrepForge`;
 		}
 	}, [currentPage.docTitle]);
 
@@ -650,7 +683,10 @@ export default function App() {
 			infoMessage: "",
 		}));
 		try {
-			await authClient.signup(credentials.email, credentials.password);
+			await authClient.signup(credentials.email, credentials.password, {
+				firstName: credentials.firstName,
+				lastName: credentials.lastName,
+			});
 			const { data } = await authClient.getSession();
 			setAuthState((current) => ({
 				...current,
@@ -659,6 +695,65 @@ export default function App() {
 				accessToken: data.session?.access_token,
 				busyAction: "idle",
 				infoMessage: "Account created and signed in.",
+			}));
+		} catch (error) {
+			setAuthState((current) => ({
+				...current,
+				busyAction: "idle",
+				errorMessage: error.message,
+				infoMessage: "",
+			}));
+		}
+	}
+
+	// Logged-out visitors get the landing page; it needs the Google client ID
+	// (null until GOOGLE_CLIENT_ID is set on the server) to render the button.
+	const [googleClientId, setGoogleClientId] = useState(null);
+	useEffect(() => {
+		let active = true;
+		authClient.getAuthConfig().then((cfg) => {
+			if (active) setGoogleClientId(cfg?.google_client_id || null);
+		});
+		return () => {
+			active = false;
+		};
+	}, []);
+
+	function clearAuthMessages() {
+		setAuthState((current) => ({ ...current, errorMessage: "", infoMessage: "" }));
+	}
+
+	async function handleGoogleSignIn(credential) {
+		setAuthState((current) => ({ ...current, busyAction: "google", errorMessage: "", infoMessage: "" }));
+		try {
+			await authClient.googleSignIn(credential);
+			const { data } = await authClient.getSession();
+			setAuthState((current) => ({
+				...current,
+				status: "authenticated",
+				user: data.session?.user,
+				accessToken: data.session?.access_token,
+				busyAction: "idle",
+				infoMessage: "",
+			}));
+		} catch (error) {
+			setAuthState((current) => ({ ...current, busyAction: "idle", errorMessage: error.message }));
+		}
+	}
+
+	async function handleForgotPassword(email) {
+		setAuthState((current) => ({
+			...current,
+			busyAction: "forgot-password",
+			errorMessage: "",
+			infoMessage: "",
+		}));
+		try {
+			const data = await authClient.forgotPassword(email);
+			setAuthState((current) => ({
+				...current,
+				busyAction: "idle",
+				infoMessage: data.detail || "If an account exists for that address, a reset link has been sent.",
 			}));
 		} catch (error) {
 			setAuthState((current) => ({
@@ -730,6 +825,7 @@ export default function App() {
 						onSignIn={handleSignIn}
 						onSignUp={handleSignUp}
 						onSignOut={handleSignOut}
+						onForgotPassword={handleForgotPassword}
 					/>
 				</div>
 				<section className="glass-panel app-gate">
@@ -768,120 +864,48 @@ export default function App() {
 		);
 	}
 
+	if (authState.status === "loading") {
+		return <div className="landing-loading" aria-busy="true">Loading…</div>;
+	}
+
+	if (!isAuthenticated && location.pathname !== "/reset-password") {
+		return (
+			<LandingPage
+				authState={authState}
+				googleClientId={googleClientId}
+				theme={theme}
+				onToggleTheme={toggleTheme}
+				onSignIn={handleSignIn}
+				onSignUp={handleSignUp}
+				onForgotPassword={handleForgotPassword}
+				onGoogle={handleGoogleSignIn}
+				onClearMessages={clearAuthMessages}
+			/>
+		);
+	}
+
 	return (
-		<div className="app-shell">
-			<div className="ambient ambient-one" />
-			<div className="ambient ambient-two" />
-			<div className="ambient ambient-three" />
-			<div className={`app-frame ${isStandaloneView ? "app-frame--standalone" : ""}`}>
-				{!isStandaloneView ? (
-					<aside className="app-sidebar glass-panel">
-						<div className="app-sidebar__brand">
-							<p className="section-kicker">AI Interview Simulator</p>
-							<div className="app-sidebar__brand-row">
-								<span className={`app-brand__icon app-brand__icon--${currentPage.key}`}>
-									<RouteIcon iconKey={currentPage.iconKey} />
-								</span>
-								<div className="app-sidebar__brand-copy">
-									<h2>Interview Console</h2>
-									<p>Structured simulation flow for fresher hiring.</p>
-								</div>
-							</div>
-							<div className="hero-tags app-sidebar__brand-tags">
-								<span>{selectedRoleRequiresDsa ? "DSA path" : "No DSA path"}</span>
-								<span>{isAuthenticated ? "Saved workspace" : "Preview mode"}</span>
-							</div>
-						</div>
-
-						<section className="app-sidebar__workflow" aria-label="Current route and workflow progress">
-							<div className="app-sidebar__workflow-head">
-								<div>
-									<p className="section-kicker">Workflow</p>
-									<h3>{workflowPositionLabel}</h3>
-								</div>
-								<span className={`status-pill status-pill--${completedWorkflowCount === workflowItems.length ? "online" : "checking"}`}>
-									{completedWorkflowCount}/{workflowItems.length} complete
-								</span>
-							</div>
-							<ol className="route-progress route-progress--stacked">
-								{workflowItems.map(({ page, index, routeState, routeMetaLabel }) => (
-									<li key={page.key} className={`route-progress__item route-progress__item--${routeState}`}>
-										<NavLink to={page.path} className="route-progress__link">
-											<span className="route-progress__step">{formatRouteStep(index)}</span>
-											<span className={`route-progress__icon route-progress__icon--${page.key}`}>
-												<RouteIcon iconKey={page.iconKey} />
-											</span>
-											<span className="route-progress__copy">
-												<strong>{page.label}</strong>
-												<span>{routeMetaLabel}</span>
-											</span>
-										</NavLink>
-									</li>
-								))}
-							</ol>
-						</section>
-
-						<div className="app-sidebar__footer">
-							{isAuthenticated ? (
-								<div className="app-sidebar__auth">
-									<AuthPanel
-										authState={authState}
-										onSignIn={handleSignIn}
-										onSignUp={handleSignUp}
-										onSignOut={handleSignOut}
-										compact
-									/>
-								</div>
-							) : (
-								<section className="app-sidebar__guest">
-									<p className="section-kicker">Account</p>
-									<strong>Guest preview</strong>
-									<p>Sign in to own sessions and reports.</p>
-								</section>
-							)}
-						</div>
-					</aside>
-				) : null}
-
-				<div className={`app-stage ${isStandaloneView ? "app-stage--standalone" : ""}`}>
-					{!isStandaloneView ? (
-						<section className="app-toolbar glass-panel">
-							<div className="app-toolbar__copy">
-								<p className="section-kicker">Current stage</p>
-								<h2>{currentPage.label}</h2>
-								<p className="app-toolbar__summary">{currentPage.shellSummary}</p>
-							</div>
-							<div className="app-toolbar__aside">
-								<div className="hero-tags app-toolbar__chips">
-									<span>{workflowPositionLabel}</span>
-									<span>{currentPage.meta}</span>
-									<span>{currentPage.railSummary}</span>
-								</div>
-								<div className="app-toolbar__metrics">
-									<article className="app-toolbar__metric">
-										<span>Role</span>
-										<strong>{currentRoleLabel}</strong>
-										<p>{selectedRoleRequiresDsa ? "Technical plus DSA path." : "Technical-only path."}</p>
-									</article>
-									<article className="app-toolbar__metric">
-										<span>Session</span>
-										<strong>{hasLiveSession ? "Live" : "Pending"}</strong>
-										<p>{sessionSummaryLabel}</p>
-									</article>
-									<article className="app-toolbar__metric">
-										<span>Assessment</span>
-										<strong>{assessmentSummaryLabel}</strong>
-										<p>{interviewSummaryLabel}</p>
-									</article>
-								</div>
-							</div>
-						</section>
-					) : null}
-
-					<main className="app-content">
+		<div className="app-shell pp-app">
+			<PlatformWatermark />
+			<AppTopBar
+				steps={workflowItems}
+				theme={theme}
+				onToggleTheme={toggleTheme}
+				user={authState.user}
+				onSignOut={handleSignOut}
+			/>
+			<main className="app-content pp-main">
 					<Routes>
 						<Route path="/" element={<Navigate to={APP_PAGES[0].path} replace />} />
 						<Route path="/interview" element={<Navigate to="/technical-interview" replace />} />
+						<Route
+							path="/reset-password"
+							element={
+								<Suspense fallback={null}>
+									<ResetPasswordPage />
+								</Suspense>
+							}
+						/>
 
 						{APP_PAGES.map((page) => {
 							const PageComponent = page.component;
@@ -910,9 +934,7 @@ export default function App() {
 						})}
 						<Route path="*" element={<Navigate to={APP_PAGES[0].path} replace />} />
 					</Routes>
-					</main>
-				</div>
-			</div>
+			</main>
 		</div>
 	);
 }

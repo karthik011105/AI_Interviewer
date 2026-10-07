@@ -49,10 +49,22 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/opt/hf-cache \
     SENTENCE_TRANSFORMERS_HOME=/opt/hf-cache \
     # Both models are baked in above, so no network call to HuggingFace is
-    # needed or wanted at runtime. Drop this if you change model names without
-    # also updating the pre-fetch step, or startup will fail rather than
-    # silently download.
-    HF_HUB_OFFLINE=1
+    # needed or wanted at runtime.
+    #
+    # If you change a model name without also updating the pre-fetch step, the
+    # load fails against this offline cache. That does NOT stop the container:
+    # role matching catches the failure and falls back to token-overlap
+    # matching, which is materially worse, while /health still returns 200.
+    # (An earlier version of this comment claimed startup would fail. It does
+    # not — verified.) The fallback is now logged as a warning, and
+    # REQUIRE_SEMANTIC_ENCODER below turns it into a hard startup failure.
+    HF_HUB_OFFLINE=1 \
+    # Make a missing semantic encoder fatal rather than a silent downgrade.
+    # Set in the image because the models ARE baked in here, so a failure to
+    # load one is a real packaging error and should stop the deployment rather
+    # than quietly degrade every candidate's role matches. Unset it if you
+    # deliberately want to run on the token-overlap fallback.
+    REQUIRE_SEMANTIC_ENCODER=true
 
 # curl is used by the container HEALTHCHECK below.
 RUN apt-get update \
@@ -71,18 +83,56 @@ COPY --chown=appuser:appuser backend/ /app/backend/
 USER appuser
 EXPOSE 8000
 
-# Liveness only — /health does not touch MongoDB, so it reports whether the
-# process is serving, not whether every dependency is reachable.
+# Liveness, deliberately. /health touches no dependency, so it answers only
+# "is this process serving?".
+#
+# It must stay that way. Docker marks a container unhealthy when this fails and
+# a restart policy will then restart it, so pointing this at /ready would turn
+# a brief MongoDB blip into a restart loop of a process that was working fine.
+# /ready answers the opposite question, "should this instance receive traffic?",
+# and is what a load balancer or platform health check should poll.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD curl --fail --silent http://127.0.0.1:8000/health || exit 1
 
 # No --reload: that is a development-only flag.
 #
-# Two caveats when raising UVICORN_WORKERS:
-#   1. The auth rate limiter in backend/api/rate_limit.py keeps its counters in
-#      process memory, so N workers multiply the effective limit by N. See
-#      README section 7.7 before scaling this up.
-#   2. Each worker loads its own copy of the sentence-transformers and whisper
-#      models, so memory scales roughly linearly with worker count.
+# One caveat when raising UVICORN_WORKERS: each worker loads its own copy of the
+# sentence-transformers and whisper models, so memory scales roughly linearly
+# with worker count. On a 2 vCPU / 16 GB free tier that is the binding limit.
+#
+# The other caveat that used to live here — that the rate limiter keeps its
+# counters in process memory, so N workers multiply every limit by N — no longer
+# applies to this image, because RATE_LIMIT_BACKEND=mongo below shares them.
+# The backend warns at startup if that combination is ever reintroduced.
 ENV UVICORN_WORKERS=1
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS}"]
+
+# Rate limiting keys on the direct peer address, because backend/api/routes_auth.py
+# deliberately refuses to trust X-Forwarded-For (an attacker could otherwise mint a
+# fresh budget per request by inventing a value). The consequence is that behind a
+# reverse proxy every user collapses into ONE bucket: the whole deployment shares a
+# single 10-attempts-per-minute auth budget, and one user tripping it locks out
+# everybody.
+#
+# --proxy-headers makes uvicorn rewrite request.client from the forwarded headers,
+# but only for peers listed in --forwarded-allow-ips, so the header is still not
+# blindly trusted. The default below is uvicorn's own: localhost only, which means
+# nothing changes for a direct or docker-compose run.
+#
+# A proxied deployment MUST widen this to the proxy's address. On a platform where
+# the container is only reachable through the platform's own ingress (Hugging Face
+# Spaces, Cloud Run), "*" is the practical value:
+#     UVICORN_FORWARDED_ALLOW_IPS=*
+# Do not set "*" anywhere the container port is reachable directly, or the header
+# becomes forgeable again and the rate limit can be bypassed per request.
+ENV UVICORN_FORWARDED_ALLOW_IPS=127.0.0.1
+
+# Share rate limits and spend quotas through MongoDB rather than process memory.
+# The in-process store is correct for exactly one worker: with N workers each
+# keeps its own counters, so every configured limit is silently multiplied by N,
+# and a restart resets them all -- which matters because the quotas exist to
+# bound a Groq/Judge0 bill, and "wait for the next deploy" is not an obstacle.
+# Set here rather than defaulted in code so local development and the test suite
+# need no database.
+ENV RATE_LIMIT_BACKEND=mongo
+
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS} --proxy-headers --forwarded-allow-ips \"${UVICORN_FORWARDED_ALLOW_IPS}\""]
