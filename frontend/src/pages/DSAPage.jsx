@@ -495,112 +495,129 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
     );
   }
 
-  return (
-    <div className="page-shell dsa-workspace-shell">
-      <div className="message-stack">
-        {infoMessage ? <p className="info-banner">{infoMessage}</p> : null}
+  const resetControl = (
+    <WorkflowResetControl
+      accessToken={accessToken}
+      apiBaseUrl={baseUrl}
+      sessionId={sessionId}
+      currentTarget="dsa"
+      currentLabel="Coding round"
+      onResetApplied={handleWorkflowReset}
+      triggerClassName="secondary-button action-row__button"
+      triggerLabel="Reset"
+      disabled={busyState !== "idle"}
+    />
+  );
+
+  // Before a problem is loaded: one start card, not an empty workspace with
+  // a "Not armed" timer and placeholder text.
+  if (!dsaSession) {
+    return (
+      <div className="pp-page">
+        <div className="action-row">{resetControl}</div>
         {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
+        <section className="interview-launch-card">
+          <p className="section-kicker">Coding round</p>
+          <h2>Two coding problems</h2>
+          <p>Solve each one in Python, C++ or Java. Run the sample tests as often as you like, then submit.</p>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={!canStart || busyState !== "idle"}
+            onClick={() => startSession()}
+          >
+            {busyState === "starting" ? "Loading problem…" : `Start ${currentQuestionNumber === 2 ? "question 2" : "coding round"}`}
+          </button>
+        </section>
+      </div>
+    );
+  }
+
+  const showTimer = Boolean(dsaSession?.deadline_at) && !questionTimingStopped;
+
+  return (
+    <div className="pp-dsa">
+      <div className="pp-dsa__bar">
+        <div className="pp-tabs" role="tablist" aria-label="Problems">
+          {[1, 2].map((number) => {
+            const active = currentQuestionNumber === number;
+            const locked = number === 2 && !questionTwoUnlocked;
+            return (
+              <button
+                key={number}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`pp-tab ${active ? "pp-tab--active" : ""}`}
+                disabled={active || locked || busyState !== "idle"}
+                onClick={() => startSession(number)}
+                title={locked ? "Unlocks after question 1" : undefined}
+              >
+                Question {number}{locked ? " 🔒" : ""}
+              </button>
+            );
+          })}
+        </div>
+        {showTimer ? (
+          <div className="pp-dsa__timer">
+            <TimerBar
+              deadlineAt={dsaSession?.deadline_at}
+              stageStartedAt={questionStartedAt}
+              stageLabel={`${questionLabel} timer`}
+              inactiveLabel="Stopped"
+            />
+          </div>
+        ) : null}
+        <div className="pp-dsa__reset">{resetControl}</div>
       </div>
 
-      <div className="action-row">
-        <button
-          type="button"
-          className="secondary-button secondary-button--inline"
-          disabled={busyState !== "idle" || currentQuestionNumber === 1}
-          onClick={() => startSession(1)}
-        >
-          {currentQuestionNumber === 1 ? "Viewing question 1" : "Open question 1"}
-        </button>
-        <button
-          type="button"
-          className="secondary-button secondary-button--inline"
-          disabled={busyState !== "idle" || !questionTwoUnlocked}
-          onClick={() => startSession(2)}
-        >
-          {currentQuestionNumber === 2 ? "Viewing question 2" : "Open question 2"}
-        </button>
-        <WorkflowResetControl
-          accessToken={accessToken}
-          apiBaseUrl={baseUrl}
-          sessionId={sessionId}
-          currentTarget="dsa"
-          currentLabel="DSA round"
-          onResetApplied={handleWorkflowReset}
-          triggerClassName="secondary-button secondary-button--inline"
-          triggerLabel="Reset"
-          disabled={busyState !== "idle"}
-        />
-      </div>
+      {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
 
       <section className="dsa-workspace-grid">
-        <section className="glass-panel dsa-surface-card dsa-problem-card dsa-problem-card--workspace">
-          <div className="dsa-problem-card__body">
+        <section className="pp-card pp-problem">
+          <p className="pp-problem__kicker">{questionLabel}</p>
+          <h2>{dsaSession.problem?.title}</h2>
+          <p className="pp-problem__statement">{dsaSession.problem?.statement}</p>
+          {dsaSession.problem?.constraints?.length ? (
             <>
-              <div className="panel-head panel-head--tight">
-                <div>
-                  <p className="section-kicker">{questionLabel}</p>
-                  <h2>{dsaSession?.problem?.title || "Run the coding workspace"}</h2>
-                </div>
-              </div>
-              <div className="dsa-problem-statement">
-                <p className="dsa-problem-statement__copy">
-                  {dsaSession?.problem?.statement || "Start the round to load the full description, constraints, and examples."}
-                </p>
-              </div>
-              {dsaSession?.problem?.constraints?.length ? (
-                <ul className="dsa-problem-list">
-                  {dsaSession.problem.constraints.map((constraint) => (
-                    <li key={constraint}>{constraint}</li>
-                  ))}
-                </ul>
-              ) : <p className="empty-state">Constraints will appear once the session is started.</p>}
-              {dsaSession?.problem?.examples?.length ? (
-                <div className="dsa-example-stack">
-                  {dsaSession.problem.examples.map((example, index) => (
-                    <article key={`${example.input_text}-${index}`} className="dsa-example-card">
-                      <strong>Example {index + 1}</strong>
-                      <pre>{example.input_text}</pre>
-                      <pre>{example.output_text}</pre>
-                      {example.explanation ? <p>{example.explanation}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-
-              {stageKey === "debrief" ? (
-              <section className="dsa-inline-panel">
-                <div className="panel-head panel-head--tight">
-                  <div>
-                    <p className="section-kicker">Debrief</p>
-                    <h2>Save the final note for this question</h2>
-                  </div>
-                </div>
-                <div className="dsa-message-card__controls">
-                  <textarea
-                    className="dsa-message-card__textarea"
-                    value={messageDraft}
-                    onChange={(event) => setMessageDraft(event.target.value)}
-                    placeholder="What worked, what failed, and what you would improve."
-                    disabled={!dsaSession}
-                  />
-                </div>
-                <button type="button" className="primary-button action-row__button" disabled={!canSendMessage || busyState !== "idle"} onClick={sendMessage}>
-                  {busyState === "messaging" ? "Saving..." : "Save debrief"}
-                </button>
-              </section>
-            ) : null}
+              <h3>Constraints</h3>
+              <ul className="dsa-problem-list">
+                {dsaSession.problem.constraints.map((constraint) => (
+                  <li key={constraint}>{constraint}</li>
+                ))}
+              </ul>
             </>
-          </div>
+          ) : null}
+          {dsaSession.problem?.examples?.length ? (
+            <div className="dsa-example-stack">
+              {dsaSession.problem.examples.map((example, index) => (
+                <article key={`${example.input_text}-${index}`} className="dsa-example-card">
+                  <strong>Example {index + 1}</strong>
+                  <pre>{example.input_text}</pre>
+                  <pre>{example.output_text}</pre>
+                  {example.explanation ? <p>{example.explanation}</p> : null}
+                </article>
+              ))}
+            </div>
+          ) : null}
+
+          {stageKey === "debrief" ? (
+            <section className="pp-debrief">
+              <h3>Quick reflection</h3>
+              <textarea
+                className="dsa-message-card__textarea"
+                value={messageDraft}
+                onChange={(event) => setMessageDraft(event.target.value)}
+                placeholder="What worked, what failed, and what you would improve."
+              />
+              <button type="button" className="primary-button" disabled={!canSendMessage || busyState !== "idle"} onClick={sendMessage}>
+                {busyState === "messaging" ? "Saving…" : "Save note"}
+              </button>
+            </section>
+          ) : null}
         </section>
 
         <section className="dsa-workspace-column dsa-workspace-column--editor">
-          <TimerBar
-            deadlineAt={questionTimingStopped ? null : dsaSession?.deadline_at}
-            stageStartedAt={questionStartedAt}
-            stageLabel={`${questionLabel} timer`}
-            inactiveLabel={questionTimingStopped ? "Stopped" : "Not armed"}
-            inactiveNote={questionTimingStopped ? "This question is no longer timed." : undefined}
-          />
           <CodeEditor
             value={codeDraft}
             onChange={handleCodeChange}
@@ -608,7 +625,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
             fileName={currentLanguageMeta?.file_name || "solve.py"}
             languageKey={selectedLanguage}
             languageLabel={currentLanguageMeta?.label || "Python 3"}
-            height="68vh"
+            height="62vh"
             placeholder={selectedLanguage === "cpp"
               ? "Implement solve() using cin and cout. Do not declare main()."
               : selectedLanguage === "java"
@@ -628,38 +645,26 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
                 ))}
               </select>
             )}
-            readOnly={!dsaSession}
           />
-          <div className="action-row">
-            <button type="button" className="primary-button action-row__button" disabled={!canStart || busyState !== "idle"} onClick={() => startSession()}>
-              {dsaSession ? `Question ${currentQuestionNumber} loaded` : busyState === "starting" ? "Starting..." : `Start question ${currentQuestionNumber}`}
+          <div className="pp-dsa__actions">
+            <button type="button" className="secondary-button" disabled={!canRunOrSubmit || busyState !== "idle"} onClick={runCode}>
+              {busyState === "running" ? "Running…" : "Run tests"}
             </button>
-            <button type="button" className="secondary-button action-row__button" disabled={!canRunOrSubmit || busyState !== "idle"} onClick={runCode}>
-              {busyState === "running" ? "Running..." : "Run sample tests"}
+            <button type="button" className="primary-button" disabled={!canRunOrSubmit || busyState !== "idle"} onClick={submitCode}>
+              {busyState === "submitting" ? "Submitting…" : "Submit"}
             </button>
-            <button type="button" className="secondary-button action-row__button" disabled={!canRunOrSubmit || busyState !== "idle"} onClick={submitCode}>
-              {busyState === "submitting" ? "Submitting..." : "Submit hidden tests"}
-            </button>
-            {currentQuestionNumber === 1 ? (
-              <button
-                type="button"
-                className="secondary-button action-row__button"
-                disabled={!questionTwoUnlocked || busyState !== "idle"}
-                onClick={() => startSession(2)}
-              >
-                {busyState === "starting" ? "Loading..." : "Open question 2"}
+            {currentQuestionNumber === 1 && questionTwoUnlocked ? (
+              <button type="button" className="secondary-button pp-dsa__next" disabled={busyState !== "idle"} onClick={() => startSession(2)}>
+                Next question →
               </button>
             ) : null}
             {currentQuestionNumber === 2 && dsaRoundCompleted ? (
-              <button
-                type="button"
-                className="secondary-button action-row__button"
-                onClick={() => onNavigate?.("project_discussion")}
-              >
-                Open Project Discussion
+              <button type="button" className="primary-button pp-dsa__next" onClick={() => onNavigate?.("project_discussion")}>
+                Continue to projects →
               </button>
             ) : null}
           </div>
+          {infoMessage ? <p className="pp-dsa__status">{infoMessage}</p> : null}
           <TestResults executionResults={latestExecution || dsaSession?.execution_results} title="Test results" />
         </section>
       </section>
