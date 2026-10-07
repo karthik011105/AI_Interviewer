@@ -61,12 +61,22 @@ def _load_groq_sdk() -> Any:
 		) from exc
 
 
+# The SDK retries on its own (max_retries=2 by default) underneath the retry
+# loops below, which multiplied every failing call: GROQ_MAX_RETRIES=3 meant up
+# to 12 HTTP requests and ~4 minutes at the 20 s timeout, and a 429 was retried
+# by the SDK before the fail-fast branch here ever saw it. Measured: 2 configured
+# attempts produced 6 requests. These loops are the one retry policy.
+_SDK_MAX_RETRIES = 0
+
+
 @lru_cache(maxsize=4)
 def get_groq_client(api_key: str, api_base_url: str) -> Any:
 	"""Return a cached Groq client for the configured API key and base URL."""
 
 	groq_module = _load_groq_sdk()
-	return groq_module.Groq(api_key=api_key, base_url=api_base_url)
+	return groq_module.Groq(
+		api_key=api_key, base_url=api_base_url, max_retries=_SDK_MAX_RETRIES
+	)
 
 
 @lru_cache(maxsize=4)
@@ -74,7 +84,9 @@ def get_async_groq_client(api_key: str, api_base_url: str) -> Any:
 	"""Return a cached async Groq client for the configured key and base URL."""
 
 	groq_module = _load_groq_sdk()
-	return groq_module.AsyncGroq(api_key=api_key, base_url=api_base_url)
+	return groq_module.AsyncGroq(
+		api_key=api_key, base_url=api_base_url, max_retries=_SDK_MAX_RETRIES
+	)
 
 
 def create_chat_completion(

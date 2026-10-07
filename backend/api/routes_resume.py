@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -144,7 +145,13 @@ async def parse_resume_upload(
 			max_roles=max_roles,
 			persist_interview_contexts=persist_interview_contexts,
 		)
-		response = _parse_resume_request(request, temp_pdf_path, current_user=current_user)
+		# Off the event loop: this is PDF parsing, a Groq extraction with
+		# retries, and embedding-based role matching — seconds at best. Called
+		# inline from this async handler it froze every live interview socket
+		# in the process until it returned.
+		response = await asyncio.to_thread(
+			_parse_resume_request, request, temp_pdf_path, current_user=current_user
+		)
 		response["uploaded_filename"] = filename
 		return response
 	finally:

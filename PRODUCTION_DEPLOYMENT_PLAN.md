@@ -1,6 +1,6 @@
 # Production Deployment Plan
 
-Branch: `feat/conversational-interview` · Updated: 2026-10-07 · Test suite: **533 passing**
+Branch: `feat/conversational-interview` · Updated: 2026-10-07 · Test suite: **537 passing**
 
 This is the short, current-state version. The full per-phase change log (what was
 wrong, how it was measured, how each fix was proven) lives in git history — see
@@ -39,7 +39,7 @@ Upgrade path if needed: an Oracle Always Free arm64 VM running app + Mongo + Jud
 |---|---|
 | 0 — Fix CI/test tooling | Done (CI command fixed, `scripts/run_tests.ps1`, Python 3.11, frontend tests in CI). **CI has never run on GitHub — needs the PR opened** |
 | 1 — Audit all 14 subsystems | Done. ~15 real defects fixed with regression tests |
-| 2 — Hardening | 10 of 14 done — see below |
+| 2 — Hardening | 11 of 14 done — see below |
 | 3 — Deployment | Blocked on accounts/credentials from you |
 | 4 — Operations docs | Not started |
 
@@ -57,12 +57,12 @@ Upgrade path if needed: an Oracle Always Free arm64 VM running app + Mongo + Jud
 | 2.9 | DSA submissions capped at 20 per session (16 MB doc limit); `scripts/prune_old_sessions.py` for retention |
 | 2.11 | Interview turn commit drains instead of being cancelled on disconnect |
 | 2.12 | pymongo errors translated at one boundary → Atlas failover is 503, not 500 |
+| 2.10 | Groq SDK's hidden `max_retries=2` disabled — it tripled every failing call (measured 6 requests for 2 attempts; up to 12 / ~4 min at defaults) and retried 429s. Resume upload parse moved off the event loop — it froze every live interview socket. Remaining routes are sync `def` (threadpool) and WS paths already use `to_thread` |
 
 ### Phase 2 — remaining
 
 | # | Item | Owner |
 |---|---|---|
-| 2.10 | Load-shed / timeout review: Groq 20 s × 3 retries, Judge0 4 s; a few concurrent interviews can saturate one worker | Me |
 | 2.13 | Access token rides in the WebSocket URL (`?access_token=`) and lands in proxy logs; valid 24 h. Replace with a short-lived single-use ticket | Me |
 | 2.14 | Monaco loads from `cdn.jsdelivr.net`; self-host via `loader.config()` + Vite assets | Me |
 | 2.9b | Backup/export before pruning (Atlas M0 has no free backups) | Me, after you pick a retention window |
