@@ -100,6 +100,34 @@ export const authClient = {
     return data;
   },
 
+  // Public sign-in options; google_client_id is null until it is configured.
+  getAuthConfig: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/config`);
+      if (!response.ok) return { google_client_id: null };
+      return await response.json();
+    } catch {
+      return { google_client_id: null };
+    }
+  },
+
+  // `credential` is the ID token Google Identity Services hands the page.
+  googleSignIn: async (credential) => {
+    const response = await fetch(`${API_BASE_URL}/auth/google`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(describeApiError(data, "Google sign-in failed."));
+    }
+    if (data.access_token) {
+      authClient.setToken(data.access_token);
+    }
+    return data;
+  },
+
   logout: async () => {
     const token = authClient.getToken();
     // Tell the server to revoke this token, so it cannot be reused if it was

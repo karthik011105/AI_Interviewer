@@ -3,6 +3,7 @@ import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "reac
 import { Moon, Sun } from "lucide-react";
 
 import AuthPanel from "./components/AuthPanel";
+import LandingPage from "./pages/LandingPage";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -700,6 +701,41 @@ export default function App() {
 		}
 	}
 
+	// Logged-out visitors get the landing page; it needs the Google client ID
+	// (null until GOOGLE_CLIENT_ID is set on the server) to render the button.
+	const [googleClientId, setGoogleClientId] = useState(null);
+	useEffect(() => {
+		let active = true;
+		authClient.getAuthConfig().then((cfg) => {
+			if (active) setGoogleClientId(cfg?.google_client_id || null);
+		});
+		return () => {
+			active = false;
+		};
+	}, []);
+
+	function clearAuthMessages() {
+		setAuthState((current) => ({ ...current, errorMessage: "", infoMessage: "" }));
+	}
+
+	async function handleGoogleSignIn(credential) {
+		setAuthState((current) => ({ ...current, busyAction: "google", errorMessage: "", infoMessage: "" }));
+		try {
+			await authClient.googleSignIn(credential);
+			const { data } = await authClient.getSession();
+			setAuthState((current) => ({
+				...current,
+				status: "authenticated",
+				user: data.session?.user,
+				accessToken: data.session?.access_token,
+				busyAction: "idle",
+				infoMessage: "",
+			}));
+		} catch (error) {
+			setAuthState((current) => ({ ...current, busyAction: "idle", errorMessage: error.message }));
+		}
+	}
+
 	async function handleForgotPassword(email) {
 		setAuthState((current) => ({
 			...current,
@@ -820,6 +856,26 @@ export default function App() {
 					<p className="hero-text">Preparing the {page.label.toLowerCase()} surface and its saved session context.</p>
 				</section>
 			</section>
+		);
+	}
+
+	if (authState.status === "loading") {
+		return <div className="landing-loading" aria-busy="true">Loading…</div>;
+	}
+
+	if (!isAuthenticated && location.pathname !== "/reset-password") {
+		return (
+			<LandingPage
+				authState={authState}
+				googleClientId={googleClientId}
+				theme={theme}
+				onToggleTheme={toggleTheme}
+				onSignIn={handleSignIn}
+				onSignUp={handleSignUp}
+				onForgotPassword={handleForgotPassword}
+				onGoogle={handleGoogleSignIn}
+				onClearMessages={clearAuthMessages}
+			/>
 		);
 	}
 

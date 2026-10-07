@@ -56,13 +56,16 @@ ENV NGINX_ENVSUBST_FILTER=^CSP_
 #   style-src    'unsafe-inline' + fonts.googleapis.com — styles.css @imports
 #                Google Fonts, and React inline styles (including the error
 #                boundary) are inline by construction.
+#   accounts.google.com — Sign in with Google: its script, button styles and
+#                sign-in iframe (script-src, style-src, frame-src), and nothing
+#                else from that origin.
 #   worker-src   'self' covers Monaco's bundled editor worker. blob: is kept
 #                for the browser-side VAD/onnxruntime path, which was not
 #                re-verified when Monaco moved off the CDN.
 #   connect-src  overridden per deployment; the API and WebSocket live on a
 #                different origin. Default stays broad so a misconfiguration
 #                degrades to "less strict" rather than "app is broken".
-ENV CSP_POLICY="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+ENV CSP_POLICY="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https: wss:; frame-src https://accounts.google.com/gsi/; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
 
 # Report-only by default, and that is a considered choice rather than timidity.
 # An enforcing CSP that is even slightly wrong breaks the app silently in a

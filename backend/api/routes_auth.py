@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import os
 import secrets
 import threading
 import uuid
@@ -304,6 +305,110 @@ def login(request: LoginRequest, http_request: Request) -> dict[str, str]:
 		)
 
 	failure_tracker.reset(email)
+	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
+
+
+# ---------------------------------------------------------------------------
+# Sign in with Google
+# ---------------------------------------------------------------------------
+#
+# The browser gets an ID token (a JWT signed by Google) from Google Identity
+# Services and posts it here. Everything that makes it trustworthy is checked
+# server-side: Google's signature, that it was issued FOR THIS APP (aud), by
+# Google (iss), not expired, and that Google verified the email. Only then is
+# the email treated as proven, so it can sign in to an existing password
+# account with the same address — the same trust a password-reset email gives.
+
+_GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_GOOGLE_ISSUERS = ("accounts.google.com", "https://accounts.google.com")
+_google_jwks_client: jwt.PyJWKClient | None = None
+
+
+def _google_client_id() -> str:
+	return (os.environ.get("GOOGLE_CLIENT_ID") or "").strip()
+
+
+def _verify_google_id_token(credential: str, client_id: str) -> dict[str, object]:
+	global _google_jwks_client
+	if _google_jwks_client is None:
+		# Caches Google's rotating signing keys between requests.
+		_google_jwks_client = jwt.PyJWKClient(_GOOGLE_CERTS_URL, cache_keys=True)
+	signing_key = _google_jwks_client.get_signing_key_from_jwt(credential)
+	claims = jwt.decode(
+		credential,
+		signing_key.key,
+		algorithms=["RS256"],
+		audience=client_id,
+		issuer=_GOOGLE_ISSUERS,
+		options={"require": ["exp", "iat", "aud", "iss", "sub"]},
+	)
+	if claims.get("email_verified") is not True or not claims.get("email"):
+		raise jwt.InvalidTokenError("Google has not verified this email address.")
+	return claims
+
+
+class GoogleSignInRequest(BaseModel):
+	credential: str = Field(min_length=20, max_length=4096)
+
+
+@router.get("/config")
+def auth_config() -> dict[str, object]:
+	"""Public sign-in options for the login page. The client ID is not secret:
+	Google requires it in the browser to render the button."""
+
+	client_id = _google_client_id()
+	return {"google_client_id": client_id or None}
+
+
+@router.post("/google")
+def google_sign_in(request: GoogleSignInRequest, http_request: Request) -> dict[str, str]:
+	_enforce_ip_rate_limit(http_request, "login")
+
+	client_id = _google_client_id()
+	if not client_id:
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Google sign-in is not configured on this server.",
+		)
+	try:
+		claims = _verify_google_id_token(request.credential, client_id)
+	except jwt.PyJWKClientError as exc:
+		_LOGGER.warning("Could not fetch Google signing keys: %s", exc)
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Could not reach Google to verify the sign-in. Please try again.",
+		) from exc
+	except jwt.InvalidTokenError as exc:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="Google sign-in could not be verified.",
+		) from exc
+
+	email = _normalize_email(str(claims["email"]))
+	repo = get_repository()
+	user = repo.db.users.find_one({"email": email})
+	if user is None:
+		try:
+			created = repo.insert_one(
+				"users",
+				{
+					"email": email,
+					# No password: this account signs in with Google. Password login
+					# fails cleanly for it, and "forgot password" can add one.
+					"password_hash": None,
+					"auth_provider": "google",
+					"google_sub": str(claims["sub"]),
+					"display_name": str(claims.get("name") or "").strip() or None,
+					"created_at": datetime.now(timezone.utc).isoformat(),
+				},
+			)
+			return {"access_token": _create_jwt(str(created["id"]), email)}
+		except (DuplicateRecordError, DuplicateKeyError):
+			# Raced another first sign-in for the same address; use that account.
+			user = repo.db.users.find_one({"email": email})
+			if user is None:
+				raise
+
 	return {"access_token": _create_jwt(str(user["_id"]), user["email"])}
 
 

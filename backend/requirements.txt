@@ -22,7 +22,8 @@ pydantic==2.13.3
 email-validator>=2.0.0
 
 # Auth
-PyJWT==2.12.1
+# [crypto] adds RS256 verification, needed to check Google sign-in ID tokens.
+PyJWT[crypto]==2.12.1
 bcrypt>=4.0.0
 
 # Database
