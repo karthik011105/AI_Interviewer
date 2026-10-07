@@ -104,19 +104,6 @@ export default function LandingPage({
 					</div>
 				</section>
 
-				<section className="landing-features" aria-label="Features">
-					{FEATURES.map(({ icon: Icon, demo: Demo, tone, title, body }) => (
-						<article key={title} className={`landing-feature landing-feature--${tone}`}>
-							<div className="landing-feature__text">
-								<span className="landing-feature__icon"><Icon /></span>
-								<h3>{title}</h3>
-								<p>{body}</p>
-							</div>
-							<Demo />
-						</article>
-					))}
-				</section>
-
 				<section className="landing-meet" aria-labelledby="meet-title">
 					<div className="landing-meet__art landing-preview">
 						<LivePreview />
@@ -133,6 +120,19 @@ export default function LandingPage({
 							Start an interview <ArrowRight size={18} />
 						</button>
 					</div>
+				</section>
+
+				<section className="landing-features" aria-label="Features">
+					{FEATURES.map(({ icon: Icon, demo: Demo, tone, title, body }) => (
+						<article key={title} className={`landing-feature landing-feature--${tone}`}>
+							<div className="landing-feature__text">
+								<span className="landing-feature__icon"><Icon /></span>
+								<h3>{title}</h3>
+								<p>{body}</p>
+							</div>
+							<Demo />
+						</article>
+					))}
 				</section>
 
 

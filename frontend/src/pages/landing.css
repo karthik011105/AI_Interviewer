@@ -1713,3 +1713,8 @@
 		order: -1;
 	}
 }
+
+/* Meet Maya now directly follows the hero. */
+.landing-meet {
+	margin-bottom: 56px;
+}
