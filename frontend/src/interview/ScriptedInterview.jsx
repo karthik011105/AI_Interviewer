@@ -5,6 +5,7 @@ import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
 import { fetchInterviewSocketTicket, resolveInterviewSocketUrl } from "./useInterviewSocket";
+import { VAD_ASSET_OPTIONS } from "./vadAssets.js";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
 const MAX_CLARIFICATIONS_PER_QUESTION = 2;
@@ -952,6 +953,7 @@ export default function ScriptedInterview({
 
 		try {
 			const vad = await MicVAD.new({
+				...VAD_ASSET_OPTIONS,
 				onSpeechStart: () => {
 					if (voiceStepRef.current === "playing" || voiceStepRef.current === "clarifying") {
 						sendSocketJson({ type: "interrupt" });

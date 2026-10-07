@@ -62,8 +62,13 @@ export default function CoverageRail({ coverage }) {
 						))}
 					</div>
 				</div>
-			) : (
+			) : tiers.length > 0 ? (
 				<p className="coverage-rail__done">Every planned skill has been covered.</p>
+			) : (
+				// No coverage_update yet: the server sends the first one after the
+				// opening question. "Nothing remaining" here used to read as
+				// "everything is covered" on turn one.
+				<p className="coverage-rail__pending">The skill plan appears after the first question.</p>
 			)}
 		</aside>
 	);

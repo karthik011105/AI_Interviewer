@@ -36,10 +36,26 @@ SCRIPTED_ENGINE = InterviewEngine(
 )
 
 
-def dynamic_rounds() -> frozenset[str]:
-	"""Rounds configured to use the conversational engine."""
+# Must match CONVERSATIONAL_ROUNDS in frontend/src/pages/InterviewPage.jsx.
+# The frontend always renders the conversational screen for these rounds, and
+# that screen only understands the conversational engine's turn_* messages.
+# The default used to be empty, so with the variable unset (as in every .env)
+# the technical round ran the scripted engine behind the conversational UI: the
+# question never appeared and the coverage rail claimed everything was covered.
+DEFAULT_DYNAMIC_ROUNDS = "technical"
 
-	raw = os.getenv("INTERVIEW_DYNAMIC_ROUNDS", "")
+
+def dynamic_rounds() -> frozenset[str]:
+	"""Rounds configured to use the conversational engine.
+
+	Unset means the default above. Set to an empty value to force every round
+	onto the scripted engine — but the frontend would then need the matching
+	change, or the technical round shows nothing.
+	"""
+
+	raw = os.getenv("INTERVIEW_DYNAMIC_ROUNDS")
+	if raw is None:
+		raw = DEFAULT_DYNAMIC_ROUNDS
 	return frozenset(part.strip().casefold() for part in raw.split(",") if part.strip())
 
 

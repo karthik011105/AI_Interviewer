@@ -20,6 +20,17 @@ class EngineSelectionTests(TestCase):
 			for round_type in ("technical", "hr", "project_discussion"):
 				self.assertIs(select_engine(round_type), SCRIPTED_ENGINE)
 
+	def test_unset_defaults_to_the_rounds_the_frontend_renders_conversationally(self) -> None:
+		"""InterviewPage.jsx always shows the conversational screen for the
+		technical round. With the variable unset the backend used to run the
+		scripted engine there, whose messages that screen cannot display."""
+
+		env = {k: v for k, v in os.environ.items() if k != "INTERVIEW_DYNAMIC_ROUNDS"}
+		with patch.dict(os.environ, env, clear=True):
+			self.assertEqual(dynamic_rounds(), frozenset({"technical"}))
+			self.assertIsNot(select_engine("technical"), SCRIPTED_ENGINE)
+			self.assertIs(select_engine("hr"), SCRIPTED_ENGINE)
+
 	def test_unlisted_rounds_stay_scripted_when_one_is_enabled(self) -> None:
 		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": "technical"}, clear=False):
 			self.assertIs(select_engine("hr"), SCRIPTED_ENGINE)

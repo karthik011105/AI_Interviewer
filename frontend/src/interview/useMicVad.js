@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { MicVAD } from "@ricky0123/vad-web";
 
+import { VAD_ASSET_OPTIONS } from "./vadAssets.js";
+
 function float32ToInt16(input) {
 	const output = new Int16Array(input.length);
 	for (let index = 0; index < input.length; index += 1) {
@@ -52,6 +54,7 @@ export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onRea
 
 			try {
 				const vad = await MicVAD.new({
+					...VAD_ASSET_OPTIONS,
 					onSpeechStart: () => {
 						handlers.current.onSpeechStart?.(handlers.current.getPhase?.());
 					},

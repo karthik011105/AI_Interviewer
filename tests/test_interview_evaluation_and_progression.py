@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -572,7 +573,10 @@ class WebSocketInterviewTests(TestCase):
 				"questions_json": kwargs["questions_json"],
 			}
 
-		with patch("backend.main.warmup_semantic_encoder"), \
+		# This exercises the scripted engine; technical now defaults to the
+		# conversational one, so pin it explicitly.
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": ""}), \
+			 patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.api.ws_interview._authenticate_websocket_user", return_value=self.current_user), \
 			 patch("backend.api.ws_interview._load_parent_session", return_value={
 				 "id": "session-123",
