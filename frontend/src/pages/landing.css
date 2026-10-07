@@ -1655,3 +1655,61 @@
 		opacity: 1;
 	}
 }
+
+
+/* ---------- Arrangement: illustration in the hero, live demo in Meet Maya ---------- */
+
+.landing-hero {
+	grid-template-columns: 0.95fr 1.05fr;
+	padding: 40px 0 64px;
+}
+
+.landing-hero h1 {
+	margin-bottom: 30px;
+}
+
+.landing-hero__art {
+	position: relative;
+}
+
+.landing-hero__art::before {
+	content: "";
+	position: absolute;
+	inset: 8% 6%;
+	border-radius: 50%;
+	background: radial-gradient(circle, rgba(124, 92, 255, 0.28), rgba(124, 92, 255, 0) 70%);
+	filter: blur(10px);
+	z-index: -1;
+}
+
+.landing-hero__art .interview-scene {
+	filter: drop-shadow(0 24px 48px rgba(91, 75, 214, 0.25));
+}
+
+.landing-meet {
+	grid-template-columns: 1fr 1fr;
+}
+
+.landing-meet__art.landing-preview {
+	padding: 0;
+	background: none;
+}
+
+.landing-meet h2 {
+	margin-bottom: 22px;
+}
+
+@media (max-width: 900px) {
+	.landing-hero {
+		grid-template-columns: 1fr;
+		gap: 28px;
+	}
+
+	.landing-meet {
+		grid-template-columns: 1fr;
+	}
+
+	.landing-meet__copy {
+		order: -1;
+	}
+}

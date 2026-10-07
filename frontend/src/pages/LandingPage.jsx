@@ -35,7 +35,6 @@ const FEATURES = [
 ];
 
 
-const ROUNDS = ["Technical", "Coding", "Projects", "HR"];
 
 export default function LandingPage({
 	authState,
@@ -87,13 +86,9 @@ export default function LandingPage({
 			<main>
 				<section className="landing-hero">
 					<div className="landing-hero__copy">
-						<p className="landing-kicker">AI mock interviews for freshers</p>
 						<h1>
 							Practise the interview <span className="landing-highlight">before it counts.</span>
 						</h1>
-						<p className="landing-lede">
-							A live AI interviewer that asks real questions out loud, listens to your answers, and shows you exactly what to fix.
-						</p>
 						<div className="landing-hero__ctas">
 							<button type="button" className="landing-btn landing-btn--primary landing-btn--lg" onClick={() => openDialog("signup")}>
 								Start practising free <ArrowRight size={18} />
@@ -102,15 +97,10 @@ export default function LandingPage({
 								I have an account
 							</button>
 						</div>
-						<ul className="landing-rounds" aria-label="Interview rounds">
-							{ROUNDS.map((round) => (
-								<li key={round}>{round}</li>
-							))}
-						</ul>
 					</div>
 
-					<div className="landing-preview">
-						<LivePreview />
+					<div className="landing-hero__art">
+						<InterviewScene />
 					</div>
 				</section>
 
@@ -128,15 +118,12 @@ export default function LandingPage({
 				</section>
 
 				<section className="landing-meet" aria-labelledby="meet-title">
-					<div className="landing-meet__art">
-						<InterviewScene />
+					<div className="landing-meet__art landing-preview">
+						<LivePreview />
 					</div>
 					<div className="landing-meet__copy">
 						<p className="landing-kicker landing-kicker--violet">Your interviewer</p>
 						<h2 id="meet-title">Meet Maya, your AI interviewer.</h2>
-						<p className="landing-meet__lede">
-							Maya reads your resume, asks one question at a time, and follows up on what you actually said - just like a real panel.
-						</p>
 						<ul className="landing-meet__points">
 							<li><Check size={18} /> Follows up when an answer is vague</li>
 							<li><Check size={18} /> Stays on the role you picked</li>
