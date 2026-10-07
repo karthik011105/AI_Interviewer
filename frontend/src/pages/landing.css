@@ -1036,3 +1036,88 @@
 :root:not([data-theme="dark"]) .landing-cta .landing-btn--light {
 	background: #ffd25a;
 }
+
+/* ---------- Translucent feature cards + CTA (both themes) ---------- */
+/*
+ * Tinted glass instead of solid colour blocks, so the particle field and the
+ * cursor light stay visible behind them. Each card keeps its hue as a tint,
+ * a coloured edge and a coloured icon tile.
+ */
+.landing-feature,
+.landing-cta {
+	border: 1px solid transparent;
+	backdrop-filter: blur(2px);
+	transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.landing-feature:hover {
+	transform: translateY(-3px);
+}
+
+.landing-feature--sun { --tint: 255, 196, 64; }
+.landing-feature--sky { --tint: 96, 186, 255; }
+.landing-feature--mint { --tint: 72, 214, 156; }
+
+.landing-feature {
+	background: rgba(var(--tint), 0.14);
+	border-color: rgba(var(--tint), 0.38);
+	color: var(--text);
+}
+
+.landing-feature p {
+	color: var(--muted);
+	opacity: 1;
+}
+
+.landing-feature__icon {
+	background: rgba(var(--tint), 0.9);
+	color: #14121f;
+}
+
+.landing-feature:hover {
+	background: rgba(var(--tint), 0.2);
+	border-color: rgba(var(--tint), 0.6);
+}
+
+.landing-cta {
+	background: rgba(124, 92, 255, 0.12);
+	border-color: rgba(124, 92, 255, 0.38);
+	color: var(--text);
+}
+
+.landing-cta .landing-btn--light,
+:root[data-theme="dark"] .landing-cta .landing-btn--light,
+:root:not([data-theme="dark"]) .landing-cta .landing-btn--light {
+	background: #6d4ff0;
+	color: #fff;
+}
+
+.landing-cta .landing-btn--light:hover:not(:disabled) {
+	background: #5b3fe0;
+}
+
+/* Dark mode: a fainter fill and a soft glow on the edge. */
+:root[data-theme="dark"] .landing-feature {
+	background: rgba(var(--tint), 0.08);
+	border-color: rgba(var(--tint), 0.32);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 40px rgba(var(--tint), 0.06);
+}
+
+:root[data-theme="dark"] .landing-feature h3 {
+	color: rgb(var(--tint));
+}
+
+:root[data-theme="dark"] .landing-feature:hover {
+	background: rgba(var(--tint), 0.13);
+	border-color: rgba(var(--tint), 0.55);
+}
+
+:root[data-theme="dark"] .landing-cta {
+	background: rgba(124, 92, 255, 0.1);
+	border-color: rgba(167, 139, 250, 0.35);
+	box-shadow: 0 0 60px rgba(124, 92, 255, 0.12);
+}
+
+:root[data-theme="dark"] .landing-cta h2 {
+	color: #fff;
+}
