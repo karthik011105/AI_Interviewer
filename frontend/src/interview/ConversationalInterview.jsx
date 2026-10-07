@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
@@ -14,7 +14,7 @@ import {
 	useInterviewSocket,
 } from "./useInterviewSocket.js";
 import { useAudioPlayback } from "./useAudioPlayback.js";
-import { useMicVad } from "./useMicVad.js";
+import { float32ToInt16, useMicVad } from "./useMicVad.js";
 import "./conversation.css";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
@@ -29,21 +29,21 @@ const ROUND_COPY = {
 		label: "Technical Interview",
 		heading: (role) => (role ? `${role} technical interview` : "Technical interview"),
 		intro:
-			"This round is a conversation. The interviewer follows up on what you actually say, so answer as you would out loud - you can interrupt at any time.",
+			"This round is a conversation. The interviewer follows up on what you actually say, so answer as you would out loud. Tap the mic to answer (it also interrupts), then the arrow to send.",
 	},
 	hr: {
 		kicker: "HR",
 		label: "HR Interview",
 		heading: () => "HR interview",
 		intro:
-			"A conversation about how you work: real situations, what you did, and what you learned. Answer out loud with specific examples - you can interrupt at any time.",
+			"A conversation about how you work: real situations, what you did, and what you learned. Tap the mic to answer with specific examples, then the arrow to send.",
 	},
 	project_discussion: {
 		kicker: "Projects",
 		label: "Project Discussion",
 		heading: () => "Project discussion",
 		intro:
-			"A conversation about the projects on your resume: what you built, the decisions you made, and why. Answer out loud - you can interrupt at any time.",
+			"A conversation about the projects on your resume: what you built, the decisions you made, and why. Tap the mic to answer, then the arrow to send.",
 	},
 };
 
@@ -108,28 +108,23 @@ export default function ConversationalInterview({
 
 	const micEnabled = state.connection === "open" && !state.round.done;
 
-	useMicVad({
+	// Push-to-talk: the mic only feeds the interview between a tap on the mic
+	// button and a tap on send. Nothing is submitted on a pause any more.
+	const [recording, setRecording] = useState(false);
+	const recordingRef = useRef(false);
+	recordingRef.current = recording;
+	const recordedFramesRef = useRef([]);
+
+	const mic = useMicVad({
 		enabled: micEnabled,
+		autoStart: false,
 		getPhase: useCallback(() => stateRef.current.phase, []),
-		onSpeechStart: useCallback(() => {
-			const current = stateRef.current;
-			if (current.input.mode === "typed") return;
-			// Always sent: it doubles as the barge-in signal and as the cancel for
-			// an armed end-of-turn debounce.
-			socket.send({ type: "speech_start" });
-			if (current.tts.playing) playback.stop();
-		}, [socket, playback]),
-		onUtterance: useCallback(
-			(buffer) => {
-				const current = stateRef.current;
-				if (current.input.mode === "typed" || current.round.done) return;
-				// Audio first: speech_end arms the commit, so the utterance has to be
-				// buffered server-side before it lands.
-				socket.sendBinary(buffer);
-				socket.send({ type: "speech_end" });
-			},
-			[socket],
-		),
+		// Push-to-talk records every frame between the taps rather than only
+		// what the VAD classifies as speech: with the candidate marking start
+		// and end themselves, a quiet or hesitant answer must not be dropped.
+		onFrame: useCallback((frame) => {
+			if (recordingRef.current) recordedFramesRef.current.push(new Float32Array(frame));
+		}, []),
 		onReady: useCallback(() => dispatch({ type: "SET_CAPTURE_READY", ready: true }), []),
 		onFailure: useCallback((error) => {
 			// MicVAD.new() throws for several unrelated reasons (permission denied,
@@ -204,14 +199,51 @@ export default function ConversationalInterview({
 		}
 	}, [playback, socket]);
 
-	const interrupt = useCallback(() => {
-		playback.stop();
-		socket.send({ type: "interrupt" });
-	}, [playback, socket]);
+	// Mic button: cut the interviewer off if they are talking, then listen.
+	const startRecording = useCallback(() => {
+		if (stateRef.current.tts.playing) playback.stop();
+		// Doubles as the barge-in signal: the server stops speaking and listens.
+		socket.send({ type: "speech_start" });
+		recordedFramesRef.current = [];
+		recordingRef.current = true;
+		setRecording(true);
+		mic.resume();
+	}, [mic, playback, socket]);
 
-	const finishAnswer = useCallback(() => {
+	// Send button: stop listening, send everything recorded since the mic tap,
+	// then ask the server to transcribe and score it.
+	const sendRecording = useCallback(() => {
+		recordingRef.current = false;
+		mic.pause();
+		setRecording(false);
+		const frames = recordedFramesRef.current;
+		recordedFramesRef.current = [];
+		const total = frames.reduce((sum, frame) => sum + frame.length, 0);
+		const pcm = new Float32Array(total);
+		let offset = 0;
+		for (const frame of frames) {
+			pcm.set(frame, offset);
+			offset += frame.length;
+		}
+		const int16 = float32ToInt16(pcm);
+		// ~1 s chunks at 16 kHz; the server concatenates them before transcribing.
+		for (let start = 0; start < int16.length; start += 16000) {
+			socket.sendBinary(int16.slice(start, start + 16000).buffer);
+		}
 		socket.send({ type: "end_answer" });
-	}, [socket]);
+	}, [mic, socket]);
+
+	// Stop listening whenever answering is no longer possible (scoring, the
+	// next question being prepared, round over, switched to typing).
+	useEffect(() => {
+		const answerable = ANSWERABLE.has(state.phase) && !state.round.done && state.input.mode !== "typed";
+		if (!answerable && recordingRef.current) {
+			recordingRef.current = false;
+			recordedFramesRef.current = [];
+			mic.pause();
+			setRecording(false);
+		}
+	}, [state.phase, state.round.done, state.input.mode, mic]);
 
 	const endRound = useCallback(() => {
 		playback.stop();
@@ -356,8 +388,9 @@ export default function ConversationalInterview({
 								typedAnswer={state.input.typedAnswer}
 								canAnswer={canAnswer}
 								ttsPlaying={state.tts.playing}
-								onInterrupt={interrupt}
-								onFinishAnswer={finishAnswer}
+								recording={recording}
+								onStartRecording={startRecording}
+								onSendRecording={sendRecording}
 								onTypedChange={(value) => dispatch({ type: "SET_TYPED", value })}
 								onSubmitTyped={submitTyped}
 								onToggleInputMode={() =>

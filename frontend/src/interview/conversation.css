@@ -481,3 +481,58 @@
 	color: var(--muted, inherit);
 	font-size: 0.85rem;
 }
+
+/* Push-to-talk: round mic button + round send arrow. */
+.mic-bar__round {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 52px;
+	height: 52px;
+	border-radius: 50%;
+	border: 1px solid var(--border, currentColor);
+	cursor: pointer;
+	transition: transform 0.12s ease, background 0.12s ease, opacity 0.12s ease;
+}
+
+.mic-bar__round:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.mic-bar__round:not(:disabled):hover {
+	transform: scale(1.05);
+}
+
+.mic-bar__mic {
+	background: var(--accent);
+	color: #fff;
+	border-color: var(--accent);
+}
+
+.mic-bar__mic--recording {
+	background: var(--danger, #c0392b);
+	border-color: var(--danger, #c0392b);
+	opacity: 1;
+	animation: mic-bar-pulse 1.2s ease-in-out infinite;
+}
+
+.mic-bar__send {
+	background: var(--accent-soft, transparent);
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+.mic-bar__send:not(:disabled) {
+	background: var(--accent);
+	color: #fff;
+}
+
+@keyframes mic-bar-pulse {
+	0%, 100% { box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.45); }
+	50% { box-shadow: 0 0 0 10px rgba(192, 57, 43, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.mic-bar__mic--recording { animation: none; }
+}

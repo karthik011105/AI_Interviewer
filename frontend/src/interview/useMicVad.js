@@ -4,7 +4,7 @@ import { MicVAD } from "@ricky0123/vad-web";
 
 import { VAD_ASSET_OPTIONS } from "./vadAssets.js";
 
-function float32ToInt16(input) {
+export function float32ToInt16(input) {
 	const output = new Int16Array(input.length);
 	for (let index = 0; index < input.length; index += 1) {
 		const clamped = Math.max(-1, Math.min(1, input[index]));
@@ -25,12 +25,12 @@ function float32ToInt16(input) {
  * callbacks once: reading a prop directly here would see whatever the phase was
  * when the microphone started, forever.
  */
-export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onReady, onFailure }) {
+export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onFrame, onReady, onFailure, autoStart = true }) {
 	const vadRef = useRef(null);
 	const startedRef = useRef(false);
 
-	const handlers = useRef({ getPhase, onSpeechStart, onUtterance });
-	handlers.current = { getPhase, onSpeechStart, onUtterance };
+	const handlers = useRef({ getPhase, onSpeechStart, onUtterance, onFrame });
+	handlers.current = { getPhase, onSpeechStart, onUtterance, onFrame };
 
 	const stop = useCallback(() => {
 		const vad = vadRef.current;
@@ -66,6 +66,14 @@ export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onRea
 					negativeSpeechThreshold: 0.65,
 					preSpeechPadFrames: 5,
 					minSpeechFrames: 3,
+					// Every 16 kHz frame while listening, speech or not: push-to-talk
+					// records everything between the two taps.
+					onFrameProcessed: (_probs, frame) => {
+						if (frame) handlers.current.onFrame?.(frame);
+					},
+					// Pausing hands over the utterance in progress instead of
+					// discarding it, so "send" never drops the last sentence.
+					submitUserSpeechOnPause: true,
 				});
 
 				if (cancelled) {
@@ -78,7 +86,7 @@ export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onRea
 				}
 
 				vadRef.current = vad;
-				vad.start();
+				if (autoStart) vad.start();
 				onReady?.();
 			} catch (error) {
 				startedRef.current = false;
@@ -97,5 +105,10 @@ export function useMicVad({ enabled, getPhase, onSpeechStart, onUtterance, onRea
 
 	useEffect(() => stop, [stop]);
 
-	return { stop };
+	// Push-to-talk: resume() starts listening; pause() stops and synchronously
+	// emits any speech in progress through onUtterance.
+	const resume = useCallback(() => vadRef.current?.start(), []);
+	const pause = useCallback(() => vadRef.current?.pause(), []);
+
+	return { stop, pause, resume };
 }

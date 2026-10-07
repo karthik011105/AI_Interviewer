@@ -25,7 +25,7 @@ export default function CoverageRail({ coverage }) {
 
 			{maxTurns ? (
 				<p className="coverage-rail__turns">
-					Turn <strong>{Math.min(turnsUsed + 1, maxTurns)}</strong> of up to{" "}
+					Turn <strong>{Math.min(Math.max(turnsUsed, 1), maxTurns)}</strong> of up to{" "}
 					<strong>{maxTurns}</strong>
 				</p>
 			) : null}
