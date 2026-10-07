@@ -45,7 +45,7 @@ export default function BrandLogo({ size = 34, showName = true, caption = "", cl
 			<BrandMark size={size} />
 			{showName ? (
 				<span className="brand-logo__text">
-					<span className="brand-logo__name">PrepForge</span>
+					<span className="brand-logo__name">Prep<span className="brand-logo__forge">Forge</span></span>
 					{caption ? <span className="brand-logo__caption">{caption}</span> : null}
 				</span>
 			) : null}
