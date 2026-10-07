@@ -1,26 +1,28 @@
 import { useCallback, useState } from "react";
-import { ArrowRight, BarChart3, FileText, Mic, Moon, Sun } from "lucide-react";
+import { ArrowRight, Moon, Sun } from "lucide-react";
 
 import AuthDialog from "../components/AuthDialog";
 import BrandLogo from "../components/BrandLogo";
+import { GrowthIcon, MicIcon, ResumeIcon } from "../components/FeatureIcons";
+import LivePreview from "../components/LivePreview";
 import ParticleField from "../components/ParticleField";
 import "./landing.css";
 
 const FEATURES = [
 	{
-		icon: FileText,
+		icon: ResumeIcon,
 		tone: "sun",
 		title: "Built from your resume",
 		body: "Questions target the role you want and the skills you actually listed.",
 	},
 	{
-		icon: Mic,
+		icon: MicIcon,
 		tone: "sky",
 		title: "Talk, don't type",
 		body: "A live AI interviewer asks out loud and follows up on what you say.",
 	},
 	{
-		icon: BarChart3,
+		icon: GrowthIcon,
 		tone: "mint",
 		title: "Know what to fix",
 		body: "Every answer is scored, with a clear report on where to improve.",
@@ -102,33 +104,15 @@ export default function LandingPage({
 						</ul>
 					</div>
 
-					<div className="landing-preview" aria-hidden="true">
-						<div className="landing-preview__card">
-							<div className="landing-preview__bar">
-								<span className="landing-preview__dot" />
-								<span>Technical round · live</span>
-							</div>
-							<div className="landing-bubble landing-bubble--ai">
-								<strong>Interviewer</strong>
-								You listed FastAPI and MongoDB. Why choose a document store for the order service?
-							</div>
-							<div className="landing-bubble landing-bubble--you">
-								<strong>You</strong>
-								Orders vary a lot by product type, so a flexible schema kept writes simple…
-							</div>
-							<div className="landing-preview__footer">
-								<span className="landing-mic"><Mic size={16} /></span>
-								<span className="landing-wave"><i /><i /><i /><i /><i /><i /><i /></span>
-								<span className="landing-score">Score 8.4</span>
-							</div>
-						</div>
+					<div className="landing-preview">
+						<LivePreview />
 					</div>
 				</section>
 
 				<section className="landing-features" aria-label="Features">
 					{FEATURES.map(({ icon: Icon, tone, title, body }) => (
 						<article key={title} className={`landing-feature landing-feature--${tone}`}>
-							<span className="landing-feature__icon"><Icon size={22} strokeWidth={2.2} /></span>
+							<span className="landing-feature__icon"><Icon /></span>
 							<h3>{title}</h3>
 							<p>{body}</p>
 						</article>
