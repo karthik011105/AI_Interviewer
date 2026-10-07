@@ -586,556 +586,150 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
     );
   }
 
+  // One overall score, one card per round, and two short lists. The previous
+  // layout repeated "Pending / Not started" in a dozen boxes per round, plus
+  // persistence state and transcript analytics a candidate cannot act on.
+  const toPct = (value) => {
+    const numeric = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(numeric)) return null;
+    return Math.round(numeric <= 1 ? numeric * 100 : numeric);
+  };
+  const overallPct = toPct(overallScore);
+  const doneCount = sectionReports.filter((s) => String(s.status).toLowerCase() === "complete").length;
+  const missingSkills = Array.isArray(technicalSkillProfileSummary?.absent_skills)
+    ? technicalSkillProfileSummary.absent_skills
+    : [];
+  const statusOf = (status) => {
+    const normalized = String(status || "").toLowerCase();
+    if (normalized === "complete" || normalized === "completed") return { label: "Done", tone: "done" };
+    if (normalized === "in_progress" || normalized === "active" || normalized === "partial") return { label: "In progress", tone: "progress" };
+    return { label: "Not started", tone: "idle" };
+  };
+  const ringStyle = { "--pct": overallPct ?? 0 };
+
   return (
-    <div className="page-shell report-shell">
-      <section className="page-heading report-heading">
-        <section className="glass-panel report-hero">
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">Final Report</p>
-              <h2>{hasPersistedReport ? "Persisted interview report is loaded." : "Live report snapshot is ready."}</h2>
-            </div>
-            <span className={`status-pill status-pill--${reportStatusTone}`}>{reportStatusLabel}</span>
-          </div>
-
-          <p className="hero-text">
-            {hasPersistedReport
-              ? "This page is reading the saved report payload for the current interview session."
-              : "No persisted report row exists yet. You can still inspect the live snapshot and generate a saved report when you are ready."}
-          </p>
-
-          <div className="hero-tags preview-tags">
-            <span>{selectedRoleTitle || reportEnvelope?.role_selected || "Role pending"}</span>
-            <span>{formatPercent(overallScore)}</span>
-            <span>{hrComplete ? "HR complete" : "Earlier rounds still active"}</span>
-          </div>
-
-          <div className="action-row report-actions">
-            <button
-              type="button"
-              className="primary-button action-row__button"
-              onClick={handleGenerateReport}
-              disabled={isGenerating || isLoading}
-            >
-              {isGenerating ? "Generating..." : hasPersistedReport ? "Refresh Report" : "Generate Report"}
-            </button>
-            <button
-              type="button"
-              className="secondary-button action-row__button"
-              onClick={() => onNavigate?.(hrComplete ? (roleRequiresDsa ? "dsa" : "project_discussion") : "hr")}
-              disabled={!onNavigate}
-            >
-              {hrComplete ? (roleRequiresDsa ? "Open DSA Workspace" : "Open Project Discussion") : "Open HR Interview"}
-            </button>
-            <WorkflowResetControl
-              accessToken={accessToken}
-              apiBaseUrl={apiBaseUrl}
-              sessionId={sessionId}
-              currentTarget="report"
-              currentLabel="Report"
-              onResetApplied={(payload, { successMessage } = {}) => {
-                setResetMessage(successMessage || "Report data reset.");
-                setInfoMessage("");
-                setErrorMessage("");
-                setReportEnvelope(null);
-                setRefreshKey((current) => current + 1);
-                onWorkflowStateChange?.((current) => ({
-                  ...current,
-                  ...buildWorkflowResetPatch(current, payload?.cleared_targets),
-                }));
-              }}
-              triggerClassName="secondary-button action-row__button"
-              triggerLabel="Reset"
-              disabled={!sessionId || !accessToken}
-            />
-          </div>
-        </section>
-
-        <aside className="glass-panel report-aside">
-          <span>Report State</span>
-          <strong>{selectedRoleTitle || reportEnvelope?.role_selected || "Session role pending"}</strong>
-          <p>
-            {hasPersistedReport
-              ? "A saved report row exists for this session. Use Refresh Report after completing more stages."
-              : "This view is showing the backend snapshot assembled from assessment, interview, and DSA state."}
-          </p>
-
-          <ul className="preview-list report-checklist">
-            <li>{workflowState?.sessionId ? "Session is owned and available." : "A persisted session is required."}</li>
-            <li>{completedStageCount} stages complete, {scoredStageCount} stages currently scored.</li>
-            <li>{persistenceSupported ? "Database report persistence is available." : "Database report persistence still needs the final_reports schema."}</li>
-          </ul>
-        </aside>
-      </section>
-
-      <div className="metric-strip report-metrics">
-        <div>
-          <span>Overall Score</span>
-          <strong>{formatPercent(overallScore)}</strong>
-          <p>{hasPersistedReport ? "Loaded from final_reports." : "Derived from the current backend snapshot."}</p>
+    <div className="pp-page pp-report">
+      <div className="pp-report__head">
+        <div className="pp-page__head">
+          <h1>Your interview report</h1>
+          <p>{selectedRoleTitle || reportEnvelope?.role_selected || "Your chosen role"}</p>
         </div>
-        <div>
-          <span>Completed Stages</span>
-          <strong>{completedStageCount}</strong>
-          <p>Assessment, interview rounds, and DSA completion contribute here.</p>
-        </div>
-        <div>
-          <span>Persistence</span>
-          <strong>{hasPersistedReport ? "Saved" : persistenceSupported ? "Ready" : "Schema missing"}</strong>
-          <p>{persistenceSupported ? "Generate or refresh to update the saved report row." : "Apply the report schema in Database to store report history."}</p>
+        <div className="pp-report__actions">
+          <button type="button" className="primary-button" onClick={handleGenerateReport} disabled={isGenerating || isLoading}>
+            {isGenerating ? "Updating…" : hasPersistedReport ? "Update report" : "Save report"}
+          </button>
+          <WorkflowResetControl
+            accessToken={accessToken}
+            apiBaseUrl={apiBaseUrl}
+            sessionId={sessionId}
+            currentTarget="report"
+            currentLabel="Report"
+            onResetApplied={(payload, { successMessage } = {}) => {
+              setResetMessage(successMessage || "Report data reset.");
+              setInfoMessage("");
+              setErrorMessage("");
+              setReportEnvelope(null);
+              setRefreshKey((current) => current + 1);
+              onWorkflowStateChange?.((current) => ({
+                ...current,
+                ...buildWorkflowResetPatch(current, payload?.cleared_targets),
+              }));
+            }}
+            triggerClassName="secondary-button"
+            triggerLabel="Reset"
+            disabled={!sessionId || !accessToken}
+          />
         </div>
       </div>
 
-      <div className="value-grid report-round-grid">
-        {roundSummaries.map((entry) => (
-          <article key={entry.key} className="value-card report-round-card">
-            <span>{entry.label}</span>
-            <strong>{formatPercent(entry.score)}</strong>
-            <p>{entry.summary || "No summary yet."}</p>
-            <div className="report-round-card__meta">
-              <span>{formatStatus(entry.status)}</span>
-              <span>{entry.detail || "Awaiting additional stage data."}</span>
-            </div>
-          </article>
-        ))}
-      </div>
+      {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
+      {resetMessage ? <p className="info-banner">{resetMessage}</p> : null}
 
-      <section className="glass-panel report-list-card report-main-section">
-        <div className="panel-head panel-head--tight">
-          <div>
-            <p className="section-kicker">Round Reports</p>
-            <h3>Full report by interview section</h3>
-          </div>
-          <span className="status-pill status-pill--online">All Sections</span>
+      <section className="pp-card pp-report__hero">
+        <div className="pp-ring" style={ringStyle} aria-label={overallPct === null ? "No score yet" : `Overall score ${overallPct} percent`}>
+          <span>{overallPct === null ? "–" : overallPct}</span>
+          <small>{overallPct === null ? "no score yet" : "overall"}</small>
         </div>
-
-        <p className="report-inline-note">
-          Each block below summarizes what happened in that round, how it scored, what signals were strong, what needs work, and what the next improvement focus should be.
-        </p>
+        <div className="pp-report__hero-text">
+          <h2>
+            {doneCount === 0
+              ? "Complete a round to see your score"
+              : doneCount === sectionReports.length
+                ? "All rounds complete"
+                : `${doneCount} of ${sectionReports.length} rounds complete`}
+          </h2>
+          <div className="pp-report__progress" aria-hidden="true">
+            {sectionReports.map((section) => (
+              <i key={section.key} className={`pp-report__seg pp-report__seg--${statusOf(section.status).tone}`} />
+            ))}
+          </div>
+          <p>{isLoading ? "Loading your results…" : "Scores update as you finish each round."}</p>
+        </div>
       </section>
 
-      <div className="report-section-stack">
+      <section className="pp-round-grid" aria-label="Rounds">
         {sectionReports.map((section) => {
-          const strengths = section.strengths.length
-            ? section.strengths
-            : [section.status === "complete" ? "No additional strengths were extracted for this round yet." : `Complete ${section.label} to unlock stronger positives.`];
-          const risks = section.risks.length
-            ? section.risks
-            : [section.status === "complete" ? "No major risks were extracted for this round." : `No risk signals yet because ${section.label} is still incomplete.`];
-          const sectionRecommendations = section.sectionRecommendations.length
-            ? section.sectionRecommendations
-            : [section.status === "complete" ? "No round-specific coaching was generated yet." : `Complete ${section.label} to generate round-specific coaching.`];
-          const evidence = section.evidence.length
-            ? section.evidence
-            : [section.status === "complete" ? "No extra evidence snippets were captured for this round." : `Saved evidence will appear here after ${section.label} records more data.`];
-
+          const status = statusOf(section.status);
+          const pct = toPct(section.score);
+          const hasDetail = section.strengths.length || section.risks.length || section.sectionRecommendations.length;
           return (
-            <section key={section.key} className="glass-panel report-section-card">
-              <div className="panel-head panel-head--tight">
-                <div>
-                  <p className="section-kicker">{section.kicker}</p>
-                  <h3>{section.label}</h3>
-                </div>
-
-                <div className="report-section-card__status">
-                  <span className={`status-pill status-pill--${sectionStatusTone(section.status)}`}>{formatStatus(section.status)}</span>
-                  <strong className="report-section-card__score">{formatPercent(section.score)}</strong>
-                </div>
+            <article key={section.key} className={`pp-round pp-round--${status.tone}`}>
+              <div className="pp-round__top">
+                <h3>{section.label}</h3>
+                <span className={`pp-chip pp-chip--${status.tone}`}>{status.label}</span>
               </div>
-
-              <div className="report-section-card__copy">
-                <p className="report-section-card__summary">{section.summary}</p>
-                <p className="report-inline-note">{section.detail}</p>
-              </div>
-
-              <div className="report-section-card__metrics">
-                {section.metrics.map((metric) => (
-                  <article key={`${section.key}-${metric.label}`} className="value-card report-section-metric">
-                    <span>{metric.label}</span>
-                    <strong>{formatMetricValue(metric.value, metric.kind)}</strong>
-                    <p>{metric.detail}</p>
-                  </article>
-                ))}
-              </div>
-
-              {section.questionReports.length ? (
-                <div className="report-question-grid">
-                  {section.questionReports.map((questionReport) => {
-                    const questionMetrics = buildDsaQuestionMetricCards(questionReport);
-                    const questionStrengths = coerceList(questionReport?.strengths);
-                    const questionRisks = coerceList(questionReport?.risks);
-                    const questionRecommendations = coerceList(questionReport?.recommendations);
-                    const codingJourney = coerceObject(questionReport?.coding_journey);
-
-                    return (
-                      <article key={`question-${questionReport?.question_number || questionReport?.problem_id || "pending"}`} className="report-question-card">
-                        <div className="report-question-card__header">
-                          <div className="report-question-card__title">
-                            <span>Question {questionReport?.question_number || "Pending"}</span>
-                            <h4>{questionReport?.problem_title || `DSA Question ${questionReport?.question_number || "Pending"}`}</h4>
-                          </div>
-                          <span className={`status-pill status-pill--${sectionStatusTone(questionReport?.score != null ? "complete" : "in_progress")}`}>
-                            {formatPercent(questionReport?.score)}
-                          </span>
-                        </div>
-
-                        <p className="report-question-card__summary">
-                          {questionReport?.strategy_summary || questionReport?.analysis_summary || "No strategy summary was captured for this coding question yet."}
-                        </p>
-
-                        <div className="report-question-card__metrics">
-                          {questionMetrics.map((metric) => (
-                            <article key={`question-${questionReport?.question_number}-${metric.label}`} className="value-card report-section-metric">
-                              <span>{metric.label}</span>
-                              <strong>{formatMetricValue(metric.value, metric.kind)}</strong>
-                              <p>{metric.detail}</p>
-                            </article>
-                          ))}
-                        </div>
-
-                        <div className="report-chip-group">
-                          <span>Coding Journey</span>
-                          <ul className="report-chip-list">
-                            <li className="report-chip">Language: {formatLabel(questionReport?.language, "Pending")}</li>
-                            <li className="report-chip">Submissions: {formatNumber(codingJourney?.submission_count)}</li>
-                            <li className="report-chip">Judge: {formatLabel(codingJourney?.last_judge_status, "Pending")}</li>
-                          </ul>
-                        </div>
-
-                        <div className="report-section-list-grid">
-                          <article className="report-section-list-card report-section-list-card--positive">
-                            <span>Question Strengths</span>
-                            <ul className="report-list">
-                              {(questionStrengths.length ? questionStrengths : ["No specific strengths were extracted for this question yet."]).map((item) => (
-                                <li key={`question-strength-${questionReport?.question_number}-${item}`}>{item}</li>
-                              ))}
-                            </ul>
-                          </article>
-
-                          <article className="report-section-list-card report-section-list-card--danger">
-                            <span>Question Risks</span>
-                            <ul className="report-list">
-                              {(questionRisks.length ? questionRisks : ["No major risks were extracted for this question."]).map((item) => (
-                                <li key={`question-risk-${questionReport?.question_number}-${item}`}>{item}</li>
-                              ))}
-                            </ul>
-                          </article>
-
-                          <article className="report-section-list-card report-section-list-card--warning report-section-list-card--full">
-                            <span>Question Recommendations</span>
-                            <ul className="report-list">
-                              {(questionRecommendations.length ? questionRecommendations : ["No extra question-level coaching is available yet."]).map((item) => (
-                                <li key={`question-recommendation-${questionReport?.question_number}-${item}`}>{item}</li>
-                              ))}
-                            </ul>
-                          </article>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
+              <p className="pp-round__score">
+                {status.tone === "idle" || pct === null ? <span className="pp-round__dash">–</span> : <>{pct}<small>%</small></>}
+              </p>
+              {status.tone !== "idle" ? <p className="pp-round__summary">{section.summary}</p> : null}
+              {status.tone === "idle" ? (
+                <button type="button" className="secondary-button" onClick={() => onNavigate?.(section.key)}>
+                  Start this round →
+                </button>
+              ) : hasDetail ? (
+                <details className="pp-round__details">
+                  <summary>Details</summary>
+                  {section.strengths.length ? (
+                    <div><h4>Strengths</h4><ul>{section.strengths.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  ) : null}
+                  {section.risks.length ? (
+                    <div><h4>Work on</h4><ul>{section.risks.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  ) : null}
+                  {section.sectionRecommendations.length ? (
+                    <div><h4>Try next</h4><ul>{section.sectionRecommendations.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  ) : null}
+                </details>
               ) : null}
-
-              <div className="report-section-list-grid">
-                <article className="report-section-list-card report-section-list-card--positive">
-                  <span>Strengths</span>
-                  <ul className="report-list">
-                    {strengths.map((item) => (
-                      <li key={`${section.key}-strength-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </article>
-
-                <article className="report-section-list-card report-section-list-card--danger">
-                  <span>Risks</span>
-                  <ul className="report-list">
-                    {risks.map((item) => (
-                      <li key={`${section.key}-risk-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </article>
-
-                <article className="report-section-list-card report-section-list-card--warning">
-                  <span>Recommendations</span>
-                  <ul className="report-list">
-                    {sectionRecommendations.map((item) => (
-                      <li key={`${section.key}-recommendation-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </article>
-
-                <article className="report-section-list-card report-section-list-card--neutral">
-                  <span>Evidence</span>
-                  <ul className="report-list">
-                    {evidence.map((item) => (
-                      <li key={`${section.key}-evidence-${item}`}>{item}</li>
-                    ))}
-                  </ul>
-                </article>
-              </div>
-            </section>
+            </article>
           );
         })}
-      </div>
-
-      <section className="glass-panel report-list-card report-analysis-shell report-nlp-section">
-        <div className="panel-head panel-head--tight">
-          <div>
-            <p className="section-kicker">Deep Analysis</p>
-            <h3>Interview transcript and targeting analytics</h3>
-          </div>
-          <span className={`status-pill status-pill--${hasDeepAnalysis ? "checking" : "offline"}`}>{hasDeepAnalysis ? "Analytics Ready" : "Awaiting Data"}</span>
-        </div>
-
-        <p className="report-analysis-shell__intro">
-          These analytics sit under the main report and explain why the interview rounds scored the way they did. They are transcript-level signals, not the full session summary.
-        </p>
-
-        <div className="report-nlp-group">
-          <div className="report-nlp-group__header">
-            <p className="section-kicker">Concept Coverage</p>
-            <h4>Concept coverage by interview round</h4>
-          </div>
-
-          {nlpSignals.length ? (
-            <div className="value-grid report-nlp-grid">
-              {nlpSignals.map((entry) => {
-                const coverage = entry.conceptCoverage;
-                const weights = coerceObject(entry.scoringProfile?.weights);
-                return (
-                  <article key={entry.key} className="value-card report-round-card report-nlp-card">
-                    <span>{entry.label}</span>
-                    <strong>{formatPercent(coverage?.average_ratio)}</strong>
-                    <p>
-                      {Number(coverage?.covered_count || 0)}/{Number(coverage?.total_concepts || 0)} ideal-answer concepts were matched across saved answers.
-                    </p>
-
-                    <div className="report-nlp-card__meta">
-                      <span>Threshold {formatPercent(coverage?.threshold)}</span>
-                      <span>Avg lexical match {formatPercent(coverage?.average_tfidf)}</span>
-                      <span>{Number(coverage?.available_responses || 0)} answers analyzed</span>
-                    </div>
-
-                    <p className="report-nlp-card__tuning">{describeCoverageTuning(entry.scoringProfile)}</p>
-
-                    <div className="report-nlp-card__weights">
-                      <span>Coverage weight {formatPercent(weights?.concept_coverage)}</span>
-                      <span>Communication weight {formatPercent(weights?.communication)}</span>
-                    </div>
-
-                    {entry.sampleCoveredPoints.length ? (
-                      <div className="report-chip-group">
-                        <span>Detected concepts</span>
-                        <ul className="report-chip-list">
-                          {entry.sampleCoveredPoints.map((point) => (
-                            <li key={`${entry.key}-covered-${point}`} className="report-chip">
-                              {point}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    {entry.sampleMissingPoints.length ? (
-                      <div className="report-chip-group">
-                        <span>Still missing</span>
-                        <ul className="report-chip-list">
-                          {entry.sampleMissingPoints.map((point) => (
-                            <li key={`${entry.key}-missing-${point}`} className="report-chip report-chip--missing">
-                              {point}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="report-inline-note">Concept coverage appears here after interview answers are saved and scored.</p>
-          )}
-        </div>
-
-        <div className="report-nlp-group">
-          <div className="report-nlp-group__header">
-            <p className="section-kicker">Confidence Signal</p>
-            <h4>Transcript confidence by interview round</h4>
-          </div>
-
-          {confidenceSignals.length ? (
-            <div className="value-grid report-nlp-grid">
-              {confidenceSignals.map((entry) => {
-                const signal = entry.confidenceSignal;
-                const availableResponses = Number(signal?.available_responses || 0);
-                const sentimentBackedResponses = Number(signal?.sentiment_backed_responses || 0);
-                return (
-                  <article key={`${entry.key}-confidence`} className="value-card report-round-card report-nlp-card">
-                    <span>{entry.label}</span>
-                    <strong>{formatPercent(signal?.average_confidence)}</strong>
-                    <p>{describeConfidenceSignal(signal)}</p>
-
-                    <div className="report-nlp-card__meta">
-                      <span>Avg hedging {formatPercent(signal?.average_hedging_ratio)}</span>
-                      <span>Avg filler {formatPercent(signal?.average_filler_ratio)}</span>
-                      <span>{availableResponses} answers analyzed</span>
-                    </div>
-
-                    <div className="report-nlp-card__weights">
-                      <span>Dominant label {formatLabel(signal?.dominant_confidence_label)}</span>
-                      <span>Sentiment trend {formatLabel(signal?.dominant_sentiment_label)} ({formatSignedMetric(signal?.average_sentiment_compound)})</span>
-                      <span>VADER on {sentimentBackedResponses}/{availableResponses} answers</span>
-                    </div>
-
-                    <p className="report-inline-note">
-                      Confidence comes from transcript sentiment plus hedging and filler cues, so neutral technical answers can still rate as steady.
-                    </p>
-
-                    <div className="report-chip-group">
-                      <span>Analysis modes</span>
-                      <ul className="report-chip-list">
-                        {String(formatAnalysisModes(signal?.analysis_modes))
-                          .split(", ")
-                          .filter(Boolean)
-                          .map((mode) => (
-                            <li key={`${entry.key}-mode-${mode}`} className="report-chip">
-                              {mode}
-                            </li>
-                          ))}
-                      </ul>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="report-inline-note">Confidence signals appear here after communication details are saved for interview answers.</p>
-          )}
-        </div>
-
-        <div className="report-nlp-group">
-          <div className="report-nlp-group__header">
-            <p className="section-kicker">Resume-Conditioned Targeting</p>
-            <h4>Technical skill profile and asked-topic coverage</h4>
-          </div>
-
-          {Object.keys(technicalSkillProfileSummary).length || Object.keys(technicalCoveredTopicSummary).length ? (
-            <div className="value-grid report-nlp-grid">
-              <article className="value-card report-round-card report-nlp-card">
-                <span>Technical Skill Profile</span>
-                <strong>{Number(technicalSkillProfileSummary?.strong_count || 0) + Number(technicalSkillProfileSummary?.familiar_count || 0) + Number(technicalSkillProfileSummary?.absent_count || 0)}</strong>
-                <p>{describeSkillProfile(technicalSkillProfileSummary, technicalCoveredTopicSummary)}</p>
-
-                <div className="report-nlp-card__meta">
-                  <span>Strong {Number(technicalSkillProfileSummary?.strong_count || 0)}</span>
-                  <span>Familiar {Number(technicalSkillProfileSummary?.familiar_count || 0)}</span>
-                  <span>Absent {Number(technicalSkillProfileSummary?.absent_count || 0)}</span>
-                </div>
-
-                {Array.isArray(technicalSkillProfileSummary?.strong_skills) && technicalSkillProfileSummary.strong_skills.length ? (
-                  <div className="report-chip-group">
-                    <span>Strong skills</span>
-                    <ul className="report-chip-list">
-                      {technicalSkillProfileSummary.strong_skills.map((skill) => (
-                        <li key={`strong-${skill}`} className="report-chip">{skill}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {Array.isArray(technicalSkillProfileSummary?.absent_skills) && technicalSkillProfileSummary.absent_skills.length ? (
-                  <div className="report-chip-group">
-                    <span>Missing role skills</span>
-                    <ul className="report-chip-list">
-                      {technicalSkillProfileSummary.absent_skills.map((skill) => (
-                        <li key={`absent-${skill}`} className="report-chip report-chip--missing">{skill}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </article>
-
-              <article className="value-card report-round-card report-nlp-card">
-                <span>Asked Topic Coverage</span>
-                <strong>{Number(technicalCoveredTopicSummary?.total_questions_covered || 0)}</strong>
-                <p>These are the targeted technical areas that were actually asked and tracked during the round.</p>
-
-                <div className="report-nlp-card__meta">
-                  <span>Strong prompts {Number(technicalCoveredTopicSummary?.tier_counts?.strong || 0)}</span>
-                  <span>Familiar prompts {Number(technicalCoveredTopicSummary?.tier_counts?.familiar || 0)}</span>
-                  <span>Absent prompts {Number(technicalCoveredTopicSummary?.tier_counts?.absent || 0)}</span>
-                </div>
-
-                {Array.isArray(technicalCoveredTopicSummary?.covered_focus_skills) && technicalCoveredTopicSummary.covered_focus_skills.length ? (
-                  <div className="report-chip-group">
-                    <span>Tracked focus skills</span>
-                    <ul className="report-chip-list">
-                      {technicalCoveredTopicSummary.covered_focus_skills.map((skill) => (
-                        <li key={`covered-${skill}`} className="report-chip">{skill}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {technicalCoveredTopics.length ? (
-                  <div className="report-chip-group">
-                    <span>Prompt tiers asked</span>
-                    <ul className="report-chip-list">
-                      {technicalCoveredTopics.map((entry) => (
-                        <li key={`asked-${entry.question_index}-${entry.focus_skill || entry.question_tier}`} className={`report-chip${String(entry?.question_tier || "") === "absent" ? " report-chip--missing" : ""}`}>
-                          {formatLabel(entry?.question_tier, "General")}{entry?.focus_skill ? `: ${entry.focus_skill}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </article>
-            </div>
-          ) : (
-            <p className="report-inline-note">Resume-conditioned targeting details appear here after a technical round is started with the new skill profiler and at least one tracked question is saved.</p>
-          )}
-        </div>
       </section>
 
-      <div className="results-grid report-detail-grid">
-        <section className="glass-panel report-list-card">
-          <div className="panel-head panel-head--tight">
-            <div>
-              <p className="section-kicker">Highlights</p>
-              <h3>What is already going well</h3>
+      {doneCount > 0 && (highlights.length || recommendations.length) ? (
+        <section className="pp-report__lists">
+          {highlights.length ? (
+            <div className="pp-card">
+              <h3>Going well</h3>
+              <ul>{highlights.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
-            <span className="status-pill status-pill--online">Strengths</span>
-          </div>
-          <ul className="report-list">
-            {(highlights.length ? highlights : ["Generate the report after more completed stages to surface stronger highlights."]).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="glass-panel report-list-card">
-          <div className="panel-head panel-head--tight">
-            <div>
-              <p className="section-kicker">Next Focus</p>
-              <h3>Recommendations from persisted state</h3>
+          ) : null}
+          {recommendations.length ? (
+            <div className="pp-card">
+              <h3>Focus next</h3>
+              <ul>{recommendations.map((item) => <li key={item}>{item}</li>)}</ul>
             </div>
-            <span className="status-pill status-pill--checking">Coaching</span>
-          </div>
-          <ul className="report-list">
-            {(recommendations.length ? recommendations : ["No immediate recommendations are available yet."]).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          ) : null}
         </section>
-      </div>
+      ) : null}
 
-      <div className="message-stack">
-        {resetMessage ? <p className="info-banner">{resetMessage}</p> : null}
-        {infoMessage ? <p className="info-banner">{infoMessage}</p> : null}
-        {!hasPersistedReport && resolvedReport ? <p className="info-banner">No persisted report exists yet. Generate it to store the current snapshot in Database.</p> : null}
-        {persistenceDetail ? <p className={persistenceSupported ? "info-banner" : "error-banner"}>{persistenceDetail}</p> : null}
-        {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
-      </div>
+      {missingSkills.length ? (
+        <section className="pp-card pp-report__skills">
+          <h3>Skills to study for this role</h3>
+          <div className="pp-skill-chips">
+            {missingSkills.map((skill) => <span key={skill}>{skill}</span>)}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

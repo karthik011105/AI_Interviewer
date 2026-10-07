@@ -433,7 +433,7 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=["Complete the Assessment to strengthen the final report signal."],
+				recommendations=["Complete the Assessment to add it to your report."],
 				extras=metrics,
 			),
 		}
@@ -471,7 +471,7 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 	elif score is not None and score < 0.6:
 		risks.append("Screening accuracy stayed below the target bar.")
 	if status_value != "complete":
-		recommendations.append("Complete the Assessment to strengthen the final report signal.")
+		recommendations.append("Complete the Assessment to add it to your report.")
 	elif score is not None and score < 0.6:
 		recommendations.append(LOW_SCORE_GUIDANCE["assessment"])
 	else:
@@ -534,7 +534,7 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=[f"Complete the {ROUND_LABELS[round_name]} to strengthen the final report signal."],
+				recommendations=[f"Complete the {ROUND_LABELS[round_name]} to add it to your report."],
 				extras={
 					**metrics,
 					"feedback_samples": [],
@@ -689,7 +689,7 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 		if absent_skills:
 			evidence.append(f"Role-skill gaps: {', '.join(absent_skills)}.")
 	if status_value != "complete":
-		recommendations.append(f"Complete the {ROUND_LABELS[round_name]} to strengthen the final report signal.")
+		recommendations.append(f"Complete the {ROUND_LABELS[round_name]} to add it to your report.")
 	elif total_score is not None and total_score < 0.6:
 		recommendations.append(LOW_SCORE_GUIDANCE[round_name])
 	else:
@@ -858,7 +858,7 @@ def _build_dsa_snapshot(session_id: str) -> dict[str, Any]:
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=["Complete the DSA Round to strengthen the final report signal."],
+				recommendations=["Complete the DSA Round to add it to your report."],
 				extras={
 					**metrics,
 					"questions": progress_summary.get("questions") or [],
@@ -957,7 +957,7 @@ def _build_highlights(round_summaries: list[dict[str, Any]]) -> list[str]:
 	if highlights:
 		return highlights[:3]
 	if any(entry.get("status") == "complete" for entry in round_summaries):
-		return ["Persisted scores exist, but stronger highlight signals will emerge once more rounds are completed."]
+		return ["Finish more rounds to see your strengths here."]
 	return ["No completed stages are available yet for highlight extraction."]
 
 
@@ -967,7 +967,7 @@ def _build_recommendations(round_summaries: list[dict[str, Any]], persistence_de
 		status_value = str(entry.get("status") or "not_started")
 		score = _coerce_numeric_score(entry.get("score"))
 		if status_value != "complete":
-			recommendations.append(f"Complete the {entry.get('label')} to strengthen the final report signal.")
+			recommendations.append(f"Complete the {entry.get('label')} to add it to your report.")
 			continue
 		if score is not None and score < 0.6:
 			recommendations.append(LOW_SCORE_GUIDANCE.get(str(entry.get("key")) or "", "Revisit this stage before the next mock session."))

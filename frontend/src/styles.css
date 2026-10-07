@@ -4645,3 +4645,271 @@ h3 {
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 }
+
+/* Interview controls: one row - status | mic + send + type | end round. */
+.pp-main .mic-bar {
+	gap: 14px 18px;
+	padding: 14px 18px;
+}
+
+.pp-main .mic-bar__status {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+.pp-main .mic-bar__actions {
+	flex-wrap: nowrap;
+	gap: 10px;
+}
+
+.pp-main .mic-bar__actions .secondary-button,
+.pp-main .mic-bar__actions .primary-button {
+	width: auto;
+	min-height: 44px;
+	padding: 0 16px;
+}
+
+.pp-main .mic-bar__end {
+	margin-left: 0;
+	padding: 8px 14px;
+	border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--danger);
+	font: inherit;
+	font-size: 0.88rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.pp-main .mic-bar__end:hover:not(:disabled) {
+	background: var(--danger-bg);
+}
+
+.pp-main .mic-bar__typed .primary-button,
+.pp-main .mic-bar__typed .secondary-button {
+	width: auto;
+}
+
+/* ==========================================================================
+   Report
+   ========================================================================== */
+
+.pp-report {
+	max-width: 1040px;
+}
+
+.pp-report__head {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.pp-report__actions {
+	display: flex;
+	gap: 10px;
+}
+
+.pp-report__actions .primary-button,
+.pp-report__actions .secondary-button {
+	width: auto;
+}
+
+.pp-report__hero {
+	display: flex;
+	align-items: center;
+	gap: 28px;
+	flex-wrap: wrap;
+}
+
+.pp-ring {
+	--pct: 0;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	width: 132px;
+	height: 132px;
+	flex: none;
+	border-radius: 50%;
+	background:
+		radial-gradient(closest-side, var(--surface) 78%, transparent 79%),
+		conic-gradient(var(--accent) calc(var(--pct) * 1%), var(--surface-sunken) 0);
+}
+
+.pp-ring span {
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 2.4rem;
+	font-weight: 600;
+	line-height: 1;
+}
+
+.pp-ring small {
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.pp-report__hero-text {
+	flex: 1;
+	min-width: 220px;
+}
+
+.pp-report__hero-text h2 {
+	margin: 0 0 12px;
+	font-size: 1.3rem;
+}
+
+.pp-report__hero-text p {
+	margin: 10px 0 0;
+	color: var(--muted);
+}
+
+.pp-report__progress {
+	display: flex;
+	gap: 6px;
+}
+
+.pp-report__seg {
+	flex: 1;
+	height: 8px;
+	border-radius: 4px;
+	background: var(--surface-sunken);
+}
+
+.pp-report__seg--done { background: var(--accent); }
+.pp-report__seg--progress { background: color-mix(in srgb, var(--accent) 45%, var(--surface-sunken)); }
+
+.pp-round-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	gap: 14px;
+}
+
+.pp-round {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 18px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background: var(--surface);
+}
+
+.pp-round--done {
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.pp-round__top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.pp-round__top h3 {
+	margin: 0;
+	font-size: 1rem;
+}
+
+.pp-chip {
+	flex: none;
+	padding: 3px 9px;
+	border-radius: 999px;
+	font-size: 0.74rem;
+	font-weight: 700;
+}
+
+.pp-chip--done { background: var(--success-bg); color: var(--success); }
+.pp-chip--progress { background: var(--accent-soft); color: var(--accent); }
+.pp-chip--idle { background: var(--surface-sunken); color: var(--muted); }
+
+.pp-round__score {
+	margin: 0;
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 2.4rem;
+	font-weight: 600;
+	line-height: 1;
+}
+
+.pp-round__score small {
+	font-size: 1.1rem;
+	color: var(--muted);
+}
+
+.pp-round__dash {
+	color: var(--border-strong);
+}
+
+.pp-round__summary {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.9rem;
+	line-height: 1.5;
+}
+
+.pp-round .secondary-button {
+	width: 100%;
+	margin-top: auto;
+}
+
+.pp-round__details > summary {
+	color: var(--accent);
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.pp-round__details h4 {
+	margin: 12px 0 4px;
+	font-size: 0.82rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted);
+}
+
+.pp-round__details ul,
+.pp-report__lists ul {
+	margin: 0;
+	padding-left: 18px;
+	line-height: 1.55;
+	font-size: 0.92rem;
+}
+
+.pp-report__lists {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+}
+
+.pp-report__lists h3,
+.pp-report__skills h3 {
+	margin: 0 0 10px;
+	font-size: 1.05rem;
+}
+
+.pp-skill-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.pp-skill-chips span {
+	padding: 6px 12px;
+	border-radius: 999px;
+	background: var(--warning-bg);
+	color: var(--warning);
+	font-size: 0.86rem;
+	font-weight: 600;
+}
+
+@media (max-width: 700px) {
+	.pp-report__lists {
+		grid-template-columns: 1fr;
+	}
+}

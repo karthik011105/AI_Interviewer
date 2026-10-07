@@ -40,7 +40,7 @@ export default function TurnBubble({ turn, expanded, onToggle }) {
 				.join(" ")}
 		>
 			<header className="turn-bubble__meta">
-				<span className="turn-bubble__who">{isInterviewer ? "Interviewer" : "You"}</span>
+				<span className="turn-bubble__who">{isInterviewer ? "Maya" : "You"}</span>
 
 				{isInterviewer && turn.action === "follow_up" ? (
 					<span className="turn-bubble__chip turn-bubble__chip--followup">follow-up</span>
