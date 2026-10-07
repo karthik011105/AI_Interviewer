@@ -77,12 +77,11 @@ from backend.nlp.interview_director import (
 	build_director_messages,
 	build_director_system_prompt,
 )
-from backend.nlp.question_generator import _build_skill_allocation_plan
+from backend.nlp.round_plans import build_round_coverage_plan
 
 _LOGGER = logging.getLogger(__name__)
 
 MODE = "dynamic"
-_TARGET_QUESTION_COUNT = 6
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +127,7 @@ def _ensure_round_state(runtime: InterviewRuntime) -> None:
 	context = runtime.engine_state["context"]
 
 	if not questions_json.get("coverage_plan"):
-		questions_json["coverage_plan"] = build_coverage_plan(
-			_build_skill_allocation_plan(context, _TARGET_QUESTION_COUNT)
-		)
+		questions_json["coverage_plan"] = build_round_coverage_plan(runtime.round_type, context)
 
 	if "system" not in runtime.engine_state:
 		role_title = (
@@ -139,7 +136,7 @@ def _ensure_round_state(runtime: InterviewRuntime) -> None:
 			or "software engineering"
 		)
 		runtime.engine_state["system"] = build_director_system_prompt(
-			context, role_title=role_title
+			context, role_title=role_title, round_type=runtime.round_type
 		)
 
 

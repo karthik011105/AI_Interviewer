@@ -22,6 +22,31 @@ const API_DEFAULT = "http://127.0.0.1:8000";
 /** Phases in which the candidate is allowed to send an answer. */
 const ANSWERABLE = new Set(["listening", "speaking", "clarifying"]);
 
+// One screen serves every conversational round; only the wording changes.
+const ROUND_COPY = {
+	technical: {
+		kicker: "Technical",
+		label: "Technical Interview",
+		heading: (role) => (role ? `${role} technical interview` : "Technical interview"),
+		intro:
+			"This round is a conversation. The interviewer follows up on what you actually say, so answer as you would out loud - you can interrupt at any time.",
+	},
+	hr: {
+		kicker: "HR",
+		label: "HR Interview",
+		heading: () => "HR interview",
+		intro:
+			"A conversation about how you work: real situations, what you did, and what you learned. Answer out loud with specific examples - you can interrupt at any time.",
+	},
+	project_discussion: {
+		kicker: "Projects",
+		label: "Project Discussion",
+		heading: () => "Project discussion",
+		intro:
+			"A conversation about the projects on your resume: what you built, the decisions you made, and why. Answer out loud - you can interrupt at any time.",
+	},
+};
+
 export default function ConversationalInterview({
 	authState,
 	workflowState,
@@ -45,6 +70,7 @@ export default function ConversationalInterview({
 	const accessToken = authState?.accessToken || "";
 	const isAuthenticated = Boolean(accessToken);
 	const roleTitle = workflowState?.selectedRoleTitle || "";
+	const copy = ROUND_COPY[forcedRound] || ROUND_COPY.technical;
 
 	const playback = useAudioPlayback({
 		onError: useCallback((message) => dispatch({ type: "NOTICE", error: message }), []),
@@ -212,13 +238,13 @@ export default function ConversationalInterview({
 				: [];
 			socket.close();
 			dispatch({ type: "RESET" });
-			dispatch({ type: "NOTICE", info: successMessage || "Technical round reset." });
+			dispatch({ type: "NOTICE", info: successMessage || `${copy.label} reset.` });
 			onWorkflowStateChange?.((current) => ({
 				...current,
 				...buildWorkflowResetPatch(current, clearedTargets),
 			}));
 		},
-		[onWorkflowStateChange, socket],
+		[copy.label, onWorkflowStateChange, socket],
 	);
 
 	const notStarted = state.connection === "idle" && state.turns.length === 0;
@@ -232,7 +258,7 @@ export default function ConversationalInterview({
 					apiBaseUrl={apiBaseUrl}
 					sessionId={sessionId}
 					currentTarget={forcedRound}
-					currentLabel="Technical Interview"
+					currentLabel={copy.label}
 					onResetApplied={handleWorkflowReset}
 					triggerClassName="secondary-button action-row__button"
 					triggerLabel="Reset"
@@ -253,7 +279,7 @@ export default function ConversationalInterview({
 			{sessionId && !isAuthenticated ? (
 				<section className="interview-notice interview-notice--warning">
 					<h2>Sign in required</h2>
-					<p>Sign in to run the technical round against your saved session.</p>
+					<p>Sign in to run the {copy.label.toLowerCase()} against your saved session.</p>
 				</section>
 			) : null}
 
@@ -262,12 +288,9 @@ export default function ConversationalInterview({
 
 			{sessionId && isAuthenticated && notStarted ? (
 				<section className="interview-launch-card glass-panel">
-					<span className="section-kicker">Technical</span>
-					<h2>{roleTitle ? `${roleTitle} technical interview` : "Technical interview"}</h2>
-					<p>
-						This round is a conversation. The interviewer follows up on what you actually say,
-						so answer as you would out loud - you can interrupt at any time.
-					</p>
+					<span className="section-kicker">{copy.kicker}</span>
+					<h2>{copy.heading(roleTitle)}</h2>
+					<p>{copy.intro}</p>
 					<button
 						type="button"
 						className="primary-button"
@@ -291,7 +314,7 @@ export default function ConversationalInterview({
 						{state.round.done ? (
 							<section className="interview-complete-card glass-panel">
 								<span className="section-kicker">Round complete</span>
-								<h2>Technical round finished</h2>
+								<h2>{copy.label} finished</h2>
 								{typeof state.round.totalScore === "number" ? (
 									<p>
 										Average score across {state.round.responseCount} answers:{" "}

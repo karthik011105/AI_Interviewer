@@ -42,7 +42,9 @@ SCRIPTED_ENGINE = InterviewEngine(
 # The default used to be empty, so with the variable unset (as in every .env)
 # the technical round ran the scripted engine behind the conversational UI: the
 # question never appeared and the coverage rail claimed everything was covered.
-DEFAULT_DYNAMIC_ROUNDS = "technical"
+# HR and project discussion get their own plans and interviewer instructions
+# (backend/nlp/round_plans.py, interview_director.py) on the same engine.
+DEFAULT_DYNAMIC_ROUNDS = "technical,hr,project_discussion"
 
 
 def dynamic_rounds() -> frozenset[str]:

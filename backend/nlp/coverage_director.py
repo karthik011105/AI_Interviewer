@@ -13,6 +13,7 @@ engines and `covered_topics` keeps adding up for the report.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypedDict
 
@@ -26,7 +27,13 @@ TIER_GUIDANCE: dict[str, str] = {
 	"mentioned": "probe whether the concept is understood beyond name recognition",
 	"absent": "ask fundamentals first: what problem it solves in this role's context, why it matters, and when it's used",
 	"general": "keep the question conceptual and role-relevant",
+	# HR and project discussion rounds (see backend/nlp/round_plans.py).
+	"behavioural": "ask for one specific past situation: what happened, what they did, and the outcome",
+	"project": "ask about their own choices and reasoning on this project, not textbook definitions",
 }
+
+# A trailing "(tier)" label the model copies from the director block.
+_TRAILING_TIER = re.compile(r"\s*\([^()]*\)\s*$")
 
 DEFAULT_MIN_TURNS = 6
 DEFAULT_MAX_TURNS = 9
@@ -234,9 +241,14 @@ def resolve_turn_target(
 		)
 
 	if claimed_skill:
-		wanted = claimed_skill.casefold()
+		# The director block shows targets as "<name> (<tier>)", and the model
+		# often echoes that whole string back. Measured live on the HR round:
+		# "Motivation for this role (behavioural)" matched nothing, so the target
+		# was never marked covered and a phantom "general" tier appeared.
+		stripped = _TRAILING_TIER.sub("", claimed_skill).strip()
+		wanted = {claimed_skill.casefold(), stripped.casefold()}
 		for target in plan.get("targets") or []:
-			if str(target.get("focus_skill", "")).casefold() == wanted:
+			if str(target.get("focus_skill", "")).casefold() in wanted:
 				return (
 					str(target.get("focus_skill") or claimed_skill),
 					str(target.get("question_tier") or claimed_tier).casefold(),
@@ -314,13 +326,29 @@ def fallback_question(plan: Mapping[str, Any]) -> str:
 	"""A deterministic question for when the director stream fails outright.
 
 	The round must never dead-end on a provider error: the candidate is mid
-	interview and still deserves a next question.
+	interview and still deserves a next question. Phrased per round, so an HR
+	round never falls back to "explain what X is".
 	"""
 
+	round_type = str(plan.get("round") or "technical")
 	target = next_target(plan)
 	if target is None:
+		if round_type == "hr":
+			return "Thanks. Before we finish, is there anything about how you work that you would like us to know?"
+		if round_type == "project_discussion":
+			return "Thanks. Before we finish, which of your projects taught you the most, and why?"
 		return "Thanks. Before we finish, what part of this role are you most confident about, and why?"
 	skill = target["focus_skill"]
+	if round_type == "hr":
+		return f"Let's talk about {skill.lower()}. Can you tell me about a specific time that shows this?"
+	if round_type == "project_discussion":
+		project, _, angle = skill.partition(":")
+		if angle.strip():
+			name = project.strip()
+			if name.startswith("A project"):  # the no-projects-on-resume plan
+				name = "a" + name[1:]
+			return f"Let's go back to {name}. Tell me about {angle.strip()}."
+		return f"Let's talk about {skill}. Walk me through it in your own words."
 	return f"Let's move on to {skill}. Can you explain what {skill} is, and when you would reach for it?"
 
 

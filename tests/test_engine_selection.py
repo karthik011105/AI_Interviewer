@@ -27,9 +27,11 @@ class EngineSelectionTests(TestCase):
 
 		env = {k: v for k, v in os.environ.items() if k != "INTERVIEW_DYNAMIC_ROUNDS"}
 		with patch.dict(os.environ, env, clear=True):
-			self.assertEqual(dynamic_rounds(), frozenset({"technical"}))
-			self.assertIsNot(select_engine("technical"), SCRIPTED_ENGINE)
-			self.assertIs(select_engine("hr"), SCRIPTED_ENGINE)
+			self.assertEqual(
+				dynamic_rounds(), frozenset({"technical", "hr", "project_discussion"})
+			)
+			for round_type in ("technical", "hr", "project_discussion"):
+				self.assertIsNot(select_engine(round_type), SCRIPTED_ENGINE)
 
 	def test_unlisted_rounds_stay_scripted_when_one_is_enabled(self) -> None:
 		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": "technical"}, clear=False):

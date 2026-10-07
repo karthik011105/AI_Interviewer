@@ -161,6 +161,28 @@ class InterviewProgressionTests(TestCase):
 		self.assertEqual(context.exception.status_code, 409)
 		self.assertIn("force_restart=true", str(context.exception.detail))
 
+	def test_starting_a_conversational_round_skips_scripted_generation(self) -> None:
+		"""The socket plans and asks a conversational round live, so the Groq
+		call that generated a scripted batch here was thrown away every time."""
+
+		request = routes_interview.InterviewStartRequest(session_id="session-123", round="hr")
+		context = {"candidate_name": "Alex", "summary": "", "interests": []}
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": "technical,hr,project_discussion"}), \
+			 patch("backend.api.routes_interview._require_parent_session", return_value={"role_selected": "r"}), \
+			 patch("backend.api.routes_interview.get_interview_round_session", return_value=None), \
+			 patch("backend.api.routes_interview._get_parsed_resume", return_value={}), \
+			 patch("backend.api.routes_interview._build_round_context", return_value=context), \
+			 patch("backend.api.routes_interview.get_or_generate_questions") as mock_generate, \
+			 patch("backend.api.routes_interview.create_interview_round_session", side_effect=lambda **kw: {"questions_json": kw["questions_json"]}) as mock_create:
+			result = routes_interview.start_interview_round(request, self.current_user)
+
+		mock_generate.assert_not_called()
+		saved = mock_create.call_args.kwargs["questions_json"]
+		self.assertEqual(saved["mode"], "dynamic")
+		self.assertEqual(saved["questions"], [])
+		self.assertEqual(saved["coverage_plan"]["round"], "hr")
+		self.assertTrue(result["created"])
+
 	def test_start_interview_round_force_restart_rebuilds_completed_round(self) -> None:
 		request = routes_interview.InterviewStartRequest(
 			session_id="session-123",
@@ -189,7 +211,9 @@ class InterviewProgressionTests(TestCase):
 			"questions_json": questions_json,
 		}
 
-		with patch("backend.api.routes_interview._require_parent_session", return_value=parent_session), \
+		# The scripted start path; technical is conversational by default now.
+		with patch.dict(os.environ, {"INTERVIEW_DYNAMIC_ROUNDS": ""}), \
+			 patch("backend.api.routes_interview._require_parent_session", return_value=parent_session), \
 			 patch("backend.api.routes_interview.get_interview_round_session", return_value=existing_round), \
 			 patch("backend.api.routes_interview._get_parsed_resume", return_value={"skills": ["Python"]}), \
 			 patch("backend.api.routes_interview._build_round_context", return_value={"selected_role": "backend_python_developer"}) as mock_build_context, \

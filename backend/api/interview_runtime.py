@@ -331,8 +331,7 @@ def _load_or_create_round_session(
 	difficulty_signal = float((existing or {}).get("difficulty_signal") or 0.5)
 
 	if wants_dynamic:
-		from backend.nlp.coverage_director import build_coverage_plan
-		from backend.nlp.question_generator import _build_skill_allocation_plan
+		from backend.nlp.round_plans import build_round_coverage_plan
 
 		questions_json = _prepare_questions_json_for_persistence(
 			round_type, {"questions": []}, context
@@ -340,9 +339,7 @@ def _load_or_create_round_session(
 		questions_json["mode"] = "dynamic"
 		# Built here rather than on the first turn so the connect frame can report
 		# a meaningful turn budget before anything has been asked.
-		questions_json["coverage_plan"] = build_coverage_plan(
-			_build_skill_allocation_plan(context, 6)
-		)
+		questions_json["coverage_plan"] = build_round_coverage_plan(round_type, context)
 		questions_json["_dialogue"] = []
 		questions_json["_dialogue_digest"] = []
 		role_key = str(parent_session.get("role_selected") or "").strip() or "unknown"

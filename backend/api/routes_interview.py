@@ -640,7 +640,9 @@ def _get_question_at_index(
 	index: int,
 ) -> dict[str, Any] | None:
 	"""Return the question dict at the given index, or None if out of range."""
-	if round_name == "project_discussion":
+	# A conversational (dynamic) project round stores a flat "questions" list
+	# like every other round; only the scripted one groups them by project.
+	if round_name == "project_discussion" and questions_json.get("mode") != "dynamic":
 		# project_discussion stores a list of ProjectQuestionSet; flatten to get question
 		all_qs: list[Any] = []
 		for proj in (questions_json.get("projects") or []):
@@ -656,7 +658,7 @@ def _get_question_at_index(
 
 
 def _total_question_count(questions_json: dict[str, Any], round_name: str) -> int:
-	if round_name == "project_discussion":
+	if round_name == "project_discussion" and questions_json.get("mode") != "dynamic":
 		count = 0
 		for proj in (questions_json.get("projects") or []):
 			count += len(proj.get("questions") or [])
@@ -834,6 +836,45 @@ def start_interview_round(
 	# Need to generate questions — load parsed resume
 	parsed_resume = _get_parsed_resume(request.session_id)
 	context = _build_round_context(request.round, parsed_resume, parent_session)
+
+	# Imported here: interview_engines imports this module.
+	from backend.api.interview_engines import dynamic_rounds
+
+	if request.round in dynamic_rounds():
+		# A conversational round plans itself and asks its questions live over
+		# the socket. Generating a scripted batch here cost a Groq call (~5 s)
+		# that the socket then discarded on seeing the mode mismatch.
+		from backend.nlp.round_plans import build_round_coverage_plan
+
+		questions_json = _prepare_questions_json_for_persistence(
+			request.round,
+			{
+				"questions": [],
+				"mode": "dynamic",
+				"coverage_plan": build_round_coverage_plan(request.round, context),
+				"_dialogue": [],
+				"_dialogue_digest": [],
+			},
+			context,
+		)
+		try:
+			round_session = create_interview_round_session(
+				session_id=request.session_id,
+				round=request.round,
+				role_key=str(parent_session.get("role_selected") or "").strip() or "unknown",
+				questions_json=questions_json,
+				started_at=_utcnow_iso(),
+			)
+		except DatabaseClientError as exc:
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail=str(exc),
+			) from exc
+		return {
+			"created": True,
+			"round_session": round_session,
+			"questions_json": questions_json,
+		}
 
 	cached_questions_json = None
 	if existing and not request.force_restart:

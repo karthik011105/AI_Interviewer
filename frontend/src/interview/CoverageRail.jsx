@@ -1,4 +1,4 @@
-const TIER_ORDER = ["strong", "familiar", "mentioned", "absent", "general"];
+const TIER_ORDER = ["strong", "familiar", "mentioned", "absent", "general", "behavioural", "project"];
 
 const TIER_COPY = {
 	strong: "Depth checks",
@@ -6,6 +6,8 @@ const TIER_COPY = {
 	mentioned: "Beyond the name",
 	absent: "Fundamentals",
 	general: "General",
+	behavioural: "Behavioural topics",
+	project: "Project deep-dives",
 };
 
 export default function CoverageRail({ coverage }) {
@@ -68,7 +70,7 @@ export default function CoverageRail({ coverage }) {
 				// No coverage_update yet: the server sends the first one after the
 				// opening question. "Nothing remaining" here used to read as
 				// "everything is covered" on turn one.
-				<p className="coverage-rail__pending">The skill plan appears after the first question.</p>
+				<p className="coverage-rail__pending">The plan appears after the first question.</p>
 			)}
 		</aside>
 	);

@@ -382,7 +382,8 @@ def _summarize_feedback(feedback: Any) -> str | None:
 
 
 def _count_round_questions(questions_json: Mapping[str, Any], round_name: str) -> int:
-	if round_name == "project_discussion":
+	# Conversational project rounds store a flat list, like every other round.
+	if round_name == "project_discussion" and questions_json.get("mode") != "dynamic":
 		projects = questions_json.get("projects") or []
 		if not isinstance(projects, list):
 			return 0
