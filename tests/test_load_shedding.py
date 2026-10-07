@@ -14,7 +14,6 @@ Two defects, both measured before fixing:
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import http.server
 import threading
 import time
@@ -25,6 +24,7 @@ from unittest.mock import patch
 from starlette.datastructures import Headers, UploadFile
 
 from backend import config
+from backend.config import GroqSettings
 from backend.api import routes_resume
 from backend.api.auth import AuthenticatedUser
 from backend.nlp import groq_client
@@ -58,11 +58,16 @@ class _CountingServer:
         self._server.server_close()
 
 
-def _settings(base_url: str, max_retries: int):
-    return dataclasses.replace(
-        config.get_settings().groq,
+def _settings(base_url: str, max_retries: int) -> GroqSettings:
+    # Built directly, not from get_settings(): without GROQ_API_KEY (as in CI)
+    # settings.groq is None, and an earlier version of this helper raised a
+    # TypeError that the broad assertRaises below silently accepted.
+    return GroqSettings(
         api_key="test-key",
         api_base_url=base_url,
+        resume_parser_model="m",
+        answer_evaluator_model="m",
+        feedback_generator_model="m",
         timeout_seconds=2.0,
         max_retries=max_retries,
         backoff_base_seconds=0.01,
@@ -76,10 +81,11 @@ class GroqRetryAmplificationTests(TestCase):
 
     def _run(self, status: int, max_retries: int) -> int:
         server = _CountingServer(status)
+        settings = _settings(server.url, max_retries)
         try:
-            with self.assertRaises(Exception):
+            with self.assertRaises(groq_client.GroqCompletionError):
                 groq_client.create_chat_completion(
-                    settings=_settings(server.url, max_retries),
+                    settings=settings,
                     model="m",
                     temperature=0,
                     messages=[{"role": "user", "content": "x"}],
@@ -99,10 +105,11 @@ class GroqRetryAmplificationTests(TestCase):
 
     def test_the_streaming_client_is_not_amplified_either(self) -> None:
         server = _CountingServer(500)
+        settings = _settings(server.url, 1)
 
         async def consume() -> None:
             async for _ in groq_client.stream_chat_completion(
-                settings=_settings(server.url, 1),
+                settings=settings,
                 model="m",
                 temperature=0,
                 messages=[{"role": "user", "content": "x"}],
@@ -110,7 +117,7 @@ class GroqRetryAmplificationTests(TestCase):
                 pass
 
         try:
-            with self.assertRaises(Exception):
+            with self.assertRaises(groq_client.GroqCompletionError):
                 asyncio.run(consume())
             self.assertEqual(server.requests, 2)
         finally:
