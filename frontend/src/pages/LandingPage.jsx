@@ -1,28 +1,33 @@
 import { useCallback, useState } from "react";
-import { ArrowRight, Moon, Sun } from "lucide-react";
+import { ArrowRight, Check, Moon, Sun } from "lucide-react";
 
 import AuthDialog from "../components/AuthDialog";
 import BrandLogo from "../components/BrandLogo";
 import { GrowthIcon, MicIcon, ResumeIcon } from "../components/FeatureIcons";
 import LivePreview from "../components/LivePreview";
+import { ResumeDemo, ScoreDemo, VoiceDemo } from "../components/FeatureDemos";
+import InterviewScene from "../components/InterviewScene";
 import ParticleField from "../components/ParticleField";
 import "./landing.css";
 
 const FEATURES = [
 	{
 		icon: ResumeIcon,
+		demo: ResumeDemo,
 		tone: "sun",
 		title: "Built from your resume",
 		body: "Questions target the role you want and the skills you actually listed.",
 	},
 	{
 		icon: MicIcon,
+		demo: VoiceDemo,
 		tone: "sky",
 		title: "Talk, don't type",
 		body: "A live AI interviewer asks out loud and follows up on what you say.",
 	},
 	{
 		icon: GrowthIcon,
+		demo: ScoreDemo,
 		tone: "mint",
 		title: "Know what to fix",
 		body: "Every answer is scored, with a clear report on where to improve.",
@@ -110,13 +115,37 @@ export default function LandingPage({
 				</section>
 
 				<section className="landing-features" aria-label="Features">
-					{FEATURES.map(({ icon: Icon, tone, title, body }) => (
+					{FEATURES.map(({ icon: Icon, demo: Demo, tone, title, body }) => (
 						<article key={title} className={`landing-feature landing-feature--${tone}`}>
-							<span className="landing-feature__icon"><Icon /></span>
-							<h3>{title}</h3>
-							<p>{body}</p>
+							<div className="landing-feature__text">
+								<span className="landing-feature__icon"><Icon /></span>
+								<h3>{title}</h3>
+								<p>{body}</p>
+							</div>
+							<Demo />
 						</article>
 					))}
+				</section>
+
+				<section className="landing-meet" aria-labelledby="meet-title">
+					<div className="landing-meet__art">
+						<InterviewScene />
+					</div>
+					<div className="landing-meet__copy">
+						<p className="landing-kicker landing-kicker--violet">Your interviewer</p>
+						<h2 id="meet-title">Meet Maya, your AI interviewer.</h2>
+						<p className="landing-meet__lede">
+							Maya reads your resume, asks one question at a time, and follows up on what you actually said - just like a real panel.
+						</p>
+						<ul className="landing-meet__points">
+							<li><Check size={18} /> Follows up when an answer is vague</li>
+							<li><Check size={18} /> Stays on the role you picked</li>
+							<li><Check size={18} /> Practise any time, as often as you like</li>
+						</ul>
+						<button type="button" className="landing-btn landing-btn--primary landing-btn--lg" onClick={() => openDialog("signup")}>
+							Start an interview <ArrowRight size={18} />
+						</button>
+					</div>
 				</section>
 
 
