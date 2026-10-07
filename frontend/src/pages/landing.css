@@ -404,64 +404,6 @@
 	opacity: 0.85;
 }
 
-/* ---------- Steps ---------- */
-
-.landing-steps {
-	padding-bottom: 72px;
-}
-
-.landing-steps h2,
-.landing-cta h2 {
-	margin: 0 0 26px;
-	font-family: "Fraunces", Georgia, serif;
-	font-weight: 600;
-	font-size: clamp(1.8rem, 3.4vw, 2.6rem);
-	letter-spacing: -0.01em;
-}
-
-.landing-steps ol {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 18px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.landing-steps li {
-	display: flex;
-	gap: 16px;
-	padding: 22px;
-	border: 1px solid var(--border);
-	border-radius: 18px;
-	background: var(--surface);
-}
-
-.landing-steps__num {
-	flex: none;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 40px;
-	height: 40px;
-	border-radius: 50%;
-	background: var(--l-coral);
-	color: var(--l-ink);
-	font-weight: 700;
-	font-size: 1.05rem;
-}
-
-.landing-steps h3 {
-	margin: 0 0 4px;
-	font-size: 1.05rem;
-}
-
-.landing-steps p {
-	margin: 0;
-	color: var(--muted);
-	line-height: 1.5;
-}
-
 /* ---------- Final CTA ---------- */
 
 .landing-cta {
@@ -515,8 +457,7 @@
 		padding-top: 28px;
 	}
 
-	.landing-features,
-	.landing-steps ol {
+	.landing-features {
 		grid-template-columns: 1fr;
 	}
 
@@ -619,11 +560,6 @@
 
 :root[data-theme="dark"] .landing-nav {
 	background: rgba(5, 5, 7, 0.72);
-}
-
-:root[data-theme="dark"] .landing-steps li {
-	background: rgba(255, 255, 255, 0.04);
-	border-color: rgba(255, 255, 255, 0.12);
 }
 
 /* Solid, not translucent: the offset colour block sits behind this card. */
@@ -1042,4 +978,61 @@
 	.auth-modal__row {
 		grid-template-columns: 1fr;
 	}
+}
+
+
+/* ---------- Light mode: cool white + violet, matching the brand mark ---------- */
+/*
+ * The app's warm "paper" palette clashed with the violet/cyan logo and made
+ * the particles and cursor light nearly invisible, so the landing page (and
+ * the sign-in dialog inside it) gets its own cooler light theme.
+ */
+:root:not([data-theme="dark"]) .landing {
+	--bg: #f8f7fd;
+	--surface: #ffffff;
+	--surface-sunken: #f2f0fa;
+	--border: #e7e4f3;
+	--border-strong: #d9d4ec;
+	--text: #14121f;
+	--muted: #5f5b72;
+	--accent: #6d4ff0;
+	--accent-ink: #ffffff;
+	--accent-soft: #efeaff;
+	background: #f8f7fd;
+}
+
+:root:not([data-theme="dark"]) .landing-nav {
+	background: rgba(248, 247, 253, 0.72);
+	backdrop-filter: blur(10px);
+}
+
+:root:not([data-theme="dark"]) .landing-btn--primary:hover:not(:disabled) {
+	background: #5b3fe0;
+}
+
+:root:not([data-theme="dark"]) .landing-highlight {
+	background: #ffd25a;
+}
+
+:root:not([data-theme="dark"]) .landing-preview__card {
+	border: 1px solid #e3def5;
+	box-shadow: 0 24px 60px rgba(109, 79, 240, 0.14);
+}
+
+:root:not([data-theme="dark"]) .landing-preview::before {
+	background: #c9b8ff;
+}
+
+:root:not([data-theme="dark"]) .landing-rounds li {
+	background: rgba(255, 255, 255, 0.7);
+	border-color: #e3def5;
+}
+
+:root:not([data-theme="dark"]) .landing-icon-btn {
+	background: rgba(255, 255, 255, 0.8);
+	border-color: #e3def5;
+}
+
+:root:not([data-theme="dark"]) .landing-cta .landing-btn--light {
+	background: #ffd25a;
 }

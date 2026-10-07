@@ -27,11 +27,6 @@ const FEATURES = [
 	},
 ];
 
-const STEPS = [
-	{ title: "Upload your resume", body: "Pick the role you are aiming for." },
-	{ title: "Interview live", body: "Technical, coding, projects and HR rounds." },
-	{ title: "Get your report", body: "Scores, strengths and what to practise next." },
-];
 
 const ROUNDS = ["Technical", "Coding", "Projects", "HR"];
 
@@ -140,20 +135,6 @@ export default function LandingPage({
 					))}
 				</section>
 
-				<section className="landing-steps" aria-label="How it works">
-					<h2>How it works</h2>
-					<ol>
-						{STEPS.map((step, index) => (
-							<li key={step.title}>
-								<span className="landing-steps__num">{index + 1}</span>
-								<div>
-									<h3>{step.title}</h3>
-									<p>{step.body}</p>
-								</div>
-							</li>
-						))}
-					</ol>
-				</section>
 
 				<section className="landing-cta">
 					<h2>Your next interview starts here.</h2>

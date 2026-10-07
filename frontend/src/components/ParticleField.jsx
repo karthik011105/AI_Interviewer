@@ -8,10 +8,11 @@ const PALETTES = {
 		link: "167,139,250",
 	},
 	light: {
-		dots: ["91,107,255", "124,92,255", "34,211,238"],
+		dots: ["109,79,240", "124,92,255", "14,165,233", "236,72,153"],
 		spotlight: "124,92,255",
-		spotlightAlpha: 0.1,
-		link: "91,107,255",
+		spotlightAlpha: 0.2,
+		link: "109,79,240",
+		alphaBoost: 0.25,
 	},
 };
 
@@ -60,7 +61,7 @@ export default function ParticleField({ theme = "light", contained = false, dens
 				r: 0.8 + Math.random() * 2.4,
 				vx: (Math.random() - 0.5) * 0.18,
 				vy: -0.08 - Math.random() * 0.22,
-				a: 0.25 + Math.random() * 0.45,
+				a: 0.25 + Math.random() * 0.45 + (palette.alphaBoost || 0),
 				color: palette.dots[Math.floor(Math.random() * palette.dots.length)],
 				phase: Math.random() * Math.PI * 2,
 			}));
