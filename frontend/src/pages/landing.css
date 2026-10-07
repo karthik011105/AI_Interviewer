@@ -1804,3 +1804,22 @@
 		animation: none;
 	}
 }
+
+/* ---------- PrepPilot wordmark ---------- */
+.brand-logo__name {
+	font-family: "Work Sans", "Segoe UI", sans-serif;
+	font-weight: 700;
+	font-size: 1.22rem;
+	letter-spacing: -0.02em;
+}
+
+.brand-logo__accent {
+	background: linear-gradient(90deg, #7c5cff, #06b6d4);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+.brand-logo svg {
+	filter: drop-shadow(0 4px 14px rgba(109, 79, 240, 0.4));
+}

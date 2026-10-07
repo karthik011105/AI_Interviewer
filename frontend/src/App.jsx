@@ -616,7 +616,7 @@ export default function App() {
 
 	useEffect(() => {
 		if (typeof document !== "undefined") {
-			document.title = `${currentPage.docTitle} | AI Interview Simulator`;
+			document.title = `${currentPage.docTitle} | PrepPilot`;
 		}
 	}, [currentPage.docTitle]);
 
@@ -888,7 +888,7 @@ export default function App() {
 				{!isStandaloneView ? (
 					<aside className="app-sidebar glass-panel">
 						<div className="app-sidebar__brand">
-							<p className="section-kicker">AI Interview Simulator</p>
+							<p className="section-kicker">PrepPilot</p>
 							<div className="app-sidebar__brand-row">
 								<span className={`app-brand__icon app-brand__icon--${currentPage.key}`}>
 									<RouteIcon iconKey={currentPage.iconKey} />
