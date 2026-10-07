@@ -1,7 +1,31 @@
 // Resolved the same way as every page-level request (see App.jsx), so auth works
 // in a production build too. A relative "/api/..." path would only resolve via the
 // Vite dev-server proxy and would 404 once the frontend is served as static files.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+/**
+ * Turn a FastAPI error body into a sentence a person can act on.
+ *
+ * A 422 carries `detail` as a LIST of {loc, msg} objects, not a string. Passing
+ * that straight to `new Error()` showed "[object Object]", so a too-short
+ * password or a mistyped email looked like signup was simply broken.
+ */
+export function describeApiError(body, fallback) {
+  const detail = body?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((item) => {
+        const field = Array.isArray(item?.loc) ? item.loc[item.loc.length - 1] : "";
+        const message = String(item?.msg || "").replace(/^Value error,\s*/i, "");
+        if (field === "email") return `Email: ${message.replace(/^value is not a valid email address:\s*/i, "")}`;
+        return message;
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+  return fallback;
+}
 
 export const authClient = {
   getToken: () => localStorage.getItem("jwt_token"),
@@ -16,8 +40,8 @@ export const authClient = {
     });
 
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.detail || "Signup failed");
+      const err = await response.json().catch(() => ({}));
+      throw new Error(describeApiError(err, "Signup failed."));
     }
 
     const data = await response.json();
@@ -35,8 +59,8 @@ export const authClient = {
     });
 
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.detail || "Login failed");
+      const err = await response.json().catch(() => ({}));
+      throw new Error(describeApiError(err, "Login failed."));
     }
 
     const data = await response.json();
@@ -55,7 +79,7 @@ export const authClient = {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.detail || "Could not request a password reset.");
+      throw new Error(describeApiError(data, "Could not request a password reset."));
     }
     // The backend deliberately returns the same response whether or not the
     // address has an account — do not let a caller here branch on that.
@@ -71,7 +95,7 @@ export const authClient = {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.detail || "Could not reset the password.");
+      throw new Error(describeApiError(data, "Could not reset the password."));
     }
     return data;
   },
