@@ -34,7 +34,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * The sample interview as a live, scrolling chat: each question streams in,
- * the answer is transcribed word by word, a score note follows, and older
+ * the answer is transcribed word by word, and older
  * messages slide up and fade out of the top. Static under reduced motion.
  */
 export default function LivePreview() {
@@ -45,7 +45,6 @@ export default function LivePreview() {
 			? [
 					{ id: 1, role: "ai", text: SCRIPT[0].question },
 					{ id: 2, role: "you", text: SCRIPT[0].answer },
-					{ id: 3, role: "score", text: `Scored ${SCRIPT[0].score.toFixed(1)}` },
 				]
 			: [],
 	);
@@ -101,7 +100,6 @@ export default function LivePreview() {
 				await wait(900);
 				if (cancelled) return;
 				setLastScore(step.score);
-				push({ role: "score", text: `Scored ${step.score.toFixed(1)}` });
 				setPhase("idle");
 				await wait(1600);
 				turn += 1;
@@ -128,13 +126,6 @@ export default function LivePreview() {
 				<div className="live-thread__list">
 					{messages.map((message) => {
 						const isLatest = message.id === latestId;
-						if (message.role === "score") {
-							return (
-								<div key={message.id} className="live-msg live-msg--score">
-									<span>✓ {message.text}</span>
-								</div>
-							);
-						}
 						const mine = message.role === "you";
 						return (
 							<div key={message.id} className={`live-msg live-msg--${mine ? "you" : "ai"}`}>
