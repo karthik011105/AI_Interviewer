@@ -11,6 +11,12 @@
 # Web framework
 fastapi==0.136.0
 uvicorn==0.45.0
+# Required for the live interview WebSocket. Plain `uvicorn` ships with no
+# WebSocket implementation, so without this every /interview/ws handshake was
+# rejected ("No supported WebSocket library detected") — locally, in the image,
+# and in any deployment. The test suite never noticed because TestClient runs
+# the app in-process and bypasses uvicorn's protocol layer entirely.
+websockets==17.2
 python-multipart==0.0.26
 pydantic==2.13.3
 email-validator>=2.0.0
