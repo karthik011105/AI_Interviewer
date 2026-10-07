@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Mic } from "lucide-react";
 
-const SCENARIOS = [
+// One continuous conversation, so follow-ups read naturally as it scrolls.
+const SCRIPT = [
 	{
 		round: "Technical round",
 		question: "You listed FastAPI and MongoDB. Why choose a document store for the order service?",
@@ -9,8 +10,14 @@ const SCENARIOS = [
 		score: 8.4,
 	},
 	{
+		round: "Technical round",
+		question: "Good. How would you stop that flexibility from turning into messy data?",
+		answer: "Validate at the API with Pydantic models, and add indexes on the fields we query most.",
+		score: 8.7,
+	},
+	{
 		round: "Project discussion",
-		question: "What was the hardest bug in your chat app, and how did you track it down?",
+		question: "Let's talk about your chat app. What was the hardest bug you hit?",
 		answer: "Messages arrived out of order under load, so I added sequence numbers and replayed gaps.",
 		score: 8.9,
 	},
@@ -22,100 +29,136 @@ const SCENARIOS = [
 	},
 ];
 
+const MAX_MESSAGES = 7;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The hero's sample interview, played live on a loop: the interviewer types,
- * the question streams in, the answer is "transcribed" word by word while the
- * mic is hot, then it is scored. Static final frame under reduced motion.
+ * The sample interview as a live, scrolling chat: each question streams in,
+ * the answer is transcribed word by word, a score note follows, and older
+ * messages slide up and fade out of the top. Static under reduced motion.
  */
 export default function LivePreview() {
 	const reduceMotion =
 		typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-	const [index, setIndex] = useState(0);
-	const [phase, setPhase] = useState(reduceMotion ? "done" : "typing");
-	const [question, setQuestion] = useState(reduceMotion ? SCENARIOS[0].question : "");
-	const [answer, setAnswer] = useState(reduceMotion ? SCENARIOS[0].answer : "");
-	const [score, setScore] = useState(reduceMotion ? SCENARIOS[0].score : 0);
+	const [messages, setMessages] = useState(() =>
+		reduceMotion
+			? [
+					{ id: 1, role: "ai", text: SCRIPT[0].question },
+					{ id: 2, role: "you", text: SCRIPT[0].answer },
+					{ id: 3, role: "score", text: `Scored ${SCRIPT[0].score.toFixed(1)}` },
+				]
+			: [],
+	);
+	const [phase, setPhase] = useState("idle");
+	const [round, setRound] = useState(SCRIPT[0].round);
+	const [lastScore, setLastScore] = useState(reduceMotion ? SCRIPT[0].score : null);
+	const nextId = useRef(10);
 
 	useEffect(() => {
 		if (reduceMotion) return undefined;
 		let cancelled = false;
-		const scenario = SCENARIOS[index];
 
-		async function play() {
-			setPhase("typing");
-			setQuestion("");
-			setAnswer("");
-			setScore(0);
-			await wait(900);
-			setPhase("asking");
-			for (let i = 1; i <= scenario.question.length; i += 1) {
+		const push = (message) => {
+			const id = nextId.current++;
+			setMessages((current) => [...current, { id, ...message }].slice(-MAX_MESSAGES));
+			return id;
+		};
+		const update = (id, text) =>
+			setMessages((current) => current.map((m) => (m.id === id ? { ...m, text } : m)));
+
+		async function run() {
+			let turn = 0;
+			while (!cancelled) {
+				const step = SCRIPT[turn % SCRIPT.length];
+				setRound(step.round);
+
+				setPhase("typing");
+				const qId = push({ role: "ai", text: "", typing: true });
+				await wait(900);
 				if (cancelled) return;
-				setQuestion(scenario.question.slice(0, i));
-				await wait(22);
-			}
-			await wait(600);
-			if (cancelled) return;
-			setPhase("answering");
-			const words = scenario.answer.split(" ");
-			for (let i = 1; i <= words.length; i += 1) {
+				setPhase("asking");
+				for (let i = 1; i <= step.question.length; i += 1) {
+					if (cancelled) return;
+					update(qId, step.question.slice(0, i));
+					await wait(20);
+				}
+				setMessages((current) => current.map((m) => (m.id === qId ? { ...m, typing: false } : m)));
+				await wait(700);
 				if (cancelled) return;
-				setAnswer(words.slice(0, i).join(" "));
-				await wait(170);
-			}
-			await wait(400);
-			if (cancelled) return;
-			setPhase("scoring");
-			await wait(900);
-			const steps = 18;
-			for (let i = 1; i <= steps; i += 1) {
+
+				setPhase("answering");
+				const aId = push({ role: "you", text: "" });
+				const words = step.answer.split(" ");
+				for (let i = 1; i <= words.length; i += 1) {
+					if (cancelled) return;
+					update(aId, words.slice(0, i).join(" "));
+					await wait(160);
+				}
+				await wait(400);
 				if (cancelled) return;
-				setScore((scenario.score * i) / steps);
-				await wait(35);
+
+				setPhase("scoring");
+				await wait(900);
+				if (cancelled) return;
+				setLastScore(step.score);
+				push({ role: "score", text: `Scored ${step.score.toFixed(1)}` });
+				setPhase("idle");
+				await wait(1600);
+				turn += 1;
 			}
-			setPhase("done");
-			await wait(2600);
-			if (!cancelled) setIndex((current) => (current + 1) % SCENARIOS.length);
 		}
 
-		play();
+		run();
 		return () => {
 			cancelled = true;
 		};
-	}, [index, reduceMotion]);
+	}, [reduceMotion]);
 
-	const scenario = SCENARIOS[index];
 	const listening = phase === "answering";
+	const latestId = messages.length ? messages[messages.length - 1].id : null;
 
 	return (
 		<div className="landing-preview__card live-preview" aria-hidden="true">
 			<div className="landing-preview__bar">
 				<span className="landing-preview__dot live-preview__rec" />
-				<span>{scenario.round} · live</span>
+				<span key={round} className="live-preview__round">{round} · live</span>
 			</div>
 
-			<div className="landing-bubble landing-bubble--ai">
-				<strong>Interviewer</strong>
-				{phase === "typing" ? (
-					<span className="live-preview__typing"><i /><i /><i /></span>
-				) : (
-					<>
-						{question}
-						{phase === "asking" ? <span className="live-preview__caret" /> : null}
-					</>
-				)}
-			</div>
-
-			{answer || listening ? (
-				<div className="landing-bubble landing-bubble--you">
-					<strong>You {listening ? <em className="live-preview__live">● live</em> : null}</strong>
-					{answer}
-					{listening ? <span className="live-preview__caret live-preview__caret--dark" /> : null}
+			<div className="live-thread">
+				<div className="live-thread__list">
+					{messages.map((message) => {
+						const isLatest = message.id === latestId;
+						if (message.role === "score") {
+							return (
+								<div key={message.id} className="live-msg live-msg--score">
+									<span>✓ {message.text}</span>
+								</div>
+							);
+						}
+						const mine = message.role === "you";
+						return (
+							<div key={message.id} className={`live-msg live-msg--${mine ? "you" : "ai"}`}>
+								<div className={`landing-bubble landing-bubble--${mine ? "you" : "ai"}`}>
+									<strong>
+										{mine ? "You" : "Maya"}
+										{mine && isLatest && listening ? <em className="live-preview__live">● live</em> : null}
+									</strong>
+									{message.typing && !message.text ? (
+										<span className="live-preview__typing"><i /><i /><i /></span>
+									) : (
+										<>
+											{message.text}
+											{isLatest && (phase === "asking" || (mine && listening)) ? (
+												<span className={`live-preview__caret${mine ? " live-preview__caret--dark" : ""}`} />
+											) : null}
+										</>
+									)}
+								</div>
+							</div>
+						);
+					})}
 				</div>
-			) : (
-				<div className="live-preview__spacer" />
-			)}
+			</div>
 
 			<div className="landing-preview__footer">
 				<span className={`landing-mic${listening ? " landing-mic--hot" : ""}`}>
@@ -127,10 +170,10 @@ export default function LivePreview() {
 				<span className={`landing-score${phase === "scoring" ? " landing-score--pending" : ""}`}>
 					{phase === "scoring"
 						? "Scoring…"
-						: phase === "done" || score > 0
-							? `Score ${score.toFixed(1)}`
-							: phase === "answering"
-								? "Listening…"
+						: listening
+							? "Listening…"
+							: lastScore !== null
+								? `Score ${lastScore.toFixed(1)}`
 								: "Waiting"}
 				</span>
 			</div>

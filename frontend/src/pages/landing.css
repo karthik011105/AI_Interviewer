@@ -1718,3 +1718,89 @@
 .landing-meet {
 	margin-bottom: 56px;
 }
+
+/* ---------- Live preview as a scrolling chat ---------- */
+/*
+ * Messages stack from the bottom; each new one grows in (grid 0fr -> 1fr), so
+ * everything above glides up, and the top edge fades older messages out.
+ */
+.live-preview {
+	min-height: 0;
+}
+
+.live-thread {
+	position: relative;
+	height: 270px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 56px);
+	mask-image: linear-gradient(to bottom, transparent 0, #000 56px);
+}
+
+.live-thread__list {
+	position: absolute;
+	inset: auto 0 0 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.live-msg {
+	display: grid;
+	grid-template-rows: 1fr;
+	animation: live-msg-grow 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.live-msg > * {
+	min-height: 0;
+	overflow: hidden;
+}
+
+.live-msg--ai > .landing-bubble,
+.live-msg--you > .landing-bubble {
+	margin-top: 12px;
+	animation: none;
+}
+
+.live-msg--you {
+	justify-items: end;
+}
+
+.live-msg--score {
+	justify-items: end;
+}
+
+.live-msg--score > span {
+	margin-top: 8px;
+	padding: 4px 10px;
+	border-radius: 999px;
+	background: rgba(72, 214, 156, 0.18);
+	color: #16a36b;
+	font-size: 0.75rem;
+	font-weight: 700;
+}
+
+:root[data-theme="dark"] .live-msg--score > span {
+	color: #74d6a8;
+}
+
+.live-preview__round {
+	animation: live-bubble-in 0.35s ease;
+}
+
+@keyframes live-msg-grow {
+	from {
+		grid-template-rows: 0fr;
+		opacity: 0;
+		transform: translateY(10px);
+	}
+	to {
+		grid-template-rows: 1fr;
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.live-msg {
+		animation: none;
+	}
+}
