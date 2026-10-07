@@ -66,7 +66,9 @@ export default defineConfig({
 		],
 	},
 	server: {
-		host: "127.0.0.1",
+		// "localhost", not 127.0.0.1: Google sign-in only accepts localhost as a
+		// JavaScript origin in development.
+		host: "localhost",
 		port: 5173,
 		proxy: {
 			"/api": {
