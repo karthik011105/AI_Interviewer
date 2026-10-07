@@ -126,3 +126,32 @@ class GoogleSignInTests(TestCase):
 
 	def test_a_google_only_account_cannot_be_password_logged_in(self) -> None:
 		self.assertFalse(routes_auth._verify_password("anything", None))
+
+
+class SignupNameTests(TestCase):
+	def setUp(self) -> None:
+		self._env = patch.dict(os.environ, {"AUTH_JWT_SECRET": "unit-test-signing-secret-padded-to-32-bytes-minimum"}, clear=False)
+		self._env.start()
+		config.reset_settings()
+		routes_auth.reset_auth_throttles()
+
+	def tearDown(self) -> None:
+		self._env.stop()
+		config.reset_settings()
+		routes_auth.reset_auth_throttles()
+
+	def _signup(self, **fields):
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = None
+		repo.insert_one.return_value = {"id": "u1", "email": "a@gmail.com"}
+		with patch.object(routes_auth, "get_repository", return_value=repo):
+			routes_auth.signup(routes_auth.SignupRequest(email="a@gmail.com", password="LongEnough123", **fields), _request())
+		return repo.insert_one.call_args.args[1]
+
+	def test_names_are_stored(self) -> None:
+		saved = self._signup(first_name=" Ada ", last_name="Lovelace")
+		self.assertEqual((saved["first_name"], saved["last_name"], saved["display_name"]), ("Ada", "Lovelace", "Ada Lovelace"))
+
+	def test_names_are_optional(self) -> None:
+		saved = self._signup()
+		self.assertIsNone(saved["display_name"])

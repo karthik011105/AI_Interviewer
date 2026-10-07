@@ -2,6 +2,8 @@ import { useCallback, useState } from "react";
 import { ArrowRight, BarChart3, FileText, Mic, Moon, Sun } from "lucide-react";
 
 import AuthDialog from "../components/AuthDialog";
+import BrandLogo from "../components/BrandLogo";
+import ParticleField from "../components/ParticleField";
 import "./landing.css";
 
 const FEATURES = [
@@ -57,12 +59,10 @@ export default function LandingPage({
 
 	return (
 		<div className="landing">
+			<ParticleField theme={theme} />
 			<header className="landing-nav">
 				<a className="landing-brand" href="/" aria-label="Interview Simulator home">
-					<span className="landing-brand__mark" aria-hidden="true">
-						<Mic size={18} strokeWidth={2.4} />
-					</span>
-					<span>Interview Simulator</span>
+					<BrandLogo size={36} />
 				</a>
 				<nav className="landing-nav__actions">
 					<button

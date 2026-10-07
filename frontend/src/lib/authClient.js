@@ -32,11 +32,16 @@ export const authClient = {
   setToken: (token) => localStorage.setItem("jwt_token", token),
   clearToken: () => localStorage.removeItem("jwt_token"),
 
-  signup: async (email, password) => {
+  signup: async (email, password, { firstName, lastName } = {}) => {
     const response = await fetch(`${API_BASE_URL}/auth/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({
+        email,
+        password,
+        first_name: firstName || undefined,
+        last_name: lastName || undefined,
+      }),
     });
 
     if (!response.ok) {

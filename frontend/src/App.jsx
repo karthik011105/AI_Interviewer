@@ -681,7 +681,10 @@ export default function App() {
 			infoMessage: "",
 		}));
 		try {
-			await authClient.signup(credentials.email, credentials.password);
+			await authClient.signup(credentials.email, credentials.password, {
+				firstName: credentials.firstName,
+				lastName: credentials.lastName,
+			});
 			const { data } = await authClient.getSession();
 			setAuthState((current) => ({
 				...current,

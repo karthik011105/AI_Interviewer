@@ -172,6 +172,9 @@ def _validate_password_policy(value: str) -> str:
 class SignupRequest(BaseModel):
 	email: EmailStr
 	password: str
+	# Optional so existing clients (and the API docs) keep working unchanged.
+	first_name: str | None = Field(default=None, max_length=60)
+	last_name: str | None = Field(default=None, max_length=60)
 
 	@field_validator("password")
 	@classmethod
@@ -243,6 +246,12 @@ def signup(request: SignupRequest, http_request: Request) -> dict[str, str]:
 			{
 				"email": email,
 				"password_hash": hashed.decode("utf-8"),
+				"first_name": (request.first_name or "").strip() or None,
+				"last_name": (request.last_name or "").strip() or None,
+				"display_name": " ".join(
+					part for part in ((request.first_name or "").strip(), (request.last_name or "").strip()) if part
+				)
+				or None,
 				"created_at": datetime.now(timezone.utc).isoformat(),
 			},
 		)
