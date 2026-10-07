@@ -5034,3 +5034,35 @@ h3 {
 	color: var(--muted);
 	font-size: 0.9rem;
 }
+
+/* Faint brand mark centred behind every signed-in screen. Fixed, so it stays
+   put while pages scroll; pointer-events off so it never blocks a click. */
+.pp-watermark {
+	position: fixed;
+	inset: 0;
+	z-index: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none;
+	opacity: 0.06;
+}
+
+:root[data-theme="dark"] .pp-watermark {
+	opacity: 0.1;
+}
+
+.pp-watermark svg {
+	width: min(46vw, 460px);
+	height: auto;
+}
+
+.pp-app > .pp-topbar,
+.pp-app > .pp-main {
+	position: relative;
+	z-index: 1;
+}
+
+.pp-app > .pp-topbar {
+	z-index: 50;
+}

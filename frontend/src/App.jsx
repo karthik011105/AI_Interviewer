@@ -5,6 +5,7 @@ import { Moon, Sun } from "lucide-react";
 import AuthPanel from "./components/AuthPanel";
 import LandingPage from "./pages/LandingPage";
 import AppTopBar from "./components/AppTopBar";
+import PlatformWatermark from "./components/PlatformWatermark";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -885,6 +886,7 @@ export default function App() {
 
 	return (
 		<div className="app-shell pp-app">
+			<PlatformWatermark />
 			<AppTopBar
 				steps={workflowItems}
 				theme={theme}
