@@ -1,50 +1,52 @@
 import { useId } from "react";
 
 /**
- * PrepPilot mark: a paper plane climbing away on a dashed flight trail, with
- * a small AI spark, on a violet-to-cyan tile. `useId` keeps gradient ids unique
- * when the logo appears more than once on a page.
+ * PrepForge mark: a figure (head + sweeping body) reaching up toward a star,
+ * in a deep-to-light blue sweep. `useId` keeps gradient ids unique when the
+ * logo appears more than once on a page.
  */
 export function BrandMark({ size = 34 }) {
 	const id = useId().replace(/:/g, "");
 	return (
 		<svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
 			<defs>
-				<linearGradient id={`tile-${id}`} x1="0" y1="0" x2="1" y2="1">
-					<stop offset="0" stopColor="#6d4ff0" />
-					<stop offset="0.5" stopColor="#7c5cff" />
-					<stop offset="1" stopColor="#06b6d4" />
+				<linearGradient id={`body-${id}`} x1="0.1" y1="1" x2="0.9" y2="0">
+					<stop offset="0" stopColor="#1d4ed8" />
+					<stop offset="0.6" stopColor="#2f7cf6" />
+					<stop offset="1" stopColor="#5fb3ff" />
 				</linearGradient>
-				<linearGradient id={`plane-${id}`} x1="0" y1="0" x2="1" y2="1">
-					<stop offset="0" stopColor="#ffffff" />
-					<stop offset="1" stopColor="#d6f7ff" />
+				<linearGradient id={`trail-${id}`} x1="0" y1="1" x2="1" y2="0">
+					<stop offset="0" stopColor="#3b82f6" stopOpacity="0.35" />
+					<stop offset="1" stopColor="#7cc4ff" stopOpacity="0.9" />
 				</linearGradient>
-				<linearGradient id={`shine-${id}`} x1="0" y1="0" x2="0" y2="1">
-					<stop offset="0" stopColor="#fff" stopOpacity="0.35" />
-					<stop offset="1" stopColor="#fff" stopOpacity="0" />
-				</linearGradient>
+				<radialGradient id={`head-${id}`} cx="0.35" cy="0.35" r="0.75">
+					<stop offset="0" stopColor="#5aa9ff" />
+					<stop offset="1" stopColor="#1d5fe0" />
+				</radialGradient>
 			</defs>
-			<rect x="1" y="1" width="46" height="46" rx="13" fill={`url(#tile-${id})`} />
-			<path d="M6 16 Q6 6 16 6 H32 Q42 6 42 16 V18 Q24 26 6 18 Z" fill={`url(#shine-${id})`} />
-			{/* Flight trail curving up into the plane */}
-			<path d="M7 40 Q12 31 21 31.5" fill="none" stroke="#a5f3fc" strokeWidth="2.6" strokeLinecap="round" strokeDasharray="0.1 4.6" />
-			{/* Paper plane: upper wing, lower wing, inner fold */}
-			<path d="M40 9 L8.5 22.5 L20 27 Z" fill={`url(#plane-${id})`} />
-			<path d="M40 9 L20 27 L24.5 38.5 Z" fill="#e0e7ff" />
-			<path d="M40 9 L20 27 L22.3 29.6 Z" fill="#a5b4fc" />
-			{/* AI spark */}
-			<path d="M37 30 l1.3 3 3 1.3 -3 1.3 -1.3 3 -1.3 -3 -3 -1.3 3 -1.3 z" fill="#fff" opacity="0.9" />
+			{/* Lower sweep: the motion trail */}
+			<path d="M6 41 C 10 33, 16 28.5, 24 27.5 C 17 30.5, 11.5 35, 8.5 42.5 Z" fill={`url(#trail-${id})`} />
+			{/* Body sweeping up into the reaching arm */}
+			<path
+				d="M9 45 C 12 33, 19 25.5, 28 24 C 34 23, 38.5 19.5, 41 13.5 C 40.5 21.5, 36 28.5, 28.5 31 C 21 33.5, 14.5 38, 9 45 Z"
+				fill={`url(#body-${id})`}
+			/>
+			{/* Head */}
+			<circle cx="26" cy="15.5" r="6" fill={`url(#head-${id})`} />
+			{/* Star */}
+			<path d="M42 3.5 L43.4 7.6 L47.5 9 L43.4 10.4 L42 14.5 L40.6 10.4 L36.5 9 L40.6 7.6 Z" fill="#2f7cf6" />
 		</svg>
 	);
 }
 
-export default function BrandLogo({ size = 34, showName = true, className = "" }) {
+export default function BrandLogo({ size = 34, showName = true, caption = "", className = "" }) {
 	return (
 		<span className={`brand-logo ${className}`}>
 			<BrandMark size={size} />
 			{showName ? (
-				<span className="brand-logo__name">
-					Prep<span className="brand-logo__accent">Pilot</span>
+				<span className="brand-logo__text">
+					<span className="brand-logo__name">PrepForge</span>
+					{caption ? <span className="brand-logo__caption">{caption}</span> : null}
 				</span>
 			) : null}
 		</span>

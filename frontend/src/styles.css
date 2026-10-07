@@ -3954,7 +3954,7 @@ h3 {
 }
 
 /* ==========================================================================
-   PrepPilot app frame: top bar + step tracker (replaces sidebar + toolbar)
+   PrepForge app frame: top bar + step tracker (replaces sidebar + toolbar)
    ========================================================================== */
 
 .pp-app {
@@ -4254,7 +4254,7 @@ h3 {
 }
 
 /* ==========================================================================
-   PrepPilot pages: shared heading + card, resume page
+   PrepForge pages: shared heading + card, resume page
    ========================================================================== */
 
 .pp-page {

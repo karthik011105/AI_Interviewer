@@ -1805,7 +1805,7 @@
 	}
 }
 
-/* ---------- PrepPilot wordmark ---------- */
+/* ---------- PrepForge wordmark ---------- */
 .brand-logo__name {
 	font-family: "Work Sans", "Segoe UI", sans-serif;
 	font-weight: 700;
@@ -1822,4 +1822,44 @@
 
 .brand-logo svg {
 	filter: drop-shadow(0 4px 14px rgba(109, 79, 240, 0.4));
+}
+
+/* ---------- PrepForge wordmark + caption (overrides earlier wordmark) ---------- */
+.brand-logo__text {
+	display: flex;
+	flex-direction: column;
+	line-height: 1.05;
+}
+
+.brand-logo .brand-logo__name {
+	font-family: "Work Sans", "Segoe UI", sans-serif;
+	font-weight: 800;
+	font-size: 1.28rem;
+	letter-spacing: -0.02em;
+	color: #12204a;
+	background: none;
+	-webkit-text-fill-color: currentColor;
+}
+
+:root[data-theme="dark"] .brand-logo .brand-logo__name {
+	color: #f5f7ff;
+}
+
+.brand-logo__caption {
+	margin-top: 3px;
+	color: var(--muted);
+	font-family: "Work Sans", "Segoe UI", sans-serif;
+	font-size: 0.6rem;
+	font-weight: 700;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+
+.brand-logo svg {
+	filter: drop-shadow(0 4px 12px rgba(47, 124, 246, 0.35));
+}
+
+/* The sign-in visual panel is always dark, whatever the theme. */
+.auth-modal__visual .brand-logo .brand-logo__name {
+	color: #fff;
 }

@@ -62,8 +62,8 @@ export default function LandingPage({
 		<div className="landing">
 			<ParticleField theme={theme} />
 			<header className="landing-nav">
-				<a className="landing-brand" href="/" aria-label="PrepPilot home">
-					<BrandLogo size={36} />
+				<a className="landing-brand" href="/" aria-label="PrepForge home">
+					<BrandLogo size={40} caption="AI interview practice" />
 				</a>
 				<nav className="landing-nav__actions">
 					<button
@@ -145,7 +145,7 @@ export default function LandingPage({
 			</main>
 
 			<footer className="landing-footer">
-				<span>© {new Date().getFullYear()} PrepPilot</span>
+				<span>© {new Date().getFullYear()} PrepForge</span>
 				<span>Practice made for freshers.</span>
 			</footer>
 

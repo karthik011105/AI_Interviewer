@@ -617,7 +617,7 @@ export default function App() {
 
 	useEffect(() => {
 		if (typeof document !== "undefined") {
-			document.title = `${currentPage.docTitle} | PrepPilot`;
+			document.title = `${currentPage.docTitle} | PrepForge`;
 		}
 	}, [currentPage.docTitle]);
 

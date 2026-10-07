@@ -276,7 +276,7 @@ def create_app() -> FastAPI:
 
 	settings = get_settings()
 
-	app = FastAPI(title="PrepPilot API", version="0.1.0", lifespan=_lifespan)
+	app = FastAPI(title="PrepForge API", version="0.1.0", lifespan=_lifespan)
 
 	# ORDER IS LOAD-BEARING, AND IT READS BACKWARDS.
 	#

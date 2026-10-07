@@ -43,8 +43,8 @@ export default function AppTopBar({ steps, theme, onToggleTheme, user, onSignOut
 
 	return (
 		<header className="pp-topbar">
-			<NavLink to="/" className="pp-topbar__brand" aria-label="PrepPilot home">
-				<BrandLogo size={32} />
+			<NavLink to="/" className="pp-topbar__brand" aria-label="PrepForge home">
+				<BrandLogo size={34} />
 			</NavLink>
 
 			<nav className="pp-steps" aria-label="Interview steps">
