@@ -198,8 +198,8 @@ Cross-cutting work that is not any one subsystem's fault.
 | 2.4 | ~~**Make email delivery production-safe**~~ | **Done in code** — see §28. TLS now actually verifies certificates, port 465 works, and misconfiguration warns at startup. **Choosing the provider and supplying credentials is yours** |
 | 2.5 | ~~**Security headers**~~ | **Done** — see §26. Five headers enforced on every path, verified against a running container. CSP ships report-only pending a browser session. TLS itself is a Phase 3 deployment step |
 | 2.6 | **Secrets** | Rotate the Judge0 Postgres/Redis passwords committed in `1f249f5` (§22.3) before anything is public. Decide explicitly whether to rewrite history; that needs a force-push, and a `backup-before-rewrite` branch already exists |
-| 2.7 | **Slim the image** | Drop the 63 MB piper voice if piper is not installed (0.2), and purge it from history in the same rewrite as 2.6 if we do one |
-| 2.8 | **Turn on error tracking** | Sentry is wired and inert without `SENTRY_DSN` (§26). Set it for the deployment so production errors are visible |
+| 2.7 | ~~**Slim the image**~~ | **Done** — see §31. `TTS_PROVIDER` default switched from `piper` to `edge`; the dead 63 MB `en_US-lessac-medium.onnx`/`.json` removed from disk and git tracking. History still carries the old blob (consistent with the 2.6 rotate-don't-rewrite decision) |
+| 2.8 | ~~**Turn on error tracking**~~ | **Code-complete** — see §31. `configure_error_tracking()` was already correct and safe (`send_default_pii` defaults off). `.env.example` now documents how to get a DSN. **Setting the real `SENTRY_DSN` secret is a Phase 3 deployment step** — it needs an actual Sentry account |
 | 2.9 | ~~**Data lifecycle**~~ | **Partly done** — see §27. The hard failure is fixed: DSA submissions were unbounded against MongoDB's 16 MB document limit. Retention is now a tool (`scripts/prune_old_sessions.py`), not an imposed policy — the window is your call. A backup/export path is still open |
 | 2.10 | **Load-shed and timeout review** | Groq timeout is 20 s with 3 retries; Judge0 wall limit is 4 s. On a free-tier single worker, a few concurrent interviews can saturate the event loop |
 | 2.11 | ~~**Make the interview turn commit survive a disconnect**~~ | **Done** — see §30. Once transcription has begun the commit is shielded and drained rather than cancelled, so a disconnect no longer destroys the answer |
@@ -2560,3 +2560,33 @@ A disconnect during the 1.5-second end-of-turn grace, *before* transcription
 starts, still discards that audio. That is correct: nothing has been transcribed,
 the socket is gone, and there is no one to tell. Making it recoverable would mean
 persisting raw audio, which is a much larger change and a privacy decision.
+
+## 31. Change log — Phases 2.7 and 2.8, image slimming and error tracking
+
+**2.7 — slim the image.** `TTS_PROVIDER` default switched `piper` → `edge` in
+`.env.example` and `docker-compose.yml`. Chosen over installing the piper
+binary because edge-tts is what every deployment was *actually* using already
+— Phase 1.10 found the piper binary was never installed, so the fallback
+chain silently ran edge-tts the whole time, logging a warning each call. The
+dead `backend/data/tts_models/en_US-lessac-medium.onnx` (63 MB) and its
+`.json` sidecar are removed from disk and un-tracked from git. The old blob
+still exists in git history — consistent with the Phase 2.6 decision to
+rotate credentials rather than rewrite history, the same reasoning applies to
+not force-pushing over a 63 MB blob for a size win alone.
+
+Verified: `docker compose config` validates, full backend suite still 533/533
+after the change (the removed file had no test or code reference beyond the
+generic models-directory path construction in `tts.py`, confirmed by grep).
+
+**2.8 — error tracking.** `configure_error_tracking()` in `logging_config.py`
+was already correct: no-op without `SENTRY_DSN`, imports `sentry_sdk` lazily,
+never passes `send_default_pii` so it stays at the SDK's safe default of
+`False` — meaning request bodies, cookies, and user identity aren't attached
+to events, which matters here because resumes and interview transcripts pass
+through this process. Nothing to fix.
+
+What was missing was documentation for *using* it: `.env.example` now
+explains how to obtain a DSN (free Sentry.io account → Python project → copy
+DSN) and flags that `send_default_pii` must not be added without auditing
+what gets sent. Setting the actual `SENTRY_DSN` value is necessarily a Phase 3
+deployment step, since it requires an account only the user can create.

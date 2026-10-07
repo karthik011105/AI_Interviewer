@@ -58,7 +58,7 @@ services:
       #
       # Override with JUDGE0_URL_FROM_CONTAINER, not JUDGE0_API_BASE_URL.
       JUDGE0_API_BASE_URL: ${JUDGE0_URL_FROM_CONTAINER:-http://host.docker.internal:2359}
-      TTS_PROVIDER: ${TTS_PROVIDER:-piper}
+      TTS_PROVIDER: ${TTS_PROVIDER:-edge}
       UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
       # Which peers uvicorn will believe X-Forwarded-For from. The default is
       # localhost only, which is correct here: nothing proxies this stack, and
