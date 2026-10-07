@@ -4,6 +4,7 @@ import { Moon, Sun } from "lucide-react";
 
 import AuthPanel from "./components/AuthPanel";
 import LandingPage from "./pages/LandingPage";
+import AppTopBar from "./components/AppTopBar";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -883,122 +884,15 @@ export default function App() {
 	}
 
 	return (
-		<div className="app-shell">
-			<div className={`app-frame ${isStandaloneView ? "app-frame--standalone" : ""}`}>
-				{!isStandaloneView ? (
-					<aside className="app-sidebar glass-panel">
-						<div className="app-sidebar__brand">
-							<p className="section-kicker">PrepPilot</p>
-							<div className="app-sidebar__brand-row">
-								<span className={`app-brand__icon app-brand__icon--${currentPage.key}`}>
-									<RouteIcon iconKey={currentPage.iconKey} />
-								</span>
-								<div className="app-sidebar__brand-copy">
-									<h2>Interview Console</h2>
-									<p>Structured simulation flow for fresher hiring.</p>
-								</div>
-							</div>
-							<div className="hero-tags app-sidebar__brand-tags">
-								<span>{selectedRoleRequiresDsa ? "DSA path" : "No DSA path"}</span>
-								<span>{isAuthenticated ? "Saved workspace" : "Preview mode"}</span>
-							</div>
-						</div>
-
-						<section className="app-sidebar__workflow" aria-label="Current route and workflow progress">
-							<div className="app-sidebar__workflow-head">
-								<div>
-									<p className="section-kicker">Workflow</p>
-									<h3>{workflowPositionLabel}</h3>
-								</div>
-								<span className={`status-pill status-pill--${completedWorkflowCount === workflowItems.length ? "online" : "checking"}`}>
-									{completedWorkflowCount}/{workflowItems.length} complete
-								</span>
-							</div>
-							<ol className="route-progress route-progress--stacked">
-								{workflowItems.map(({ page, index, routeState, routeMetaLabel }) => (
-									<li key={page.key} className={`route-progress__item route-progress__item--${routeState}`}>
-										<NavLink to={page.path} className="route-progress__link">
-											<span className="route-progress__step">{formatRouteStep(index)}</span>
-											<span className={`route-progress__icon route-progress__icon--${page.key}`}>
-												<RouteIcon iconKey={page.iconKey} />
-											</span>
-											<span className="route-progress__copy">
-												<strong>{page.label}</strong>
-												<span>{routeMetaLabel}</span>
-											</span>
-										</NavLink>
-									</li>
-								))}
-							</ol>
-						</section>
-
-						<div className="app-sidebar__footer">
-							<button
-								type="button"
-								className="theme-toggle"
-								onClick={toggleTheme}
-								aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-							>
-								{theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-								<span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-							</button>
-							{isAuthenticated ? (
-								<div className="app-sidebar__auth">
-									<AuthPanel
-										authState={authState}
-										onSignIn={handleSignIn}
-										onSignUp={handleSignUp}
-										onSignOut={handleSignOut}
-										compact
-									/>
-								</div>
-							) : (
-								<section className="app-sidebar__guest">
-									<p className="section-kicker">Account</p>
-									<strong>Guest preview</strong>
-									<p>Sign in to own sessions and reports.</p>
-								</section>
-							)}
-						</div>
-					</aside>
-				) : null}
-
-				<div className={`app-stage ${isStandaloneView ? "app-stage--standalone" : ""}`}>
-					{!isStandaloneView ? (
-						<section className="app-toolbar glass-panel">
-							<div className="app-toolbar__copy">
-								<p className="section-kicker">Current stage</p>
-								<h2>{currentPage.label}</h2>
-								<p className="app-toolbar__summary">{currentPage.shellSummary}</p>
-							</div>
-							<div className="app-toolbar__aside">
-								<div className="hero-tags app-toolbar__chips">
-									<span>{workflowPositionLabel}</span>
-									<span>{currentPage.meta}</span>
-									<span>{currentPage.railSummary}</span>
-								</div>
-								<div className="app-toolbar__metrics">
-									<article className="app-toolbar__metric">
-										<span>Role</span>
-										<strong>{currentRoleLabel}</strong>
-										<p>{selectedRoleRequiresDsa ? "Technical plus DSA path." : "Technical-only path."}</p>
-									</article>
-									<article className="app-toolbar__metric">
-										<span>Session</span>
-										<strong>{hasLiveSession ? "Live" : "Pending"}</strong>
-										<p>{sessionSummaryLabel}</p>
-									</article>
-									<article className="app-toolbar__metric">
-										<span>Assessment</span>
-										<strong>{assessmentSummaryLabel}</strong>
-										<p>{interviewSummaryLabel}</p>
-									</article>
-								</div>
-							</div>
-						</section>
-					) : null}
-
-					<main className="app-content">
+		<div className="app-shell pp-app">
+			<AppTopBar
+				steps={workflowItems}
+				theme={theme}
+				onToggleTheme={toggleTheme}
+				user={authState.user}
+				onSignOut={handleSignOut}
+			/>
+			<main className="app-content pp-main">
 					<Routes>
 						<Route path="/" element={<Navigate to={APP_PAGES[0].path} replace />} />
 						<Route path="/interview" element={<Navigate to="/technical-interview" replace />} />
@@ -1038,9 +932,7 @@ export default function App() {
 						})}
 						<Route path="*" element={<Navigate to={APP_PAGES[0].path} replace />} />
 					</Routes>
-					</main>
-				</div>
-			</div>
+			</main>
 		</div>
 	);
 }
