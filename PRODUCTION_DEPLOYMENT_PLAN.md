@@ -41,7 +41,7 @@ Upgrade path if needed: an Oracle Always Free arm64 VM running app + Mongo + Jud
 | 1 — Audit all 14 subsystems | Done. ~15 real defects fixed with regression tests |
 | 2 — Hardening | All 14 done — only 2.9b (backups) waits on a decision |
 | 3 — Deployment | Blocked on accounts/credentials from you |
-| 4 — Operations docs | Not started |
+| 4 — Operations docs | `RUNBOOK.md` written (health checks, logs, deploy, rollback, secret rotation, troubleshooting, retention, quotas). Platform-specific steps marked *confirm in Phase 3* |
 
 ### Phase 2 — done
 
