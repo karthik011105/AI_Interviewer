@@ -50,7 +50,6 @@ export default function LivePreview() {
 	);
 	const [phase, setPhase] = useState("idle");
 	const [round, setRound] = useState(SCRIPT[0].round);
-	const [lastScore, setLastScore] = useState(reduceMotion ? SCRIPT[0].score : null);
 	const nextId = useRef(10);
 
 	useEffect(() => {
@@ -102,7 +101,6 @@ export default function LivePreview() {
 				setPhase("scoring");
 				await wait(900);
 				if (cancelled) return;
-				setLastScore(step.score);
 				setPhase("idle");
 				await wait(1600);
 				turn += 1;
@@ -160,15 +158,6 @@ export default function LivePreview() {
 				</span>
 				<span className={`landing-wave${listening ? "" : " landing-wave--idle"}`}>
 					<i /><i /><i /><i /><i /><i /><i /><i /><i />
-				</span>
-				<span className={`landing-score${phase === "scoring" ? " landing-score--pending" : ""}`}>
-					{phase === "scoring"
-						? "Scoring…"
-						: listening
-							? "Listening…"
-							: lastScore !== null
-								? `Score ${lastScore.toFixed(1)}`
-								: "Waiting"}
 				</span>
 			</div>
 		</div>
