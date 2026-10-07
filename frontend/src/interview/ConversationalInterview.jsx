@@ -134,12 +134,19 @@ export default function ConversationalInterview({
 			// actually happened without reproducing it by hand.
 			console.error("Microphone/VAD initialization failed:", error);
 			const name = error?.name || "";
+			const message = String(error?.message || error || "").slice(0, 160);
 			const hint =
 				name === "NotAllowedError" || name === "SecurityError"
-					? "Microphone permission was denied. Allow microphone access for this site and reload."
-					: name === "NotFoundError"
-						? "No microphone was found on this device."
-						: "Microphone unavailable, so answers are typed for this round.";
+					? "Microphone permission was denied. Click the lock icon in the address bar, allow the microphone, and reload. On Windows also check Settings > Privacy & security > Microphone > 'Let desktop apps access your microphone'."
+					: name === "NotFoundError" || name === "OverconstrainedError"
+						? "No microphone was found. Plug one in (or pick it in Windows sound settings) and reload."
+						: name === "NotReadableError" || name === "AbortError"
+							? "The microphone is busy or blocked by Windows. Close other apps using it (Zoom, Teams, Discord, other tabs), check Settings > Privacy & security > Microphone, then reload."
+							: !window.isSecureContext
+								? "Microphones only work on https:// or http://localhost. Open the app at http://localhost:5173 instead."
+								: // Show the real reason: the generic message alone made this
+									// impossible to diagnose from a user's screenshot.
+									`Microphone unavailable (${name || "error"}: ${message}). Answers are typed for this round.`;
 			dispatch({ type: "SET_CAPTURE_READY", ready: false });
 			dispatch({ type: "NOTICE", info: hint });
 		}, []),
