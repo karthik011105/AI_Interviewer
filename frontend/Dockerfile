@@ -47,20 +47,22 @@ ENV NGINX_ENVSUBST_FILTER=^CSP_
 # Content-Security-Policy, derived from what the built bundle actually loads
 # rather than from a template:
 #
-#   script-src   cdn.jsdelivr.net — @monaco-editor/react has no loader.config(),
-#                so the DSA editor is fetched from jsdelivr at RUNTIME. See the
-#                note in the deployment plan; self-hosting it would let this be
-#                tightened to 'self'.
+#   script-src   'self' only. Monaco is bundled (src/components/monacoSetup.js)
+#                rather than fetched from cdn.jsdelivr.net at runtime, so no
+#                third-party origin may execute script. Verified in headless
+#                Chrome under this policy with all non-local requests blocked.
 #   'wasm-unsafe-eval' — onnxruntime, behind the browser-side Silero VAD,
 #                compiles WebAssembly. Without it the microphone path dies.
 #   style-src    'unsafe-inline' + fonts.googleapis.com — styles.css @imports
 #                Google Fonts, and React inline styles (including the error
 #                boundary) are inline by construction.
-#   worker-src   blob: — Monaco creates its workers from blob URLs.
+#   worker-src   'self' covers Monaco's bundled editor worker. blob: is kept
+#                for the browser-side VAD/onnxruntime path, which was not
+#                re-verified when Monaco moved off the CDN.
 #   connect-src  overridden per deployment; the API and WebSocket live on a
 #                different origin. Default stays broad so a misconfiguration
 #                degrades to "less strict" rather than "app is broken".
-ENV CSP_POLICY="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+ENV CSP_POLICY="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
 
 # Report-only by default, and that is a considered choice rather than timidity.
 # An enforcing CSP that is even slightly wrong breaks the app silently in a

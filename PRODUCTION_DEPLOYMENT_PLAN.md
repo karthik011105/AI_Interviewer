@@ -37,9 +37,9 @@ Upgrade path if needed: an Oracle Always Free arm64 VM running app + Mongo + Jud
 
 | Phase | State |
 |---|---|
-| 0 — Fix CI/test tooling | Done (CI command fixed, `scripts/run_tests.ps1`, Python 3.11, frontend tests in CI). **CI has never run on GitHub — needs the PR opened** |
+| 0 — Fix CI/test tooling | Done. **CI green on GitHub** for the first time (PR open) |
 | 1 — Audit all 14 subsystems | Done. ~15 real defects fixed with regression tests |
-| 2 — Hardening | 13 of 14 done — see below |
+| 2 — Hardening | All 14 done — only 2.9b (backups) waits on a decision |
 | 3 — Deployment | Blocked on accounts/credentials from you |
 | 4 — Operations docs | Not started |
 
@@ -60,12 +60,12 @@ Upgrade path if needed: an Oracle Always Free arm64 VM running app + Mongo + Jud
 | 2.10 | Groq SDK's hidden `max_retries=2` disabled — it tripled every failing call (measured 6 requests for 2 attempts; up to 12 / ~4 min at defaults) and retried 429s. Resume upload parse moved off the event loop — it froze every live interview socket. Remaining routes are sync `def` (threadpool) and WS paths already use `to_thread` |
 | 2.13 | WebSocket opened with a 60 s single-use ticket (`POST /auth/ws-ticket`, `?ticket=`) instead of the 24 h access token in the URL. Tickets are refused as access tokens; spent atomically in `revoked_tokens`; DB failure fails closed. `?access_token=` no longer accepted |
 | 2.6 | Verified: the running Judge0 stack and every tracked file use passwords different from those leaked in `1f249f5`; compose requires them from `.env`. Production uses RapidAPI, so the leaked values guard nothing |
+| 2.14 | Monaco bundled via `loader.config({ monaco })` — core editor + Python/C++/Java only, editor worker emitted by Vite. `cdn.jsdelivr.net` removed from CSP `script-src`. Verified in headless Chrome under the new CSP with all external requests blocked: renders, highlights, accepts input, zero external requests |
 
 ### Phase 2 — remaining
 
 | # | Item | Owner |
 |---|---|---|
-| 2.14 | Monaco loads from `cdn.jsdelivr.net`; self-host via `loader.config()` + Vite assets | Me |
 | 2.9b | Backup/export before pruning (Atlas M0 has no free backups) | Me, after you pick a retention window |
 
 ---
@@ -92,10 +92,8 @@ Groq / Judge0 / Atlas quota monitoring · update `README.md` to the deployed rea
 
 ## What I need from you
 
-1. **Open the PR** so CI runs for the first time:
-   https://github.com/karthik011105/AI_Interviewer/compare/main...feat/conversational-interview?expand=1
-2. **Accounts for Phase 3:** MongoDB Atlas, Hugging Face, RapidAPI (Judge0 CE), Sentry DSN, an SMTP provider (Brevo / Resend / Gmail app password).
-3. **Decisions:**
+1. **Accounts for Phase 3:** MongoDB Atlas, Hugging Face, RapidAPI (Judge0 CE), Sentry DSN, an SMTP provider (Brevo / Resend / Gmail app password).
+2. **Decisions:**
    - `sample_resume.pdf` contains a real person's name, phone, and email. Replace with a synthetic one? (Stays in history either way unless rewritten.)
    - `data/clickhouse_sample.jsonl` is orphaned — OK to delete?
    - Session retention window for `prune_old_sessions.py`.
