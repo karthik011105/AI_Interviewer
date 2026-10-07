@@ -66,6 +66,9 @@ export default function LivePreview() {
 			setMessages((current) => current.map((m) => (m.id === id ? { ...m, text } : m)));
 
 		async function run() {
+			// Start clean: in development React mounts effects twice, and the
+			// first (cancelled) run has already pushed its typing bubble.
+			setMessages([]);
 			let turn = 0;
 			while (!cancelled) {
 				const step = SCRIPT[turn % SCRIPT.length];

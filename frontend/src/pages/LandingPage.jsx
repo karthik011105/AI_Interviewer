@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Moon, Sun } from "lucide-react";
 
 import AuthDialog from "../components/AuthDialog";
@@ -8,6 +8,7 @@ import LivePreview from "../components/LivePreview";
 import { ResumeDemo, ScoreDemo, VoiceDemo } from "../components/FeatureDemos";
 import InterviewScene from "../components/InterviewScene";
 import ParticleField from "../components/ParticleField";
+import { PArrowMark } from "../components/PlatformWatermark";
 import "./landing.css";
 
 const FEATURES = [
@@ -58,9 +59,34 @@ export default function LandingPage({
 	);
 	const closeDialog = useCallback(() => setDialogMode(null), []);
 
+	// The background P mark leans gently toward the cursor.
+	const markRef = useRef(null);
+	useEffect(() => {
+		const node = markRef.current;
+		if (!node || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return undefined;
+		let frame = 0;
+		function onMove(event) {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(() => {
+				node.style.setProperty("--px", ((event.clientX / window.innerWidth) * 2 - 1).toFixed(3));
+				node.style.setProperty("--py", ((event.clientY / window.innerHeight) * 2 - 1).toFixed(3));
+			});
+		}
+		window.addEventListener("pointermove", onMove, { passive: true });
+		return () => {
+			cancelAnimationFrame(frame);
+			window.removeEventListener("pointermove", onMove);
+		};
+	}, []);
+
 	return (
 		<div className="landing">
 			<ParticleField theme={theme} />
+			<div className="landing-mark" aria-hidden="true">
+				<div className="landing-mark__inner" ref={markRef}>
+					<PArrowMark size={560} />
+				</div>
+			</div>
 			<header className="landing-nav">
 				<a className="landing-brand" href="/" aria-label="PrepForge home">
 					<BrandLogo size={40} caption="AI interview practice" />

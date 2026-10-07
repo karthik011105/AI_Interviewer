@@ -24,17 +24,17 @@ export function BrandMark({ size = 34 }) {
 					<stop offset="1" stopColor="#1d5fe0" />
 				</radialGradient>
 			</defs>
-			{/* Lower sweep: the motion trail */}
-			<path d="M6 41 C 10 33, 16 28.5, 24 27.5 C 17 30.5, 11.5 35, 8.5 42.5 Z" fill={`url(#trail-${id})`} />
-			{/* Body sweeping up into the reaching arm */}
+			{/* Lower sweep: a separate, lighter crescent under the body */}
+			<path d="M4 37 C 8 30.5, 15 27.5, 23.5 28 C 15.5 30.5, 9.5 34.5, 6.5 41 C 5.5 40, 4.5 38.5, 4 37 Z" fill={`url(#trail-${id})`} />
+			{/* Body: a thick swoosh from the lower left rising to the raised arm */}
 			<path
-				d="M9 45 C 12 33, 19 25.5, 28 24 C 34 23, 38.5 19.5, 41 13.5 C 40.5 21.5, 36 28.5, 28.5 31 C 21 33.5, 14.5 38, 9 45 Z"
+				d="M8 46 C 10 34, 17.5 26, 28.5 23.5 C 34.5 22, 38.5 18.5, 41.5 12.5 C 42 22, 37 30.5, 28 33.5 C 20 36.5, 13 40.5, 8 46 Z"
 				fill={`url(#body-${id})`}
 			/>
 			{/* Head */}
-			<circle cx="26" cy="15.5" r="6" fill={`url(#head-${id})`} />
+			<circle cx="26" cy="14" r="7" fill={`url(#head-${id})`} />
 			{/* Star */}
-			<path d="M42 3.5 L43.4 7.6 L47.5 9 L43.4 10.4 L42 14.5 L40.6 10.4 L36.5 9 L40.6 7.6 Z" fill="#2f7cf6" />
+			<path d="M42.5 2.5 L44 6.8 L48 8.2 L44 9.6 L42.5 14 L41 9.6 L37 8.2 L41 6.8 Z" fill="#2f7cf6" />
 		</svg>
 	);
 }

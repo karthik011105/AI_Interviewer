@@ -1732,8 +1732,6 @@
 	position: relative;
 	height: 270px;
 	overflow: hidden;
-	-webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 56px);
-	mask-image: linear-gradient(to bottom, transparent 0, #000 56px);
 }
 
 .live-thread__list {
@@ -1862,4 +1860,80 @@
 /* The sign-in visual panel is always dark, whatever the theme. */
 .auth-modal__visual .brand-logo .brand-logo__name {
 	color: #fff;
+}
+
+
+/* "You" bubbles: transparent yellow instead of a solid block. */
+.landing-bubble--you,
+:root[data-theme="dark"] .landing-bubble--you {
+	background: rgba(255, 196, 64, 0.14);
+	border: 1px solid rgba(255, 196, 64, 0.45);
+	color: var(--text);
+}
+
+.landing-bubble--you strong {
+	color: #c98a06;
+}
+
+:root[data-theme="dark"] .landing-bubble--you strong {
+	color: #ffd25a;
+}
+
+.live-preview__caret--dark {
+	background: currentColor;
+}
+
+/* ---------- Home page: floating P-arrow brand mark ---------- */
+/*
+ * Big, faint, behind everything. It floats, breathes a soft glow, and leans
+ * toward the cursor (--px / --py set from pointer position in LandingPage).
+ */
+.landing-mark {
+	position: fixed;
+	inset: 0;
+	z-index: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none;
+}
+
+.landing-mark__inner {
+	--px: 0;
+	--py: 0;
+	transform: translate(calc(var(--px) * 26px), calc(var(--py) * 20px));
+	transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.landing-mark svg {
+	display: block;
+	width: min(52vw, 560px);
+	height: auto;
+	opacity: 0.11;
+	animation: landing-mark-float 9s ease-in-out infinite, landing-mark-glow 6s ease-in-out infinite;
+}
+
+:root[data-theme="dark"] .landing-mark svg {
+	opacity: 0.2;
+}
+
+@keyframes landing-mark-float {
+	0%, 100% { transform: translateY(0) rotate(-2deg); }
+	50% { transform: translateY(-18px) rotate(2deg); }
+}
+
+@keyframes landing-mark-glow {
+	0%, 100% { filter: drop-shadow(0 0 0 rgba(124, 92, 255, 0)); }
+	50% { filter: drop-shadow(0 0 40px rgba(124, 92, 255, 0.9)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.landing-mark svg {
+		animation: none;
+	}
+
+	.landing-mark__inner {
+		transition: none;
+		transform: none;
+	}
 }
