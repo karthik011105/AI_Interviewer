@@ -10,6 +10,9 @@ coverage against a default role before any role was chosen.
 from __future__ import annotations
 
 from unittest import TestCase
+from unittest.mock import patch
+
+import numpy as np
 
 from backend.nlp.resume_quality_scorer import (
 	_has_keyword,
@@ -51,6 +54,7 @@ class KeywordMatchingTests(TestCase):
 		self.assertTrue(_has_keyword(text, "flask|django|fastapi"))
 
 	def test_invented_role_names_get_a_sensible_keyword_family(self) -> None:
+		self.assertIn("docker", _role_keywords_for_key("junior_data_engineer"))
 		self.assertIn("pandas", _role_keywords_for_key("junior_data_analyst_trainee"))
 		self.assertTrue(any("react" in kw.split("|") for kw in _role_keywords_for_key("custom_role", "Junior Web Developer")))
 		self.assertIn("docker", _role_keywords_for_key("api_engineer"))
@@ -101,6 +105,14 @@ class OverallScoreTests(TestCase):
 
 
 class RoleMatchTests(TestCase):
+	"""Keyword-only path: no pretrained models loaded."""
+
+	def setUp(self) -> None:
+		for target, value in (("_model_skills", []), ("_semantic_encoder", None)):
+			patcher = patch(f"backend.nlp.resume_quality_scorer.{target}", return_value=value)
+			patcher.start()
+			self.addCleanup(patcher.stop)
+
 	def test_reports_matched_and_missing_skills_for_the_role(self) -> None:
 		result = score_role_match(_COMPLETE, "FastAPI Docker PostgreSQL REST API", "backend_python_developer", "Backend Python Developer")
 		self.assertIn("docker", result.matched)
@@ -115,3 +127,33 @@ class RoleMatchTests(TestCase):
 		backend = score_role_match(_COMPLETE, "FastAPI Docker", "backend_python_developer").match_percent
 		frontend = score_role_match(_COMPLETE, "FastAPI Docker", "frontend_react_developer").match_percent
 		self.assertNotEqual(backend, frontend)
+
+
+class _FakeEncoder:
+	"""Unit vectors per phrase: same axis = same meaning."""
+
+	def __init__(self) -> None:
+		self._axes = {"postgres": 0, "sql": 0, "mysql": 0, "postgresql": 0, "sqlite": 0}
+
+	def encode(self, texts, normalize_embeddings=True):
+		vecs = np.zeros((len(texts), 256))
+		for i, text in enumerate(texts):
+			vecs[i, self._axes.setdefault(text, len(self._axes))] = 1.0
+		return vecs
+
+
+class ModelRoleMatchTests(TestCase):
+	def test_extracted_skills_match_role_skills_by_meaning_and_blend_similarity(self) -> None:
+		with patch("backend.nlp.resume_quality_scorer._model_skills", return_value=["postgres", "airflow dags"]), 			 patch("backend.nlp.resume_quality_scorer._semantic_encoder", return_value=_FakeEncoder()):
+			result = score_role_match({"skills": []}, "worked with postgres", "backend_python_developer")
+		self.assertIn("postgres", result.matched)
+		self.assertIsNotNone(result.profile_similarity)
+		self.assertIn("airflow dags", result.other_skills)
+		expected = 0.6 * result.skill_coverage + 0.4 * result.profile_similarity
+		self.assertAlmostEqual(result.match_percent, expected, delta=0.2)
+
+	def test_without_models_the_match_is_skill_coverage(self) -> None:
+		with patch("backend.nlp.resume_quality_scorer._model_skills", return_value=[]), 			 patch("backend.nlp.resume_quality_scorer._semantic_encoder", return_value=None):
+			result = score_role_match({"skills": ["Docker"]}, "", "backend_python_developer")
+		self.assertIsNone(result.profile_similarity)
+		self.assertEqual(result.match_percent, result.skill_coverage)

@@ -5964,3 +5964,13 @@ h3 {
 	background: var(--success-bg);
 	color: var(--success);
 }
+
+.rm__facts {
+	margin: -6px 0 0;
+	color: var(--muted);
+	font-size: 0.86rem;
+}
+
+.rm__chip--plain {
+	border-style: dashed;
+}

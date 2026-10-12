@@ -31,11 +31,14 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 COPY backend/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
-# Pre-fetch both models that would otherwise be downloaded from HuggingFace on
-# first use: the role-matching encoder and the speech-to-text model. Baking them
+# Pre-fetch the models that would otherwise be downloaded from HuggingFace on
+# first use: the role-matching encoder, the JobBERT skill extractor (it only
+# loads from the local cache, so without this step it is silently skipped) and
+# the speech-to-text model. Baking them
 # in keeps cold starts fast and lets the runtime stage run fully offline, so a
 # HuggingFace outage cannot degrade a running deployment.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" \
+    && python -c "from huggingface_hub import snapshot_download; snapshot_download('jjzha/jobbert_knowledge_extraction', allow_patterns=['*.json', '*.txt', 'model.safetensors'])" \
     && python -c "from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8')"
 
 # ---------------------------------------------------------------------------

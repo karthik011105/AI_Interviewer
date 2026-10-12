@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -40,6 +41,7 @@ from backend.nlp.resume_parser import (
 )
 from backend.nlp.role_matcher import match_and_store_roles, rank_roles, serialize_role_match_result
 from backend.nlp.resume_quality_scorer import score_resume_as_dict, score_role_match_as_dict
+from backend.nlp.skill_extractor import extract_skills
 
 router = APIRouter(prefix="/resume", tags=["resume"])
 _LOGGER = logging.getLogger(__name__)
@@ -347,6 +349,10 @@ def _parse_resume_request(
 		)
 	except Exception:
 		response["resume_quality"] = None
+
+	# Run JobBERT over the resume now, while the user reads the score, so the
+	# role match at /resume/select-role finds the skills already cached.
+	threading.Thread(target=extract_skills, args=(parse_result.raw_text or "",), daemon=True).start()
 
 	return response
 

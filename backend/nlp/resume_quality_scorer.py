@@ -64,7 +64,7 @@ WEAK_ACTION_VERBS: frozenset[str] = frozenset({
 # of which counts. Without a job description to compare against, expecting a
 # fresher to know Flask *and* Django *and* Spring would make every match low.
 ROLE_KEYWORDS: dict[str, list[str]] = {
-    "backend":    ["api", "rest|restful", "sql|mysql|postgresql|sqlite", "database",
+    "backend":    ["python|java|golang|node.js|nodejs|c#|kotlin", "api", "rest|restful", "sql|mysql|postgresql|sqlite", "database",
                    "nosql|mongodb|dynamodb|cassandra", "cache|caching|redis",
                    "flask|django|fastapi|spring|spring boot|express|node.js|nodejs",
                    "authentication|jwt|oauth", "docker", "microservice",
@@ -74,19 +74,19 @@ ROLE_KEYWORDS: dict[str, list[str]] = {
                    "component", "hooks", "redux|zustand|state management|context api",
                    "responsive", "tailwind|bootstrap|sass|scss", "accessibility|a11y|aria",
                    "dom", "vite|webpack", "ui|ux"],
-    "data":       ["sql|mysql|postgresql", "pandas", "numpy", "excel", "statistics|statistical",
+    "data":       ["python|r", "sql|mysql|postgresql", "pandas", "numpy", "excel", "statistics|statistical",
                    "tableau|power bi|looker", "matplotlib|seaborn|plotly", "jupyter",
                    "etl", "pipeline", "spark|pyspark", "airflow",
                    "data warehouse|snowflake|bigquery|redshift|dbt", "hypothesis|a/b test",
                    "regression", "classification"],
-    "ai_ml":      ["machine learning", "deep learning", "neural network",
+    "ai_ml":      ["python", "machine learning", "deep learning", "neural network",
                    "pytorch|tensorflow|keras", "scikit-learn|sklearn",
                    "nlp|natural language processing", "computer vision|opencv",
                    "transformer|bert|hugging face", "llm|gpt", "rag|retrieval",
                    "embedding|vector database", "fine-tuning|fine-tuned",
                    "hyperparameter", "cross-validation",
                    "precision|recall|f1|roc|auc"],
-    "devops":     ["linux", "bash|shell scripting", "docker", "kubernetes|k8s",
+    "devops":     ["python|bash|go|golang", "linux", "bash|shell scripting", "docker", "kubernetes|k8s",
                    "ci/cd", "jenkins|github actions|gitlab ci", "aws|gcp|azure",
                    "terraform|infrastructure as code|iac", "ansible", "helm",
                    "monitoring", "prometheus|grafana", "networking|dns|load balancer"],
@@ -130,7 +130,8 @@ def _role_keywords_for_key(role_key: str, role_title: str = "") -> list[str]:
     rk = (role_key or "").lower()
     families: list[str] | None = None
     for prefixes, fams in _ROLE_FAMILY_MAP:
-        if any(rk.startswith(p) for p in prefixes):
+        # Anywhere in the key, so "junior_data_engineer" still reads as data_engineer.
+        if any(re.search(rf"(^|_){re.escape(p)}", rk) for p in prefixes):
             families = fams
             break
     if families is None:
@@ -521,6 +522,63 @@ class RoleMatchResult:
     missing: list[str]
     match_percent: float
     tip: str
+    skill_coverage: float = 0.0
+    profile_similarity: float | None = None
+    other_skills: list[str] = field(default_factory=list)
+
+
+# A JobBERT skill counts for a role skill when MiniLM puts them this close
+# ("postgres" ~ "postgresql", "ci pipelines" ~ "ci/cd").
+_SKILL_SIMILARITY = 0.72
+# Resume-vs-role cosine similarity measured on a backend resume: ~0.33-0.40
+# for unrelated roles, 0.55 for a neighbouring one (devops), 0.71 for the
+# right one. Stretch 0.35-0.75 onto 0-100 so the score separates them.
+_PROFILE_SIM_LOW, _PROFILE_SIM_HIGH = 0.35, 0.75
+_COVERAGE_WEIGHT, _SIMILARITY_WEIGHT = 0.6, 0.4
+
+
+def _semantic_encoder() -> Any | None:
+    from backend.nlp.role_matcher import get_semantic_encoder  # heavy module; import lazily
+    return get_semantic_encoder()
+
+
+def _model_skills(raw_text: str) -> list[str]:
+    from backend.nlp.skill_extractor import extract_skills
+    return list(extract_skills(raw_text or ""))
+
+
+def _semantic_hits(encoder: Any, keywords: list[str], skills: list[str]) -> dict[str, str]:
+    """Role skills (keyword entries) that one of the extracted resume skills
+    means, mapped to that resume skill."""
+    if not keywords or not skills:
+        return {}
+    alts = [(kw, alt.strip()) for kw in keywords for alt in kw.split("|")]
+    alt_vecs = encoder.encode([alt for _, alt in alts], normalize_embeddings=True)
+    skill_vecs = encoder.encode(skills, normalize_embeddings=True)
+    sims = alt_vecs @ skill_vecs.T
+    hits: dict[str, str] = {}
+    for row, (kw, _) in enumerate(alts):
+        col = int(sims[row].argmax())
+        if kw not in hits and float(sims[row][col]) >= _SKILL_SIMILARITY:
+            hits[kw] = skills[col]
+    return hits
+
+
+def _profile_similarity(encoder: Any, resume_profile: str, role_profile: str) -> float:
+    vecs = encoder.encode([resume_profile, role_profile], normalize_embeddings=True)
+    cosine = float(vecs[0] @ vecs[1])
+    return max(0.0, min(1.0, (cosine - _PROFILE_SIM_LOW) / (_PROFILE_SIM_HIGH - _PROFILE_SIM_LOW)))
+
+
+def _resume_profile(parsed_resume: dict[str, Any], skills: list[str]) -> str:
+    parts = [str(parsed_resume.get("summary") or "")]
+    parts.append(", ".join(str(s) for s in (parsed_resume.get("skills") or [])))
+    parts.append(", ".join(str(t) for t in (parsed_resume.get("technologies") or [])))
+    for project in parsed_resume.get("projects") or []:
+        if isinstance(project, dict):
+            parts.append(f"{project.get('title') or ''}: {project.get('description') or ''}")
+    parts.append(", ".join(skills))
+    return ". ".join(p for p in parts if p.strip())
 
 
 def score_role_match(
@@ -534,13 +592,36 @@ def score_role_match(
     separately from the general resume quality score."""
 
     keywords = _role_keywords_for_key(role_key, role_title)
+    title = role_title or role_key.replace("_", " ").title()
     skills_text = " ".join(str(s) for s in (parsed_resume.get("skills") or []))
     tech_text = " ".join(str(t) for t in (parsed_resume.get("technologies") or []))
     text = " ".join([raw_text or "", skills_text, tech_text, parsed_resume.get("summary") or ""]).lower()
-    hits = [kw for kw in keywords if _has_keyword(text, kw)]
-    matched = [_keyword_label(text, kw) for kw in hits]
+    hits = {kw: _keyword_label(text, kw) for kw in keywords if _has_keyword(text, kw)}
+
+    # Pretrained models, when installed: JobBERT finds the skills, MiniLM
+    # matches them to the role by meaning and scores overall profile fit.
+    model_skills = _model_skills(raw_text)
+    encoder = _semantic_encoder()
+    similarity: float | None = None
+    if encoder is not None:
+        try:
+            unmatched = [kw for kw in keywords if kw not in hits]
+            hits.update(_semantic_hits(encoder, unmatched, model_skills))
+            role_profile = f"{title}. Skills: " + ", ".join(kw.replace("|", ", ") for kw in keywords)
+            similarity = _profile_similarity(encoder, _resume_profile(parsed_resume, model_skills), role_profile)
+        except Exception:
+            similarity = None
+
+    matched = [hits[kw] for kw in keywords if kw in hits]
     missing = [_keyword_label(text, kw) for kw in keywords if kw not in hits]
-    pct = round(100 * len(hits) / len(keywords), 1) if keywords else 0.0
+    coverage = len(hits) / len(keywords) if keywords else 0.0
+    blended = coverage if similarity is None else _COVERAGE_WEIGHT * coverage + _SIMILARITY_WEIGHT * similarity
+    pct = round(100 * blended, 1)
+    used = {m.lower() for m in matched}
+    other_skills = [
+        skill for skill in model_skills
+        if skill not in used and not any(_has_keyword(skill, kw) for kw in keywords)
+    ][:10]
     to_add = ", ".join(m.split(" / ")[0] for m in missing[:3])
     if pct >= 60:
         tip = "Strong match. Make sure these skills also appear inside your project bullets, not only in the skills list."
@@ -550,11 +631,14 @@ def score_role_match(
         tip = f"Low match for this role. Learn or highlight {to_add}."
     return RoleMatchResult(
         role_key=role_key,
-        role_title=role_title or role_key.replace("_", " ").title(),
+        role_title=title,
         matched=matched,
         missing=missing[:12],
         match_percent=pct,
         tip=tip,
+        skill_coverage=round(100 * coverage, 1),
+        profile_similarity=None if similarity is None else round(100 * similarity, 1),
+        other_skills=other_skills,
     )
 
 

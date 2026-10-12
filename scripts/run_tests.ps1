@@ -48,6 +48,12 @@ if (-not $env:MONGO_URI) {
     $env:MONGO_URI = "mongodb://127.0.0.1:59999"
 }
 
+# Never load the 431 MB JobBERT skill model in tests. Matches CI, where it is
+# not downloaded.
+if (-not $env:DISABLE_SKILL_EXTRACTOR) {
+    $env:DISABLE_SKILL_EXTRACTOR = "1"
+}
+
 $pyArgs = @("-m", "unittest")
 
 if ($Module) {
