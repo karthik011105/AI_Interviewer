@@ -5,7 +5,6 @@ import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 import ConversationThread from "./ConversationThread";
-import CoverageRail from "./CoverageRail";
 import MicControlBar from "./MicControlBar";
 import { INITIAL_STATE, currentQuestionIndex, interviewReducer } from "./interviewReducer.js";
 import {
@@ -344,6 +343,16 @@ export default function ConversationalInterview({
 			{!notStarted ? (
 				<div className="conversation-shell">
 					<div className="conversation-main">
+						{state.coverage.maxTurns ? (
+							<div className="pp-turns" aria-label="Interview progress">
+								<span>
+									Question {Math.min(Math.max(state.coverage.turnsUsed, 1), state.coverage.maxTurns)} of up to {state.coverage.maxTurns}
+								</span>
+								<span className="pp-turns__bar" aria-hidden="true">
+									<i style={{ width: `${Math.round((Math.max(state.coverage.turnsUsed, 1) / state.coverage.maxTurns) * 100)}%` }} />
+								</span>
+							</div>
+						) : null}
 						<ConversationThread
 							turns={state.turns}
 							liveCaption={state.liveCaption}
@@ -419,7 +428,7 @@ export default function ConversationalInterview({
 						) : null}
 					</div>
 
-					<CoverageRail coverage={state.coverage} />
+
 				</div>
 			) : null}
 		</div>
