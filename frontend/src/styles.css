@@ -5380,3 +5380,142 @@ h3 {
 .pp-avatar:hover {
 	filter: brightness(0.97);
 }
+
+/* ==========================================================================
+   Resume score (plain, checklist-first)
+   ========================================================================== */
+.rs {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+.rs__head {
+	display: flex;
+	align-items: center;
+	gap: 20px;
+}
+
+.rs__score {
+	margin: 0;
+	display: flex;
+	align-items: baseline;
+	padding-right: 20px;
+	border-right: 1px solid var(--border);
+}
+
+.rs__num {
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 3rem;
+	font-weight: 600;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+
+.rs__of {
+	margin-left: 2px;
+	color: var(--muted);
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.rs__head h2 {
+	margin: 0;
+	font-size: 1.1rem;
+}
+
+.rs__verdict {
+	margin: 4px 0 0;
+	color: var(--muted);
+}
+
+.rs__list {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.rs__item {
+	display: flex;
+	gap: 12px;
+	padding: 14px 0;
+	border-top: 1px solid var(--border);
+}
+
+.rs__mark {
+	flex: none;
+	margin-top: 1px;
+}
+
+.rs__item--fix .rs__mark { color: var(--warning); }
+.rs__item--ok .rs__mark { color: var(--success); }
+
+.rs__body {
+	flex: 1;
+	min-width: 0;
+}
+
+.rs__row {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.rs__row strong {
+	font-size: 0.95rem;
+}
+
+.rs__pct {
+	color: var(--muted);
+	font-size: 0.88rem;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.rs__bar {
+	display: block;
+	height: 4px;
+	margin: 8px 0;
+	border-radius: 2px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.rs__bar i {
+	display: block;
+	height: 100%;
+	border-radius: 2px;
+}
+
+.rs__item--fix .rs__bar i { background: var(--warning); }
+.rs__item--ok .rs__bar i { background: var(--success); }
+
+.rs__tip {
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.9rem;
+	line-height: 1.5;
+}
+
+.rs__facts {
+	margin: 0;
+	padding-top: 14px;
+	border-top: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+@media (max-width: 520px) {
+	.rs__head {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+
+	.rs__score {
+		padding-right: 0;
+		border-right: none;
+	}
+}
