@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
+from backend.api.routes_proctoring import ensure_interview_open
 from backend.database.queries import (
 	delete_assessment_session,
 	delete_dsa_sessions,
@@ -74,6 +75,10 @@ def reset_workflow_stage(
 	current_user: AuthenticatedUser = Depends(require_current_user),
 ) -> dict[str, Any]:
 	parent_session = _require_parent_session(request.session_id, current_user)
+	# An interview ended by proctoring can't be restarted by resetting rounds;
+	# only the report can be regenerated.
+	if request.target != "report":
+		ensure_interview_open(parent_session)
 	cleared_targets = RESET_CASCADE[request.target]
 	summary: dict[str, Any] = {
 		"assessment_session": 0,

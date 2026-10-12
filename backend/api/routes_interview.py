@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
+from backend.api.routes_proctoring import ensure_interview_open
 from backend.config import get_settings
 from backend.database.queries import (
 	advance_interview_question,
@@ -507,6 +508,7 @@ def _require_parent_session(
 		)
 
 	ensure_session_access(session, current_user)
+	ensure_interview_open(session)
 	return session
 
 

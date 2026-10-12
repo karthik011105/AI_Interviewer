@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Moon, Sun } from "lucide-react";
 
@@ -7,6 +7,8 @@ import LandingPage from "./pages/LandingPage";
 import AppTopBar from "./components/AppTopBar";
 import AppSidebar from "./components/AppSidebar";
 import PlatformWatermark from "./components/PlatformWatermark";
+import ProctoredRound from "./components/ProctoredRound";
+import { PROCTORED_ROUNDS } from "./lib/proctoring";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -545,6 +547,18 @@ export default function App() {
 	}
 
 	const currentPage = resolvePageFromPath(location.pathname);
+
+	// Full screen belongs to the rounds: leaving them (to the report, the
+	// resume page...) leaves full screen too.
+	useEffect(() => {
+		if (!PROCTORED_ROUNDS.has(currentPage.key) && document.fullscreenElement) {
+			document.exitFullscreen().catch(() => {});
+		}
+	}, [currentPage.key]);
+
+	const handleProctoringChange = useCallback((proctoring) => {
+		setWorkflowState((current) => ({ ...current, proctoring: { ...proctoring, sessionId: current.sessionId } }));
+	}, []);
 	const isStandaloneView = false;
 	const isAuthenticated = authState.status === "authenticated";
 	const visibleWorkflowState = isAuthenticated
@@ -920,14 +934,36 @@ export default function App() {
 											renderLockedRoute(page)
 										) : (
 											<Suspense fallback={renderRouteLoading(page)}>
-												<PageComponent
-													authState={authState}
-													workflowState={visibleWorkflowState}
-													onWorkflowStateChange={setWorkflowState}
-													onNavigate={navigateToPage}
-													roleRequiresDsa={selectedRoleRequiresDsa}
-													{...(page.componentProps || {})}
-												/>
+												{PROCTORED_ROUNDS.has(page.key) && visibleWorkflowState?.sessionId ? (
+													<ProctoredRound
+														key={`${page.key}:${visibleWorkflowState.sessionId}`}
+														roundKey={page.key}
+														roundLabel={page.key === "assessment" ? "The assessment" : `The ${page.label} round`}
+														sessionId={visibleWorkflowState.sessionId}
+														apiBaseUrl={visibleWorkflowState.apiBaseUrl}
+														accessToken={authState.accessToken}
+														onNavigate={navigateToPage}
+														onStateChange={handleProctoringChange}
+													>
+														<PageComponent
+															authState={authState}
+															workflowState={visibleWorkflowState}
+															onWorkflowStateChange={setWorkflowState}
+															onNavigate={navigateToPage}
+															roleRequiresDsa={selectedRoleRequiresDsa}
+															{...(page.componentProps || {})}
+														/>
+													</ProctoredRound>
+												) : (
+													<PageComponent
+														authState={authState}
+														workflowState={visibleWorkflowState}
+														onWorkflowStateChange={setWorkflowState}
+														onNavigate={navigateToPage}
+														roleRequiresDsa={selectedRoleRequiresDsa}
+														{...(page.componentProps || {})}
+													/>
+												)}
 											</Suspense>
 										)
 									}

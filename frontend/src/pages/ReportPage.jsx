@@ -644,6 +644,12 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
 
       {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
       {resetMessage ? <p className="info-banner">{resetMessage}</p> : null}
+      {workflowState?.proctoring?.terminated && workflowState.proctoring.sessionId === sessionId ? (
+        <p className="error-banner">
+          This interview ended early: you left full screen or switched tabs {workflowState.proctoring.limit} times.
+          The report covers the rounds you finished before that.
+        </p>
+      ) : null}
 
       <section className="pp-card pp-report__hero">
         <div className="pp-ring" style={ringStyle} aria-label={overallPct === null ? "No score yet" : `Overall score ${overallPct} percent`}>

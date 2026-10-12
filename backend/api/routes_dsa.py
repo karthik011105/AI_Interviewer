@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
+from backend.api.routes_proctoring import ensure_interview_open
 from backend.api.quotas import DSA_EXECUTION, quota_dependency
 from backend.database.queries import (
 	append_dsa_submission,
@@ -609,7 +610,9 @@ def _require_parent_session(
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail="No interview session exists for the supplied session_id.",
 		)
-	return ensure_session_access(parent_session, current_user)
+	ensure_session_access(parent_session, current_user)
+	ensure_interview_open(parent_session)
+	return parent_session
 
 
 def _resolve_role_key(parent_session: Mapping[str, Any], requested_role_key: str | None) -> str:

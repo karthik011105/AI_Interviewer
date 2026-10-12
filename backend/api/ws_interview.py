@@ -27,6 +27,7 @@ from backend.api.interview_runtime import (
 	_stop_tts,
 )
 from backend.api.auth import ensure_session_access
+from backend.api.routes_proctoring import ENDED_MESSAGE
 from backend.api.routes_interview import _fetch_round_responses, _total_question_count
 from backend.metrics import interview_ws_sessions_total
 
@@ -59,6 +60,8 @@ async def interview_websocket(
 		current_user = _authenticate_websocket_user(websocket)
 		parent_session = _load_parent_session(session_id)
 		ensure_session_access(parent_session, current_user)
+		if (parent_session.get("proctoring") or {}).get("terminated"):
+			raise WebSocketInterviewError(ENDED_MESSAGE)
 		round_record, questions_json = await asyncio.to_thread(
 			_load_or_create_round_session,
 			session_id=session_id,

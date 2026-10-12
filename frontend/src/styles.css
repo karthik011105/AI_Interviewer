@@ -5974,3 +5974,96 @@ h3 {
 .rm__chip--plain {
 	border-style: dashed;
 }
+
+/* ==========================================================================
+   Full-screen proctoring
+   ========================================================================== */
+
+/* While a round runs: no top bar or step list, the round gets the screen. */
+body.pp-focus-mode .pp-topbar,
+body.pp-focus-mode .pp-sidebar {
+	display: none;
+}
+
+body.pp-focus-mode .pp-body {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.proctor {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 14px;
+	max-width: 620px !important;
+	margin-top: 48px !important;
+	padding: 32px;
+}
+
+.proctor > svg {
+	color: var(--accent);
+}
+
+.proctor h2 {
+	margin: 0;
+	font-size: 1.5rem;
+}
+
+.proctor p {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.55;
+}
+
+.proctor__rules {
+	margin: 0;
+	padding-left: 20px;
+	color: var(--text);
+	line-height: 1.7;
+}
+
+.proctor__used {
+	color: var(--warning) !important;
+	font-weight: 600;
+}
+
+.proctor--ended > svg {
+	color: var(--danger);
+}
+
+.proctor-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	display: grid;
+	place-items: center;
+	padding: 16px;
+	background: var(--bg);
+}
+
+.proctor-overlay__card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	max-width: 440px;
+	padding: 32px;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: var(--surface);
+	text-align: center;
+}
+
+.proctor-overlay__card > svg {
+	color: var(--warning);
+}
+
+.proctor-overlay__card h2 {
+	margin: 0;
+	font-size: 1.4rem;
+}
+
+.proctor-overlay__card p {
+	margin: 0;
+	color: var(--muted);
+	line-height: 1.55;
+}
