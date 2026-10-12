@@ -1952,3 +1952,62 @@
 	-webkit-background-clip: text;
 	background-clip: text;
 }
+
+/* ==========================================================================
+   Brand v3: flat mark + set wordmark (supersedes earlier brand rules)
+   No gradients, glows or sparkles - one ink, one accent.
+   ========================================================================== */
+.brand-logo {
+	gap: 9px;
+}
+
+.brand-logo .brand-mark {
+	color: #5b3fd6;
+	filter: none;
+}
+
+:root[data-theme="dark"] .brand-logo .brand-mark {
+	color: #9b87ff;
+}
+
+.brand-logo svg {
+	filter: none;
+}
+
+.brand-logo .brand-logo__name {
+	font-family: "Work Sans", "Segoe UI", sans-serif;
+	font-weight: 700;
+	font-size: 1.3rem;
+	letter-spacing: -0.035em;
+	color: #14121f;
+	-webkit-text-fill-color: currentColor;
+}
+
+:root[data-theme="dark"] .brand-logo .brand-logo__name {
+	color: #f4f3fa;
+}
+
+.brand-logo .brand-logo__name .brand-logo__forge,
+:root[data-theme="dark"] .brand-logo .brand-logo__name .brand-logo__forge {
+	background: none;
+	-webkit-text-fill-color: currentColor;
+	color: #5b3fd6;
+	font-weight: 500;
+}
+
+:root[data-theme="dark"] .brand-logo .brand-logo__name .brand-logo__forge {
+	color: #9b87ff;
+}
+
+.brand-logo__caption {
+	margin-top: 2px;
+	font-size: 0.56rem;
+	font-weight: 600;
+	letter-spacing: 0.07em;
+}
+
+/* The sign-in panel is always dark. */
+.auth-modal__visual .brand-logo .brand-mark,
+.auth-modal__visual .brand-logo .brand-logo__name .brand-logo__forge {
+	color: #b3a4ff;
+}

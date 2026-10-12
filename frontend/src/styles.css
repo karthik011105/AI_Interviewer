@@ -5359,3 +5359,24 @@ h3 {
 		white-space: normal;
 	}
 }
+
+/* Avatar: muted solid tint + initial, no gradient. */
+.pp-avatar {
+	--avatar-hue: 250;
+	background: hsl(var(--avatar-hue) 45% 88%);
+	color: hsl(var(--avatar-hue) 45% 28%);
+	border: 1px solid hsl(var(--avatar-hue) 35% 78%);
+	font-size: 0.95rem;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+:root[data-theme="dark"] .pp-avatar {
+	background: hsl(var(--avatar-hue) 25% 22%);
+	color: hsl(var(--avatar-hue) 55% 82%);
+	border-color: hsl(var(--avatar-hue) 20% 32%);
+}
+
+.pp-avatar:hover {
+	filter: brightness(0.97);
+}

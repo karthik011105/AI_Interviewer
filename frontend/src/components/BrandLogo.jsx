@@ -1,40 +1,17 @@
-import { useId } from "react";
-
 /**
- * PrepForge mark: a figure (head + sweeping body) reaching up toward a star,
- * in a deep-to-light blue sweep. `useId` keeps gradient ids unique when the
- * logo appears more than once on a page.
+ * PrepForge mark: a "P" whose bowl is a speech bubble and whose stem ends in
+ * the bubble's tail - interview conversation and the brand initial in one
+ * flat shape. Deliberately one colour, no gradient or glow, so it holds up at
+ * 16px, in a single ink and on a business card.
  */
-export function BrandMark({ size = 34 }) {
-	const id = useId().replace(/:/g, "");
+export function BrandMark({ size = 34, className = "" }) {
 	return (
-		<svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
-			<defs>
-				<linearGradient id={`body-${id}`} x1="0.1" y1="1" x2="0.9" y2="0">
-					<stop offset="0" stopColor="#1d4ed8" />
-					<stop offset="0.6" stopColor="#2f7cf6" />
-					<stop offset="1" stopColor="#5fb3ff" />
-				</linearGradient>
-				<linearGradient id={`trail-${id}`} x1="0" y1="1" x2="1" y2="0">
-					<stop offset="0" stopColor="#3b82f6" stopOpacity="0.35" />
-					<stop offset="1" stopColor="#7cc4ff" stopOpacity="0.9" />
-				</linearGradient>
-				<radialGradient id={`head-${id}`} cx="0.35" cy="0.35" r="0.75">
-					<stop offset="0" stopColor="#5aa9ff" />
-					<stop offset="1" stopColor="#1d5fe0" />
-				</radialGradient>
-			</defs>
-			{/* Lower sweep: a separate, lighter crescent under the body */}
-			<path d="M4 37 C 8 30.5, 15 27.5, 23.5 28 C 15.5 30.5, 9.5 34.5, 6.5 41 C 5.5 40, 4.5 38.5, 4 37 Z" fill={`url(#trail-${id})`} />
-			{/* Body: a thick swoosh from the lower left rising to the raised arm */}
+		<svg className={`brand-mark ${className}`} width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
 			<path
-				d="M8 46 C 10 34, 17.5 26, 28.5 23.5 C 34.5 22, 38.5 18.5, 41.5 12.5 C 42 22, 37 30.5, 28 33.5 C 20 36.5, 13 40.5, 8 46 Z"
-				fill={`url(#body-${id})`}
+				fillRule="evenodd"
+				d="M11 7.5C11 6.67 11.67 6 12.5 6H27C35.28 6 42 12.72 42 21C42 29.28 35.28 36 27 36H22V41.2C22 42.4 20.6 43.07 19.67 42.32L11.56 35.83C11.2 35.55 11 35.12 11 34.66V7.5ZM22 15V27H26.5C29.81 27 32.5 24.31 32.5 21C32.5 17.69 29.81 15 26.5 15H22Z"
+				fill="currentColor"
 			/>
-			{/* Head */}
-			<circle cx="26" cy="14" r="7" fill={`url(#head-${id})`} />
-			{/* Star */}
-			<path d="M42.5 2.5 L44 6.8 L48 8.2 L44 9.6 L42.5 14 L41 9.6 L37 8.2 L41 6.8 Z" fill="#2f7cf6" />
 		</svg>
 	);
 }
@@ -45,7 +22,9 @@ export default function BrandLogo({ size = 34, showName = true, caption = "", cl
 			<BrandMark size={size} />
 			{showName ? (
 				<span className="brand-logo__text">
-					<span className="brand-logo__name">Prep<span className="brand-logo__forge">Forge</span></span>
+					<span className="brand-logo__name">
+						prep<span className="brand-logo__forge">forge</span>
+					</span>
 					{caption ? <span className="brand-logo__caption">{caption}</span> : null}
 				</span>
 			) : null}

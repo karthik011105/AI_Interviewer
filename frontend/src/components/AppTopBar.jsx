@@ -24,6 +24,9 @@ export default function AppTopBar({ theme, onToggleTheme, user, onSignOut }) {
 	const menuRef = useRef(null);
 	const email = String(user?.email || "");
 	const initial = (email.trim()[0] || "?").toUpperCase();
+	// A calm, consistent tint per person (the same email always gets the same
+	// hue) instead of a glowing gradient - the way Notion or Linear do it.
+	const hue = [...email.toLowerCase()].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
 
 	useEffect(() => {
 		if (!menuOpen) return undefined;
@@ -61,6 +64,7 @@ export default function AppTopBar({ theme, onToggleTheme, user, onSignOut }) {
 					<button
 						type="button"
 						className="pp-avatar"
+						style={{ "--avatar-hue": hue }}
 						onClick={() => setMenuOpen((open) => !open)}
 						aria-haspopup="menu"
 						aria-expanded={menuOpen}
