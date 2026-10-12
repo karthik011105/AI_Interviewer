@@ -33,6 +33,7 @@ from backend.database.queries import (
 from backend.database.db_errors import DatabaseClientError
 from backend.nlp.interview_context import build_interview_round_contexts
 from backend.nlp.resume_parser import (
+	NotAResumeError,
 	ResumeEncryptedPdfError,
 	ResumeExtractionError,
 	ResumeLlmError,
@@ -273,7 +274,7 @@ def _parse_resume_request(
 				pdf_path=pdf_path,
 				extractor=extractor,
 			)
-	except (ConfigurationError, ResumeEncryptedPdfError, ResumeExtractionError, ResumeSchemaError, ResumeLlmError) as exc:
+	except (ConfigurationError, ResumeEncryptedPdfError, ResumeExtractionError, ResumeSchemaError, ResumeLlmError, NotAResumeError) as exc:
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail=str(exc),

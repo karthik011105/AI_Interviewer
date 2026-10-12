@@ -12,6 +12,7 @@ from typing import Any
 
 from backend.config import AppSettings, ConfigurationError, GroqSettings, get_settings
 from backend.database.queries import save_resume_data
+from backend.nlp.resume_detector import check_resume
 from backend.nlp.groq_client import GroqCompletionError, GroqDependencyError, create_chat_completion
 from backend.nlp.ner_extractor import extract_entities, validate_skills
 
@@ -45,6 +46,11 @@ class ResumeSchemaError(ResumeParserError):
 
 class ResumeLlmError(ResumeParserError):
 	"""Raised when the structured resume extraction call fails."""
+
+
+class NotAResumeError(ResumeParserError):
+	"""Raised when the PDF reads fine but is not a resume (a job posting,
+	notes, a marksheet...)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,6 +510,13 @@ class ResumeParser:
 		extractor: StructuredResumeExtractor | None = None,
 	) -> ResumeParseResult:
 		raw_text = self.extract_text(pdf_path)
+		# Checked before the LLM call: a wrong file should fail fast and free.
+		if not check_resume(raw_text).is_resume:
+			raise NotAResumeError(
+				"This doesn't look like a resume. Upload your own resume as a PDF - "
+				"it should have your contact details and sections such as Education, "
+				"Projects and Skills."
+			)
 		parsed_resume = self.parse_structured_resume(
 			session_id=session_id,
 			raw_text=raw_text,
