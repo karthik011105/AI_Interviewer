@@ -61,6 +61,7 @@ export default function AuthDialog({
 	const [googleError, setGoogleError] = useState("");
 	const [slide, setSlide] = useState(0);
 	const firstFieldRef = useRef(null);
+	const dialogRef = useRef(null);
 
 	const busy = authState?.busyAction && authState.busyAction !== "idle";
 	const copy = COPY[mode] || COPY.signin;
@@ -68,7 +69,13 @@ export default function AuthDialog({
 	useEffect(() => {
 		if (!open) return undefined;
 		setGoogleError("");
-		const focusTimer = setTimeout(() => firstFieldRef.current?.focus(), 40);
+		// Focus the first field - unless the user (or a password manager) has
+		// already put focus in another field. Stealing it sent typed email
+		// addresses into "First name", leaving Email empty and the form
+		// silently blocked by the browser's required-field check.
+		const focusTimer = setTimeout(() => {
+			if (!dialogRef.current?.contains(document.activeElement)) firstFieldRef.current?.focus();
+		}, 40);
 		function onKey(event) {
 			if (event.key === "Escape") onClose();
 		}
@@ -103,7 +110,7 @@ export default function AuthDialog({
 				if (event.target === event.currentTarget) onClose();
 			}}
 		>
-			<div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+			<div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" ref={dialogRef}>
 				<aside className="auth-modal__visual" aria-hidden="true">
 					<ParticleField theme="dark" contained density={1.4} />
 					<div className="auth-modal__visual-top">

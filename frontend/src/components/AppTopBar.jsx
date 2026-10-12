@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { Check, LogOut, Moon, Sun } from "lucide-react";
+import { LogOut, Moon, Sun } from "lucide-react";
 
 import BrandLogo from "./BrandLogo";
 
@@ -19,7 +19,7 @@ const SHORT_LABELS = {
  * toggle and an account menu. Replaces the old sidebar + "current stage"
  * toolbar, which repeated the same status three times over.
  */
-export default function AppTopBar({ steps, theme, onToggleTheme, user, onSignOut }) {
+export default function AppTopBar({ theme, onToggleTheme, user, onSignOut }) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const menuRef = useRef(null);
 	const email = String(user?.email || "");
@@ -47,20 +47,6 @@ export default function AppTopBar({ steps, theme, onToggleTheme, user, onSignOut
 				<BrandLogo size={34} />
 			</NavLink>
 
-			<nav className="pp-steps" aria-label="Interview steps">
-				<ol>
-					{steps.map(({ page, index, routeState }) => (
-						<li key={page.key} className={`pp-step pp-step--${routeState}`}>
-							<NavLink to={page.path} className="pp-step__link" aria-current={routeState === "active" ? "step" : undefined}>
-								<span className="pp-step__dot">
-									{routeState === "complete" ? <Check size={13} strokeWidth={3} /> : index + 1}
-								</span>
-								<span className="pp-step__label">{SHORT_LABELS[page.key] || page.label}</span>
-							</NavLink>
-						</li>
-					))}
-				</ol>
-			</nav>
 
 			<div className="pp-topbar__actions">
 				<button

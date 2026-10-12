@@ -5,6 +5,7 @@ import { Moon, Sun } from "lucide-react";
 import AuthPanel from "./components/AuthPanel";
 import LandingPage from "./pages/LandingPage";
 import AppTopBar from "./components/AppTopBar";
+import AppSidebar from "./components/AppSidebar";
 import PlatformWatermark from "./components/PlatformWatermark";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
@@ -888,12 +889,13 @@ export default function App() {
 		<div className="app-shell pp-app">
 			<PlatformWatermark />
 			<AppTopBar
-				steps={workflowItems}
 				theme={theme}
 				onToggleTheme={toggleTheme}
 				user={authState.user}
 				onSignOut={handleSignOut}
 			/>
+			<div className="pp-body">
+			<AppSidebar steps={workflowItems} />
 			<main className="app-content pp-main">
 					<Routes>
 						<Route path="/" element={<Navigate to={APP_PAGES[0].path} replace />} />
@@ -935,6 +937,7 @@ export default function App() {
 						<Route path="*" element={<Navigate to={APP_PAGES[0].path} replace />} />
 					</Routes>
 			</main>
+			</div>
 		</div>
 	);
 }
