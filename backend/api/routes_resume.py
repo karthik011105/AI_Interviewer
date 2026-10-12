@@ -39,7 +39,7 @@ from backend.nlp.resume_parser import (
 	ResumeSchemaError,
 )
 from backend.nlp.role_matcher import match_and_store_roles, rank_roles, serialize_role_match_result
-from backend.nlp.resume_quality_scorer import score_resume_as_dict
+from backend.nlp.resume_quality_scorer import score_resume_as_dict, score_role_match_as_dict
 
 router = APIRouter(prefix="/resume", tags=["resume"])
 _LOGGER = logging.getLogger(__name__)
@@ -339,15 +339,11 @@ def _parse_resume_request(
 
 	# Resume Quality Score — local NLP, no API calls. Safe to always compute.
 	try:
-		role_key_for_scoring = (
-			request.role_selected
-			or (selected_role_match or {}).get("role_key")
-			or "software_engineer"
-		)
+		# General quality only: no role has been chosen yet at upload time.
+		# The role match is computed by /resume/select-role.
 		response["resume_quality"] = score_resume_as_dict(
 			parsed_resume=parse_result.parsed_resume,
 			raw_text=parse_result.raw_text,
-			role_key=str(role_key_for_scoring),
 		)
 	except Exception:
 		response["resume_quality"] = None
@@ -464,9 +460,23 @@ def select_role(
 			detail=str(exc),
 		) from exc
 
+	# The role-specific keyword match (Jobscan-style), now that there is a role
+	# to match against. Best-effort: a scoring failure must not block selection.
+	try:
+		role_match = score_role_match_as_dict(
+			parsed_resume,
+			str(resume_record.get("raw_text") or ""),
+			role_key,
+			selected_role_match["title"],
+		)
+	except Exception:
+		_LOGGER.warning("Role match scoring failed for %s.", role_key, exc_info=True)
+		role_match = None
+
 	return {
 		"session_id": request.session_id,
 		"selected_role": selected_role_match,
+		"role_match": role_match,
 		"interview_contexts": round_contexts,
 		"persisted_interview_contexts": True,
 		"role_selection_required": False,

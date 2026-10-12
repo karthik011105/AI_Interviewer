@@ -5894,3 +5894,73 @@ h3 {
 		opacity: 0.5;
 	}
 }
+
+/* Role match card */
+.rm {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.rm__head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 18px;
+}
+
+.rm__head h2 {
+	margin: 0;
+	font-size: 1.1rem;
+}
+
+.rm__head div p {
+	margin: 4px 0 0;
+	color: var(--muted);
+	line-height: 1.5;
+}
+
+.rm__pct {
+	flex: none;
+	margin: 0;
+	font-family: "Fraunces", Georgia, serif;
+	font-size: 2.6rem;
+	font-weight: 600;
+	line-height: 1;
+}
+
+.rm__pct span {
+	font-size: 1.1rem;
+	color: var(--muted);
+}
+
+.rm__pct--ok { color: var(--success); }
+.rm__pct--mid { color: var(--warning); }
+.rm__pct--low { color: var(--danger); }
+
+.rm__group h3 {
+	margin: 0 0 8px;
+	color: var(--muted);
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+.rm__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.rm__chip {
+	padding: 4px 10px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--muted);
+	font-size: 0.84rem;
+}
+
+.rm__chip--have {
+	border-color: color-mix(in srgb, var(--success) 40%, transparent);
+	background: var(--success-bg);
+	color: var(--success);
+}

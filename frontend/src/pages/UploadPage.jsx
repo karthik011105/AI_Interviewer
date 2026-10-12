@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { FileText, UploadCloud, X } from "lucide-react";
 
 import ResumeScoreCard from "../components/ResumeScoreCard";
+import RoleMatchCard from "../components/RoleMatchCard";
 import { buildApiHeaders } from "../lib/api";
 import { roleRequiresDsa } from "../lib/roleFlow";
 
@@ -578,6 +579,8 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
           </div>
         </section>
       ) : null}
+
+      {selectedRoleKey && parsed ? <RoleMatchCard match={selectionResult?.role_match} /> : null}
 
       {selectedRoleKey && parsed ? (
         <div className="pp-continue" role="status">

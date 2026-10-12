@@ -17,12 +17,12 @@ function verdictFor(score, fixCount) {
 export default function ResumeScoreCard({ score }) {
 	if (!score) return null;
 
-	const { action_verbs, quantification, keyword_density, section_completeness } = score;
+	const { action_verbs, quantification, section_completeness, style } = score;
 	const overall = Math.round(score.overall_score ?? 0);
 
 	const items = [
 		{ key: "numbers", label: "Numbers and impact", pct: quantification?.score, tip: quantification?.tip },
-		{ key: "keywords", label: "Role keywords", pct: keyword_density?.score, tip: keyword_density?.tip },
+		{ key: "style", label: "Clarity and style", pct: style?.score, tip: style?.tip },
 		{ key: "verbs", label: "Action verbs", pct: action_verbs?.score, tip: action_verbs?.tip },
 		{ key: "sections", label: "Sections", pct: section_completeness?.score, tip: section_completeness?.tip },
 	]
@@ -32,12 +32,10 @@ export default function ResumeScoreCard({ score }) {
 	const fixCount = items.filter((item) => item.pct < FIX_BELOW).length;
 
 	const facts = [
-		keyword_density?.keywords_total != null
-			? `${keyword_density.keywords_matched ?? 0} of ${keyword_density.keywords_total} role keywords`
-			: null,
+		style?.word_count != null ? `${style.word_count} words` : null,
 		action_verbs?.strong_count != null ? `${action_verbs.strong_count} strong verbs` : null,
 		quantification?.quantified_bullets != null
-			? `${quantification.quantified_bullets} ${quantification.quantified_bullets === 1 ? "bullet" : "bullets"} with numbers`
+			? `${quantification.quantified_bullets} ${quantification.quantified_bullets === 1 ? "line" : "lines"} with numbers`
 			: null,
 	].filter(Boolean);
 
