@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { FileText, UploadCloud, X } from "lucide-react";
+
 import ResumeScoreCard from "../components/ResumeScoreCard";
 import { buildApiHeaders } from "../lib/api";
 import { roleRequiresDsa } from "../lib/roleFlow";
@@ -342,6 +344,20 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     setInfoMessage(`${file.name} ready.`);
   }
 
+  function pickFile(file) {
+    if (!file) return;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    if (!isPdf) {
+      setErrorMessage("That file isn't a PDF. Please upload your resume as a PDF.");
+      return;
+    }
+    if (file.size > MAX_RESUME_BYTES) {
+      setErrorMessage(`That file is ${formatBytes(file.size)}. The limit is ${formatBytes(MAX_RESUME_BYTES)}.`);
+      return;
+    }
+    handleFileSelection(file);
+  }
+
   function handleDrop(event) {
     event.preventDefault();
     setDragActive(false);
@@ -399,34 +415,79 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
           parseResume();
         }}
       >
-        <label
-          className={`pp-drop ${dragActive ? "pp-drop--active" : ""} ${resumeFile ? "pp-drop--ready" : ""}`}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setDragActive(true);
-          }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={(event) => {
-            event.preventDefault();
-            setDragActive(false);
-          }}
-          onDrop={handleDrop}
-        >
-          <input
-            type="file"
-            accept="application/pdf"
-            onChange={(event) => handleFileSelection(event.target.files?.[0] ?? null)}
-          />
-          <span className="pp-drop__icon" aria-hidden="true">PDF</span>
-          <span className="pp-drop__text">
-            <strong>{resumeFile ? resumeFileLabel : "Drop your resume here, or click to browse"}</strong>
-            <small>{resumeFile ? "Click to choose a different file" : "PDF only"}</small>
-          </span>
-        </label>
+        {resumeFile ? (
+          // File chosen: a file row, like Google Drive / Dropbox.
+          <div className={`pp-file ${busyState === "parsing" ? "pp-file--busy" : ""}`}>
+            <span className="pp-file__icon" aria-hidden="true">
+              <FileText size={22} />
+            </span>
+            <span className="pp-file__meta">
+              <strong title={resumeFile.name}>{resumeFile.name}</strong>
+              <small>
+                {formatBytes(resumeFile.size)}
+                {busyState === "parsing" ? " · Reading…" : parsed ? " · Done" : " · Ready"}
+              </small>
+              {busyState === "parsing" ? <span className="pp-file__progress" aria-hidden="true"><i /></span> : null}
+            </span>
+            <button
+              type="button"
+              className="pp-file__remove"
+              onClick={() => {
+                setResumeFile(null);
+                setErrorMessage("");
+              }}
+              disabled={busyState === "parsing"}
+              aria-label="Remove file"
+              title="Remove file"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        ) : (
+          // Empty: a large drop area with an upload icon and a browse link.
+          <label
+            className={`pp-drop ${dragActive ? "pp-drop--active" : ""}`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              setDragActive(false);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragActive(false);
+              pickFile(event.dataTransfer.files?.[0] ?? null);
+            }}
+          >
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(event) => {
+                pickFile(event.target.files?.[0] ?? null);
+                event.target.value = "";
+              }}
+            />
+            <span className="pp-drop__icon" aria-hidden="true">
+              <UploadCloud size={26} />
+            </span>
+            <strong className="pp-drop__title">
+              {dragActive ? "Drop it here" : "Drag and drop your resume"}
+            </strong>
+            <span className="pp-drop__sub">
+              or <span className="pp-drop__link">browse files</span>
+            </span>
+            <small className="pp-drop__limits">PDF · up to {formatBytes(MAX_RESUME_BYTES)}</small>
+          </label>
+        )}
 
-        <button className="primary-button pp-upload__submit" type="submit" disabled={!canSubmitResume}>
-          {busyState === "parsing" ? "Reading your resume…" : parsed ? "Re-read resume" : "Read my resume"}
-        </button>
+        {resumeFile && !parsed ? (
+          <button className="primary-button pp-upload__submit" type="submit" disabled={!canSubmitResume}>
+            {busyState === "parsing" ? "Reading your resume…" : "Read my resume"}
+          </button>
+        ) : null}
 
         {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
 
@@ -530,6 +591,19 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
       ) : null}
     </div>
   );
+}
+
+// Matches RESUME_MAX_UPLOAD_BYTES' default in backend/config.py, which still
+// enforces it; checking here just reports a wrong file before uploading it.
+const MAX_RESUME_BYTES = 5 * 1024 * 1024;
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) {
+    const mb = value / (1024 * 1024);
+    return `${Number.isInteger(mb) || mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
 }
 
 function selectedRoleTitleFallback(roleOptions, selectedRoleKey) {

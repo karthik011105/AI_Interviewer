@@ -5735,3 +5735,162 @@ h3 {
 	flex: 1;
 	min-height: 64px;
 }
+
+/* ==========================================================================
+   Resume upload: Drive/Dropbox-style drop area + file row
+   ========================================================================== */
+.pp-main .pp-drop {
+	flex-direction: column;
+	justify-content: center;
+	gap: 6px;
+	min-height: 220px;
+	padding: 32px 24px;
+	text-align: center;
+	border: 1.5px dashed var(--border-strong);
+	border-radius: 16px;
+	background: var(--surface-sunken);
+}
+
+.pp-main .pp-drop:hover {
+	border-color: var(--accent);
+	background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface-sunken));
+}
+
+.pp-main .pp-drop--active {
+	border-style: solid;
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	transform: scale(1.005);
+}
+
+.pp-main .pp-drop__icon {
+	width: 56px;
+	height: 56px;
+	margin-bottom: 8px;
+	border-radius: 50%;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	color: var(--accent);
+	font-size: inherit;
+	letter-spacing: 0;
+}
+
+.pp-drop__title {
+	font-size: 1.05rem;
+}
+
+.pp-drop__sub {
+	color: var(--muted);
+}
+
+.pp-drop__link {
+	color: var(--accent);
+	font-weight: 600;
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+
+.pp-drop__limits {
+	margin-top: 10px;
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+
+.pp-file {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 14px 16px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--surface-sunken);
+}
+
+.pp-file__icon {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 10px;
+	background: color-mix(in srgb, #e5484d 14%, transparent);
+	color: #e5484d;
+}
+
+.pp-file__meta {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+}
+
+.pp-file__meta strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pp-file__meta small {
+	color: var(--muted);
+	font-size: 0.84rem;
+}
+
+.pp-file__progress {
+	position: relative;
+	display: block;
+	height: 4px;
+	margin-top: 6px;
+	border-radius: 2px;
+	background: var(--border);
+	overflow: hidden;
+}
+
+.pp-file__progress i {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 35%;
+	border-radius: 2px;
+	background: var(--accent);
+	animation: pp-file-progress 1.2s ease-in-out infinite;
+}
+
+@keyframes pp-file-progress {
+	from { left: -35%; }
+	to { left: 100%; }
+}
+
+.pp-file__remove {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.pp-file__remove:hover:not(:disabled) {
+	background: var(--surface);
+	color: var(--text);
+}
+
+.pp-file__remove:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pp-file__progress i {
+		animation: none;
+		left: 0;
+		width: 100%;
+		opacity: 0.5;
+	}
+}
