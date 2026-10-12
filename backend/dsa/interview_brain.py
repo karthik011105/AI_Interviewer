@@ -250,7 +250,7 @@ def apply_submission_intelligence(
 			coaching_note = _problem_hint(problem, hint_level) or "The code passes, but it still looks brute-force. Use one optimization pass before the debrief."
 		else:
 			next_stage = DSAStage.DEBRIEF.value
-			coaching_note = "Hidden tests passed. Move to the debrief and explain the final approach and complexity."
+			coaching_note = "All tests passed. Add a short note on your approach and its time complexity."
 	else:
 		failed_count = max(total_count - passed_count, 0)
 		next_stage = DSAStage.CODING.value

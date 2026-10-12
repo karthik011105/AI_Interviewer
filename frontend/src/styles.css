@@ -5519,3 +5519,133 @@ h3 {
 		border-right: none;
 	}
 }
+
+/* Coding round: timer pill + compact test results */
+.pp-timer {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	font-size: 0.88rem;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.pp-timer--low {
+	border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+	color: var(--warning);
+}
+
+.pp-timer--over {
+	border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+	color: var(--danger);
+}
+
+.tr {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.tr__head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.tr__head--ok { color: var(--success); }
+.tr__head--fail { color: var(--danger); }
+
+.tr__head h3 {
+	margin: 0;
+	color: var(--text);
+	font-size: 1.02rem;
+}
+
+.tr__head p {
+	margin: 2px 0 0;
+	color: var(--muted);
+	font-size: 0.86rem;
+}
+
+.tr__error {
+	margin: 0;
+	padding: 12px;
+	border-radius: 10px;
+	background: var(--danger-bg);
+	color: var(--danger);
+	font-size: 0.85rem;
+	white-space: pre-wrap;
+	overflow-x: auto;
+}
+
+.tr__list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.tr__case {
+	padding: 10px 0;
+	border-top: 1px solid var(--border);
+}
+
+.tr__case-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 0.92rem;
+}
+
+.tr__mark {
+	width: 18px;
+	font-weight: 700;
+	text-align: center;
+}
+
+.tr__case--ok .tr__mark { color: var(--success); }
+.tr__case--fail .tr__mark { color: var(--danger); }
+
+.tr__out {
+	margin-left: auto;
+	max-width: 60%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--muted);
+	font-size: 0.84rem;
+}
+
+.tr__diff {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+	margin: 10px 0 0 28px;
+}
+
+.tr__diff span {
+	display: block;
+	margin-bottom: 4px;
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 600;
+}
+
+.tr__diff pre {
+	margin: 0;
+	padding: 10px;
+	border-radius: 8px;
+	background: var(--surface-sunken);
+	font-size: 0.84rem;
+	white-space: pre-wrap;
+}
+
+.tr__case-error {
+	grid-column: 1 / -1;
+	margin: 0;
+	color: var(--danger);
+	font-size: 0.86rem;
+}

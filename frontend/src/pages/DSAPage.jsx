@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import CodeEditor from "../components/CodeEditor";
 import TestResults from "../components/TestResults";
-import TimerBar from "../components/TimerBar";
+import TimerPill from "../components/TimerPill";
 import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
@@ -232,7 +232,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
           setDsaSession(null);
           setCodeDraft("");
           setLatestExecution(null);
-          setInfoMessage(`Start question ${currentQuestionNumber} to load the coding workspace.`);
+          setInfoMessage(""); // the start card says what to do
           return;
         }
         if (!response.ok) {
@@ -240,10 +240,10 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
         }
         applyDsaSessionPayload(payload, {
           infoMessage: payload.stage === "complete"
-            ? `Question ${normalizeQuestionNumber(payload.question_number)} finalized.`
+            ? `Question ${normalizeQuestionNumber(payload.question_number)} done.`
             : payload.stage === "debrief"
             ? currentQuestionNumber === TOTAL_DSA_QUESTIONS && hasDebriefMessages(payload)
-              ? "Question 2 debrief saved. DSA round complete."
+              ? "Note saved. Coding round complete."
               : normalizeQuestionNumber(payload.question_number) === 1
               ? "Question 1 hidden tests passed. You can open question 2 now or save the debrief first."
               : `Question ${normalizeQuestionNumber(payload.question_number)} is in debrief. Finish the note to complete the round.`
@@ -290,7 +290,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
     setMessageDraft("");
     setLatestExecution(null);
     setErrorMessage("");
-    setInfoMessage(successMessage || "DSA round reset.");
+    setInfoMessage(successMessage || "Coding round reset.");
     onWorkflowStateChange?.((current) => ({
       ...current,
       ...buildWorkflowResetPatch(current, payload?.cleared_targets),
@@ -342,7 +342,8 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
         throw new Error(resolveErrorMessage(payload, "Could not start the DSA round."));
       }
       applyDsaSessionPayload(payload, {
-        infoMessage: payload.created_dsa_session ? `Question ${questionNumber} loaded.` : `Question ${questionNumber} restored.`,
+        // Loading or restoring a problem needs no message: the problem is on screen.
+        infoMessage: "",
         dsaRoundCompletedOverride: questionNumber === 1 && payload.created_dsa_session ? false : undefined,
       });
     } catch (error) {
@@ -365,7 +366,8 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
       if (!response.ok) {
         throw new Error(resolveErrorMessage(payload, "Could not run the sample tests."));
       }
-      applyDsaSessionPayload(payload, { infoMessage: `Question ${currentQuestionNumber} sample run persisted.` });
+      // The results list below says how the run went.
+      applyDsaSessionPayload(payload, { infoMessage: "" });
     } catch (error) {
       setErrorMessage(error.message);
     } finally {
@@ -389,11 +391,11 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
       const coachingMessage = payload.coach_message || payload.coaching_note;
       applyDsaSessionPayload(payload, {
         infoMessage: payload.next_stage === "optimization"
-          ? coachingMessage || `Question ${currentQuestionNumber} passed hidden tests, but the solution still looks brute-force. Use the optimization pass before debrief.`
+          ? coachingMessage || `All tests passed, but this looks like a brute-force solution. Try a faster approach before moving on.`
           : payload.next_stage === "complete"
           ? currentQuestionNumber === TOTAL_DSA_QUESTIONS
-            ? "Question 2 passed hidden tests. DSA round complete."
-            : `Question ${currentQuestionNumber} finalized.`
+            ? "All tests passed. Coding round complete."
+            : `Question ${currentQuestionNumber} done.`
           : payload.next_stage === "debrief"
           ? coachingMessage || (currentQuestionNumber === 1
             ? "Question 1 passed hidden tests. You can open question 2 now or save the debrief first."
@@ -431,8 +433,8 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
       applyDsaSessionPayload(payload, {
         infoMessage: payload.message_channel === "debrief"
           ? currentQuestionNumber === TOTAL_DSA_QUESTIONS
-            ? "DSA round complete. Project Discussion is unlocked."
-            : "Debrief saved. Load question 2 when you are ready."
+            ? "Coding round complete. Projects is next."
+            : "Note saved. Question 2 is ready when you are."
           : coachingMessage || `Question ${currentQuestionNumber} note saved.`,
         dsaRoundCompletedOverride: savedDebrief && currentQuestionNumber === TOTAL_DSA_QUESTIONS,
       });
@@ -558,16 +560,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
             );
           })}
         </div>
-        {showTimer ? (
-          <div className="pp-dsa__timer">
-            <TimerBar
-              deadlineAt={dsaSession?.deadline_at}
-              stageStartedAt={questionStartedAt}
-              stageLabel={`${questionLabel} timer`}
-              inactiveLabel="Stopped"
-            />
-          </div>
-        ) : null}
+        {showTimer ? <TimerPill deadlineAt={dsaSession?.deadline_at} /> : null}
         <div className="pp-dsa__reset">{resetControl}</div>
       </div>
 
@@ -621,7 +614,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
           <CodeEditor
             value={codeDraft}
             onChange={handleCodeChange}
-            statusLabel={busyState === "idle" ? "Code editor" : busyState}
+            statusLabel={busyState === "running" ? "Running…" : busyState === "submitting" ? "Submitting…" : ""}
             fileName={currentLanguageMeta?.file_name || "solve.py"}
             languageKey={selectedLanguage}
             languageLabel={currentLanguageMeta?.label || "Python 3"}
@@ -665,7 +658,7 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
             ) : null}
           </div>
           {infoMessage ? <p className="pp-dsa__status">{infoMessage}</p> : null}
-          <TestResults executionResults={latestExecution || dsaSession?.execution_results} title="Test results" />
+          <TestResults executionResults={latestExecution || dsaSession?.execution_results} />
         </section>
       </section>
     </div>
