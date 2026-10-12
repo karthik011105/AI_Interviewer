@@ -561,7 +561,14 @@ def warmup_semantic_encoder() -> bool:
 	nothing about local development or CI changes.
 	"""
 
-	if get_semantic_encoder() is not None:
+	encoder = get_semantic_encoder()
+	if encoder is not None:
+		# Loading is not enough: the first encode() after a load ran ~10x
+		# slower (4.8 s for one batch) and landed on the first resume upload.
+		try:
+			encoder.encode(["warm up"])
+		except Exception:
+			_LOGGER.warning("Semantic encoder warm-up encode failed.", exc_info=True)
 		return True
 
 	if semantic_encoder_required():

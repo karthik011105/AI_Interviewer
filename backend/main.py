@@ -37,6 +37,7 @@ from backend.api.routes_workflow import router as workflow_router
 from backend.api.routes_voice import router as voice_router
 from backend.api.ws_interview import router as ws_interview_router
 from backend.nlp.role_matcher import get_semantic_backend_status, warmup_semantic_encoder
+from backend.nlp.skill_extractor import warmup_skill_extractor
 from backend.research_assets import get_research_asset_summary, warmup_research_asset_registry
 from backend.voice.stt import warmup_stt
 
@@ -264,6 +265,7 @@ def create_app() -> FastAPI:
 	# native extensions (pyarrow/datasets) while asyncio's loop is already
 	# running triggers an intermittent access violation on Windows.
 	warmup_semantic_encoder()
+	warmup_skill_extractor()
 	warmup_research_asset_registry()
 
 	# Say it out loud if the throttles are per-process while more than one

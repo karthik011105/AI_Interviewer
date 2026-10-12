@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from functools import lru_cache
 from typing import Any
 
@@ -33,8 +34,18 @@ def _disabled() -> bool:
 	return os.getenv("DISABLE_SKILL_EXTRACTOR", "").strip().lower() in {"1", "true", "yes"}
 
 
+# lru_cache does not stop two threads (the post-upload prewarm and a quick
+# role selection) from loading the 431 MB model at the same time.
+_LOAD_LOCK = threading.Lock()
+
+
 @lru_cache(maxsize=1)
 def _load_pipeline() -> Any | None:
+	with _LOAD_LOCK:
+		return _load_pipeline_unlocked()
+
+
+def _load_pipeline_unlocked() -> Any | None:
 	if _disabled():
 		return None
 	try:
@@ -50,6 +61,20 @@ def _load_pipeline() -> Any | None:
 
 def skill_extractor_available() -> bool:
 	return _load_pipeline() is not None
+
+
+def warmup_skill_extractor() -> bool:
+	"""Load the model and run it once at startup. The first inference after a
+	load is several times slower than later ones, and without this the first
+	user to choose a role pays for both."""
+	nlp = _load_pipeline()
+	if nlp is None:
+		return False
+	try:
+		nlp("Python and Docker")
+	except Exception:
+		_LOGGER.warning("Skill extractor warm-up failed.", exc_info=True)
+	return True
 
 
 def _chunks(text: str) -> list[str]:
