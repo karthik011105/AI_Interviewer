@@ -243,3 +243,12 @@ describe("currentQuestionIndex", () => {
 		assert.equal(currentQuestionIndex(INITIAL_STATE), null);
 	});
 });
+
+describe("interviewer voice unavailable", () => {
+	it("is a calm notice, not an error, and keeps voice answers on", () => {
+		const state = reduce(INITIAL_STATE, frame({ type: "error", code: "tts_failed", message: "Maya's voice isn't available right now." }));
+		assert.equal(state.ui.error, "");
+		assert.match(state.ui.info, /voice isn't available/);
+		assert.equal(state.input.mode, INITIAL_STATE.input.mode);
+	});
+});

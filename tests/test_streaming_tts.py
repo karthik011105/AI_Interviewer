@@ -121,6 +121,8 @@ class SpeakStreamTests(TestCase):
 		errors = [item for item in runtime.sent if item["type"] == "error"]
 		self.assertEqual(len(errors), 1)
 		self.assertEqual(errors[0]["code"], "tts_failed")
+		# A plain sentence for the candidate, not the provider's raw error.
+		self.assertIn("Maya's voice isn't available", errors[0]["message"])
 		self.assertNotIn("tts_start", runtime.types())
 
 	def test_empty_audio_is_not_sent(self) -> None:

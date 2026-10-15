@@ -579,8 +579,18 @@ async def speak_stream(runtime: InterviewRuntime, text_chunks: AsyncIterator[str
 			# failure after audio has started is left as truncated speech
 			# instead: partial audio beats an error banner.
 			with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
+				# The provider detail (e.g. "ElevenLabs request failed with
+				# 402: {...}") is already in the server log; the candidate
+				# gets a sentence they can act on.
 				await runtime.send_json(
-					{"type": "error", "code": "tts_failed", "message": str(synth_error)}
+					{
+						"type": "error",
+						"code": "tts_failed",
+						"message": (
+							"Maya's voice isn't available right now. The questions will "
+							"appear as text, and you can answer as usual."
+						),
+					}
 				)
 
 		runtime.tts_task = None

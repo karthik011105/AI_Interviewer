@@ -62,4 +62,4 @@ vaderSentiment==3.3.2
 
 # Voice
 faster-whisper==1.2.1
-edge-tts>=6.1.12
+edge-tts>=7.3.1  # older releases get HTTP 403 from the Edge speech service

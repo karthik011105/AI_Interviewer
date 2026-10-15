@@ -259,6 +259,11 @@ export function interviewReducer(state, action) {
 			// These mean the microphone path is unusable; fall back to typing
 			// rather than leaving the candidate talking to nothing.
 			const forcesTyped = code === "stt_unavailable" || code === "stt_failed";
+			// No voice is not a failure of the interview: the question text is on
+			// screen and the round carries on, so say so calmly.
+			if (code === "tts_failed") {
+				return { ...state, ui: { ...state.ui, info: message || "The interviewer voice is unavailable; questions appear as text." } };
+			}
 			return {
 				...state,
 				input: forcesTyped ? { ...state.input, mode: "typed" } : state.input,
