@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -14,7 +15,8 @@ _USER = routes_report.AuthenticatedUser(user_id="u1", email="c@example.com", raw
 
 
 def _text(pdf: bytes) -> str:
-	return "\n".join(page.get_text() for page in fitz.open("pdf", pdf))
+	# NFKC folds the font's "fi" ligature back into two letters.
+	return unicodedata.normalize("NFKC", "\n".join(page.get_text() for page in fitz.open("pdf", pdf)))
 
 
 class LayoutTests(TestCase):
@@ -43,6 +45,10 @@ class LayoutTests(TestCase):
 		self.assertTrue(all(p >= 0 for p in positions), dict(zip(order, positions)))
 		self.assertEqual(positions, sorted(positions))
 		self.assertIn("ended early", text)
+
+	def test_finishing_early_is_noted(self) -> None:
+		text = _text(build_report_pdf({"rounds": [], "finished_early": True, "finished_round": "Technical"}))
+		self.assertIn("finished the interview early during the Technical round", text)
 
 	def test_text_is_escaped_not_interpreted(self) -> None:
 		pdf = build_report_pdf({"candidate": {"name": "<b>Eve</b> & co"}, "rounds": []})

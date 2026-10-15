@@ -133,6 +133,12 @@ def _render_html(data: dict[str, Any]) -> str:
 			f'<p class="note">This interview was ended early: the candidate left full screen or switched '
 			f'tabs {_e(data.get("warning_limit") or 3)} times.</p>'
 		)
+	elif data.get("finished_early"):
+		during = f" during the {_e(data['finished_round'])} round" if data.get("finished_round") else ""
+		parts.append(
+			f'<p class="muted"><b>The candidate finished the interview early{during}.</b> '
+			"Rounds not taken are left out of the overall score.</p>"
+		)
 
 	# 3. Scores at a glance
 	parts.append("<h2>Scores at a glance</h2>")

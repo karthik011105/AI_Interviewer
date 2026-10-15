@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Maximize, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Maximize, ShieldAlert } from "lucide-react";
 
 import { buildApiHeaders } from "../lib/api";
 import { normalizeProctoring, warningCopy } from "../lib/proctoring";
@@ -38,6 +38,9 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 	const [started, setStarted] = useState(isFullscreen);
 	const [warning, setWarning] = useState(null);
 	const [enterFailed, setEnterFailed] = useState(false);
+	const [confirmFinish, setConfirmFinish] = useState(false);
+	const [finishing, setFinishing] = useState(false);
+	const [finishError, setFinishError] = useState("");
 	// True while a warning is being recorded, so one tab switch (which fires
 	// fullscreenchange, visibilitychange and blur together) counts once.
 	const recording = useRef(false);
@@ -46,6 +49,8 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 	stateRef.current = state;
 	const blurTimer = useRef(null);
 	const base = String(apiBaseUrl || "").replace(/\/+$/, "");
+
+	const ended = state.terminated || state.finished;
 
 	const publish = useCallback(
 		(next) => {
@@ -99,7 +104,7 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 
 	// Watch while the round is running with no warning up.
 	useEffect(() => {
-		if (!started || warning || state.terminated) return undefined;
+		if (!started || warning || ended || confirmFinish) return undefined;
 		graceUntil.current = Date.now() + RESUME_GRACE_MS;
 		// Never let the round run outside full screen without a warning, even if
 		// the exit event was missed.
@@ -127,14 +132,14 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 			window.removeEventListener("blur", onBlur);
 			window.removeEventListener("focus", onFocus);
 		};
-	}, [started, warning, state.terminated, report]);
+	}, [started, warning, ended, confirmFinish, report]);
 
 	// Distraction-free layout (no top bar / sidebar) while the round runs.
 	useEffect(() => {
-		const active = started && !state.terminated;
+		const active = started && !ended;
 		document.body.classList.toggle("pp-focus-mode", active);
 		return () => document.body.classList.remove("pp-focus-mode");
-	}, [started, state.terminated]);
+	}, [started, ended]);
 
 	async function goFullscreen() {
 		setEnterFailed(false);
@@ -144,6 +149,41 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 		} else {
 			setEnterFailed(true);
 		}
+	}
+
+	async function finishInterview() {
+		setFinishing(true);
+		setFinishError("");
+		// No warnings while we leave full screen on purpose.
+		recording.current = true;
+		try {
+			const response = await fetch(`${base}/proctoring/finish`, {
+				method: "POST",
+				headers: buildApiHeaders(accessToken, { "Content-Type": "application/json" }),
+				body: JSON.stringify({ session_id: sessionId, round: roundKey }),
+			});
+			if (!response.ok) throw new Error("finish failed");
+			publish(await response.json());
+			if (isFullscreen()) await document.exitFullscreen().catch(() => {});
+			onNavigate?.("report");
+		} catch {
+			recording.current = false;
+			setFinishing(false);
+			setFinishError("Couldn't finish the interview. Check your connection and try again.");
+		}
+	}
+
+	if (state.finished && !state.terminated) {
+		return (
+			<section className="pp-card proctor proctor--finished" role="status">
+				<CheckCircle2 size={28} aria-hidden="true" />
+				<h2>Interview finished</h2>
+				<p>You ended this interview early. Your answers up to that point are saved in your report.</p>
+				<button type="button" className="primary-button" onClick={() => onNavigate?.("report")}>
+					View my report
+				</button>
+			</section>
+		);
 	}
 
 	if (state.terminated) {
@@ -192,7 +232,34 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 
 	return (
 		<>
+			{confirmFinish || warning ? null : (
+				<div className="proctor-bar">
+					<button type="button" className="proctor-bar__finish" onClick={() => setConfirmFinish(true)}>
+						Finish interview
+					</button>
+				</div>
+			)}
 			{children}
+			{confirmFinish ? (
+				<div className="proctor-overlay" role="alertdialog" aria-modal="true" aria-labelledby="proctor-finish-title">
+					<div className="proctor-overlay__card">
+						<h2 id="proctor-finish-title">Finish the interview now?</h2>
+						<p>
+							Rounds you haven't completed will be left out, and your report will cover what you've done so far.
+							You can't come back to this interview afterwards.
+						</p>
+						<div className="proctor-overlay__actions">
+							<button type="button" className="secondary-button" onClick={() => setConfirmFinish(false)} disabled={finishing} autoFocus>
+								Keep going
+							</button>
+							<button type="button" className="primary-button proctor-overlay__danger" onClick={finishInterview} disabled={finishing}>
+								{finishing ? "Finishing…" : "Finish interview"}
+							</button>
+						</div>
+						{finishError ? <p className="error-banner">{finishError}</p> : null}
+					</div>
+				</div>
+			) : null}
 			{warning ? (
 				<div className="proctor-overlay" role="alertdialog" aria-modal="true" aria-labelledby="proctor-warning-title">
 					<div className="proctor-overlay__card">

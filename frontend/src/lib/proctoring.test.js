@@ -21,3 +21,10 @@ test("every interview round is proctored, the resume and report are not", () => 
 	assert.ok(!PROCTORED_ROUNDS.has("upload"));
 	assert.ok(!PROCTORED_ROUNDS.has("report"));
 });
+
+test("finishing early is kept separate from being stopped by warnings", () => {
+	const state = normalizeProctoring({ warnings: 1, finished: true, finished_round: "technical" });
+	assert.equal(state.finished, true);
+	assert.equal(state.terminated, false);
+	assert.equal(state.finishedRound, "technical");
+});

@@ -6134,3 +6134,46 @@ body.pp-focus-mode .pp-watermark {
 	align-items: center;
 	gap: 8px;
 }
+
+/* "Finish interview": always reachable while a round runs in full screen. */
+.proctor-bar {
+	position: fixed;
+	top: 16px;
+	left: 16px;
+	z-index: 60;
+}
+
+.proctor-bar__finish {
+	padding: 8px 14px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface);
+	color: var(--muted);
+	font: inherit;
+	font-size: 0.9rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.proctor-bar__finish:hover,
+.proctor-bar__finish:focus-visible {
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+.proctor-overlay__actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 10px;
+	margin-top: 6px;
+}
+
+.proctor-overlay__danger {
+	background: var(--danger) !important;
+	border-color: var(--danger) !important;
+}
+
+.proctor--finished > svg {
+	color: var(--success);
+}

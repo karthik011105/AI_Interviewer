@@ -1298,6 +1298,7 @@ def _build_pdf_data(
 		next_steps.append(f"Resume: {resume_tip}")
 
 	proctoring = _coerce_mapping(parent_session.get("proctoring"))
+	ended = _coerce_mapping(parent_session.get("interview_ended"))
 	return {
 		"candidate": candidate,
 		"role_title": role_title,
@@ -1308,6 +1309,8 @@ def _build_pdf_data(
 		"resume": resume,
 		"next_steps": next_steps[:5],
 		"ended_early": bool(proctoring.get("terminated")),
+		"finished_early": bool(ended),
+		"finished_round": PDF_ROUND_LABELS.get(str(ended.get("round") or ""), ""),
 	}
 
 

@@ -339,6 +339,15 @@ class MongoRepository:
 			not_found_message="The supplied session_id does not exist.",
 		)
 
+	def mark_interview_finished(self, *, session_id: str, round_name: str) -> dict[str, Any]:
+		"""The candidate chose to end the interview early (Finish interview)."""
+		return self.update_one(
+			"sessions",
+			values={"interview_ended": {"reason": "finished", "round": round_name, "at": _utcnow_iso()}},
+			filters={"id": session_id},
+			not_found_message="The supplied session_id does not exist.",
+		)
+
 	def record_proctoring_warning(
 		self,
 		*,

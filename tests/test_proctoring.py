@@ -9,6 +9,8 @@ from fastapi import HTTPException
 
 from backend.api import routes_proctoring, routes_workflow
 from backend.api.routes_proctoring import (
+	FinishInterviewRequest,
+	finish_interview,
 	ProctoringWarningRequest,
 	ensure_interview_open,
 	post_warning,
@@ -97,3 +99,26 @@ class ResetTests(TestCase):
 			with self.assertRaises(HTTPException) as ctx:
 				routes_workflow.reset_workflow_stage(request, _USER)
 		self.assertEqual(ctx.exception.status_code, 409)
+
+
+class FinishTests(TestCase):
+	def _finish(self, session: dict, updated: dict | None = None):
+		request = FinishInterviewRequest(session_id="s1", round="technical")
+		with patch("backend.api.routes_proctoring.get_session", return_value=session), 			 patch("backend.api.routes_proctoring.mark_interview_finished", return_value=updated) as mark:
+			return finish_interview(request, _USER), mark
+
+	def test_finishing_ends_the_interview_for_every_round(self) -> None:
+		finished = {"id": "s1", "user_id": "user-1", "interview_ended": {"reason": "finished", "round": "technical"}}
+		result, mark = self._finish({"id": "s1", "user_id": "user-1"}, finished)
+		mark.assert_called_once_with("s1", "technical")
+		self.assertTrue(result["finished"])
+		self.assertEqual(result["finished_round"], "technical")
+		with self.assertRaises(HTTPException) as ctx:
+			ensure_interview_open(finished)
+		self.assertIn("finished this interview early", ctx.exception.detail)
+
+	def test_finishing_twice_changes_nothing(self) -> None:
+		already = {"id": "s1", "user_id": "user-1", "interview_ended": {"reason": "finished", "round": "hr"}}
+		result, mark = self._finish(already)
+		mark.assert_not_called()
+		self.assertEqual(result["finished_round"], "hr")

@@ -638,11 +638,16 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
   const missingSkills = Array.isArray(technicalSkillProfileSummary?.absent_skills)
     ? technicalSkillProfileSummary.absent_skills
     : [];
+  // Finished early or stopped by the full-screen rule: no more rounds to start.
+  const interviewEnded = Boolean(
+    workflowState?.proctoring?.sessionId === sessionId
+      && (workflowState?.proctoring?.finished || workflowState?.proctoring?.terminated),
+  );
   const statusOf = (status) => {
     const normalized = String(status || "").toLowerCase();
     if (normalized === "complete" || normalized === "completed") return { label: "Done", tone: "done" };
     if (normalized === "in_progress" || normalized === "active" || normalized === "partial") return { label: "In progress", tone: "progress" };
-    return { label: "Not started", tone: "idle" };
+    return { label: interviewEnded ? "Not taken" : "Not started", tone: "idle" };
   };
   const ringStyle = { "--pct": overallPct ?? 0 };
 
@@ -692,6 +697,11 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
 
       {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
       {resetMessage ? <p className="info-banner">{resetMessage}</p> : null}
+      {workflowState?.proctoring?.finished && !workflowState.proctoring.terminated && workflowState.proctoring.sessionId === sessionId ? (
+        <p className="info-banner">
+          You finished this interview early. The report covers the rounds you completed.
+        </p>
+      ) : null}
       {workflowState?.proctoring?.terminated && workflowState.proctoring.sessionId === sessionId ? (
         <p className="error-banner">
           This interview ended early: you left full screen or switched tabs {workflowState.proctoring.limit} times.
@@ -707,7 +717,9 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
         <div className="pp-report__hero-text">
           <h2>
             {doneCount === 0
-              ? "Complete a round to see your score"
+              ? interviewEnded
+                ? "No rounds were completed before the interview ended"
+                : "Complete a round to see your score"
               : doneCount === sectionReports.length
                 ? "All rounds complete"
                 : `${doneCount} of ${sectionReports.length} rounds complete`}
@@ -717,7 +729,13 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
               <i key={section.key} className={`pp-report__seg pp-report__seg--${statusOf(section.status).tone}`} />
             ))}
           </div>
-          <p>{isLoading ? "Loading your results…" : "Scores update as you finish each round."}</p>
+          <p>
+            {isLoading
+              ? "Loading your results…"
+              : interviewEnded
+                ? "This interview has ended. Download the PDF for the full breakdown."
+                : "Scores update as you finish each round."}
+          </p>
         </div>
       </section>
 
@@ -736,11 +754,11 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
                 {status.tone === "idle" || pct === null ? <span className="pp-round__dash">–</span> : <>{pct}<small>%</small></>}
               </p>
               {status.tone !== "idle" ? <p className="pp-round__summary">{section.summary}</p> : null}
-              {status.tone === "idle" ? (
+              {status.tone === "idle" && !interviewEnded ? (
                 <button type="button" className="secondary-button" onClick={() => onNavigate?.(section.key)}>
                   Start →
                 </button>
-              ) : hasDetail ? (
+              ) : hasDetail && status.tone !== "idle" ? (
                 <details className="pp-round__details">
                   <summary>Details</summary>
                   {section.strengths.length ? (

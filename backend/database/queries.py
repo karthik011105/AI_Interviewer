@@ -31,6 +31,10 @@ def update_session_status(session_id: str, status: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.update_session_status(session_id=session_id, status=status)
 
+def mark_interview_finished(session_id: str, round_name: str) -> dict[str, Any]:
+	repo = get_repository()
+	return repo.mark_interview_finished(session_id=session_id, round_name=round_name)
+
 def record_proctoring_warning(session_id: str, round_name: str, reason: str, limit: int) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.record_proctoring_warning(

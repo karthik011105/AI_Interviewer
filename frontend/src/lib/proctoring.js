@@ -26,5 +26,12 @@ export function warningCopy(reason, warnings, limit = PROCTOR_LIMIT) {
 export function normalizeProctoring(value) {
 	const warnings = Math.max(0, Number(value?.warnings) || 0);
 	const limit = Number(value?.limit) || PROCTOR_LIMIT;
-	return { warnings, limit, terminated: Boolean(value?.terminated) || warnings >= limit };
+	return {
+		warnings,
+		limit,
+		terminated: Boolean(value?.terminated) || warnings >= limit,
+		// The candidate ended it themselves with "Finish interview".
+		finished: Boolean(value?.finished),
+		finishedRound: value?.finished_round || value?.finishedRound || "",
+	};
 }
