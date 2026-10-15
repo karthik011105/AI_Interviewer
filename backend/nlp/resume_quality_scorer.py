@@ -167,7 +167,10 @@ def _keyword_label(text_lower: str, keyword: str) -> str:
     for alt in alts:
         if _has_keyword(text_lower, alt):
             return alt
-    return " / ".join(alts[:3])
+    # Grammar variants of the first one ("debugged", "statistical") are for
+    # matching, not for showing.
+    shown = [alt for alt in alts if alt == alts[0] or not alt.startswith(alts[0][:5])]
+    return " / ".join(shown[:3])
 
 
 # ---------------------------------------------------------------------------

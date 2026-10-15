@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Download } from "lucide-react";
 
 import RoundStatusPage from "../components/RoundStatusPage";
 import WorkflowResetControl from "../components/WorkflowResetControl";
@@ -385,6 +386,7 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
   const [reportEnvelope, setReportEnvelope] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -457,11 +459,47 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
         throw new Error(resolveErrorMessage(payload, "Could not generate the report."));
       }
       setReportEnvelope(payload);
-      setInfoMessage(payload?.persisted ? "Report persisted successfully." : "Report generated, but persistence is unavailable right now.");
+      setInfoMessage(payload?.persisted ? "Report saved." : "Report updated, but it couldn't be saved right now.");
     } catch (error) {
       setErrorMessage(String(error?.message || "Could not generate the report."));
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  // Save the latest report, then download it as a structured PDF.
+  async function handleDownloadPdf() {
+    if (!sessionId || !accessToken || isDownloading) {
+      return;
+    }
+    setIsDownloading(true);
+    setErrorMessage("");
+    setInfoMessage("");
+    const base = `${trimSlash(apiBaseUrl)}/report/session/${encodeURIComponent(sessionId)}`;
+    try {
+      const saved = await fetch(`${base}/generate`, { method: "POST", headers: buildApiHeaders(accessToken) });
+      const savedPayload = await saved.json().catch(() => null);
+      if (saved.ok && savedPayload) setReportEnvelope(savedPayload);
+
+      const response = await fetch(`${base}/pdf`, { headers: buildApiHeaders(accessToken) });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(resolveErrorMessage(payload, "Could not create the PDF."));
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `PrepForge-report-${(selectedRoleTitle || "interview").replace(/[^A-Za-z0-9]+/g, "-")}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setInfoMessage("Your PDF report has downloaded.");
+    } catch (error) {
+      setErrorMessage(String(error?.message || "Could not create the PDF."));
+    } finally {
+      setIsDownloading(false);
     }
   }
 
@@ -616,8 +654,17 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
           <p>{selectedRoleTitle || reportEnvelope?.role_selected || "Your chosen role"}</p>
         </div>
         <div className="pp-report__actions">
-          <button type="button" className="primary-button" onClick={handleGenerateReport} disabled={isGenerating || isLoading}>
-            {isGenerating ? "Updating…" : hasPersistedReport ? "Update report" : "Save report"}
+          <button
+            type="button"
+            className="primary-button pp-report__download"
+            onClick={handleDownloadPdf}
+            disabled={isDownloading || isLoading || !sessionId}
+          >
+            <Download size={17} aria-hidden="true" />
+            {isDownloading ? "Preparing PDF…" : "Download PDF"}
+          </button>
+          <button type="button" className="secondary-button" onClick={handleGenerateReport} disabled={isGenerating || isLoading}>
+            {isGenerating ? "Saving…" : hasPersistedReport ? "Update" : "Save"}
           </button>
           <WorkflowResetControl
             accessToken={accessToken}

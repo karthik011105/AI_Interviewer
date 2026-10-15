@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
 from backend.database.queries import (
 	get_assessment_session,
 	get_final_report,
 	get_interview_round_session,
+	get_resume_data,
 	get_session,
 	list_dsa_sessions,
 	list_interview_responses,
@@ -22,6 +24,8 @@ from pymongo.errors import PyMongoError
 
 from backend.database.db_errors import DatabaseClientError
 from backend.dsa.report_engine import build_dsa_round_report
+from backend.nlp.resume_quality_scorer import score_resume_as_dict, score_role_match_as_dict
+from backend.report_pdf import build_report_pdf
 
 router = APIRouter(prefix="/report", tags=["report"])
 _LOGGER = logging.getLogger(__name__)
@@ -1197,4 +1201,140 @@ def generate_report_session(
 	}
 
 
-__all__ = ["router", "get_report_session", "generate_report_session"]
+# Same names as the app's sidebar.
+PDF_ROUND_LABELS = {
+	"assessment": "Assessment",
+	"technical": "Technical",
+	"dsa": "Coding",
+	"project_discussion": "Projects",
+	"hr": "HR",
+}
+PDF_STATUS_LABELS = {"complete": "Completed", "in_progress": "In progress", "not_started": "Not taken"}
+
+
+def _to_pct(value: Any) -> float | None:
+	"""Scores are stored as 0-1 fractions (some as 0-100); the PDF shows 0-100."""
+	numeric = _coerce_numeric_score(value)
+	if numeric is None:
+		return None
+	return round(numeric * 100 if numeric <= 1 else numeric, 1)
+
+
+def _clean_list(values: Any) -> list[str]:
+	return [str(v).strip() for v in (values or []) if str(v or "").strip()]
+
+
+def _build_pdf_data(
+	session_id: str,
+	parent_session: Mapping[str, Any],
+	snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+	report_json = _coerce_mapping(snapshot.get("report_json"))
+	role_key = str(parent_session.get("role_selected") or "")
+	role_title = role_key.replace("_", " ").strip().title() or "Not selected"
+
+	rounds: list[dict[str, Any]] = []
+	for key in ROUND_ORDER:
+		section = _coerce_mapping(report_json.get(key))
+		status_value = str(section.get("status") or "not_started")
+		finished = status_value == "complete"
+		rounds.append({
+			"key": key,
+			"label": PDF_ROUND_LABELS[key],
+			"status": status_value,
+			"status_label": PDF_STATUS_LABELS.get(status_value, status_value.replace("_", " ").capitalize()),
+			"score": _to_pct(section.get("score")),
+			# A not-started round's "summary" is internal placeholder text.
+			"summary": str(section.get("summary") or "") if finished else "",
+			"strengths": _clean_list(section.get("strengths")),
+			"improve": _clean_list(section.get("risks")),
+			"advice": _clean_list(section.get("recommendations")),
+		})
+
+	candidate: dict[str, str] = {}
+	resume: dict[str, Any] = {}
+	resume_tip = ""
+	missing_skills: list[str] = []
+	try:
+		resume_record = get_resume_data(session_id) or {}
+	except DatabaseClientError:
+		resume_record = {}
+	parsed = resume_record.get("parsed_json") if isinstance(resume_record.get("parsed_json"), dict) else None
+	if parsed:
+		candidate = {"name": str(parsed.get("name") or ""), "email": str(parsed.get("email") or "")}
+		raw_text = str(resume_record.get("raw_text") or "")
+		try:
+			quality = score_resume_as_dict(parsed, raw_text)
+			resume_tip = str(quality.get("top_tip") or "")
+			resume = {
+				"score": quality.get("overall_score"),
+				"checks": [
+					{"label": label, "pct": _to_pct((quality.get(key) or {}).get("score")), "tip": (quality.get(key) or {}).get("tip")}
+					for key, label in (
+						("quantification", "Numbers and impact"),
+						("style", "Clarity and style"),
+						("action_verbs", "Action verbs"),
+						("section_completeness", "Sections"),
+					)
+				],
+			}
+			if role_key:
+				match = score_role_match_as_dict(parsed, raw_text, role_key, role_title)
+				resume["role_match"] = match
+				missing_skills = [m.split(" / ")[0] for m in match.get("missing") or []][:3]
+		except Exception:
+			_LOGGER.warning("Resume scoring for the PDF report failed for %s.", session_id, exc_info=True)
+
+	next_steps: list[str] = []
+	not_taken = [r["label"] for r in rounds if r["status"] != "complete"]
+	if not_taken:
+		next_steps.append(f"Finish the remaining rounds: {', '.join(not_taken)}.")
+	for r in rounds:
+		if r["status"] == "complete" and r["score"] is not None and r["score"] < 60:
+			next_steps.append(LOW_SCORE_GUIDANCE.get(r["key"], f"Practise the {r['label']} round again."))
+	if missing_skills:
+		next_steps.append(f"Learn and show these skills for the role: {', '.join(missing_skills)}.")
+	if resume_tip:
+		next_steps.append(f"Resume: {resume_tip}")
+
+	proctoring = _coerce_mapping(parent_session.get("proctoring"))
+	return {
+		"candidate": candidate,
+		"role_title": role_title,
+		"generated_on": datetime.now(timezone.utc).strftime("%d %b %Y"),
+		"session_ref": session_id[:8],
+		"overall_score": _to_pct(snapshot.get("overall_score")),
+		"rounds": rounds,
+		"resume": resume,
+		"next_steps": next_steps[:5],
+		"ended_early": bool(proctoring.get("terminated")),
+	}
+
+
+@router.get("/session/{session_id}/pdf")
+def download_report_pdf(
+	session_id: str,
+	current_user: AuthenticatedUser = Depends(require_current_user),
+) -> Response:
+	"""The report as a structured, downloadable PDF, built from the same
+	snapshot the report page shows."""
+	parent_session = _require_parent_session(session_id, current_user)
+	existing_report, _, persistence_detail = _load_persisted_report(session_id)
+	snapshot = _build_report_snapshot(
+		session_id=session_id,
+		parent_session=parent_session,
+		existing_report=existing_report,
+		persistence_detail=persistence_detail,
+	)
+	data = _build_pdf_data(session_id, parent_session, snapshot)
+	pdf = build_report_pdf(data)
+	name = re.sub(r"[^A-Za-z0-9]+", "-", data["candidate"].get("name") or "").strip("-")
+	filename = f"PrepForge-report{'-' + name if name else ''}.pdf"
+	return Response(
+		content=pdf,
+		media_type="application/pdf",
+		headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+	)
+
+
+__all__ = ["router", "get_report_session", "generate_report_session", "download_report_pdf"]

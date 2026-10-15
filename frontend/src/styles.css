@@ -6128,3 +6128,9 @@ body.pp-focus-mode .pp-watermark {
 	align-items: flex-start;
 	gap: 6px;
 }
+
+.pp-report__download {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
