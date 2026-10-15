@@ -37,6 +37,13 @@ _HEADING_LINE = {
 	name: re.compile(rf"^\W*({pattern})\W*$", re.IGNORECASE) for name, pattern in _RESUME_HEADINGS.items()
 }
 
+
+def is_heading(line: str) -> bool:
+	"""A resume section heading line ("Education", "PROJECTS", "Technical Skills")."""
+	line = line.strip()
+	return len(line) <= 40 and any(pattern.match(line) for pattern in _HEADING_LINE.values())
+
+
 _POSTING_PHRASES = re.compile(
 	r"\b(required|good to have|nice to have|job title|job description|responsibilities|"
 	r"qualifications required|we are looking for|apply (now|here|by)|open positions?|"

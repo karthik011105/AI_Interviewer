@@ -15,6 +15,8 @@ from unittest.mock import patch
 import numpy as np
 
 from backend.nlp.resume_quality_scorer import (
+	_has_metric,
+	_resume_bullets,
 	_has_keyword,
 	_role_keywords_for_key,
 	_score_section_completeness,
@@ -68,6 +70,38 @@ class SectionTests(TestCase):
 	def test_a_missing_summary_is_reported_by_its_display_name(self) -> None:
 		result = _score_section_completeness({**_COMPLETE, "summary": ""})
 		self.assertIn("Summary / Objective", result.tip)
+
+
+class QuantificationTests(TestCase):
+	def test_plain_counts_are_metrics(self) -> None:
+		for text in ("Built an API serving 1,200 students", "Library with 3,000 titles",
+					 "Chat service handling 200 concurrent users", "Solved 350+ problems", "Cut latency by 40%"):
+			with self.subTest(text=text):
+				self.assertTrue(_has_metric(text))
+
+	def test_years_versions_and_names_are_not(self) -> None:
+		for text in ("Trained on the F-CISC 2010 dataset", "Deployed on AWS EC2 and S3",
+					 "Wrote it in Python 3 with HTML5", "Used Node.js and Vue"):
+			with self.subTest(text=text):
+				self.assertFalse(_has_metric(text))
+
+	def test_bullets_come_from_the_pdf_text_with_wraps_joined(self) -> None:
+		raw = "\n".join([
+			"Projects",
+			"Orders API",
+			"● ",
+			"Built a real-time ordering API used by Node.js clients across",
+			"the campus, serving 1,200 students.",
+			"• Cut response time by 40% with Redis caching.",
+			"- Languages: Python, Java, SQL",
+			"- Wrote unit tests with pytest and set up CI for every push.",
+			"Education",
+			"B.Tech 2026",
+		])
+		bullets = _resume_bullets(raw, {})
+		self.assertEqual(len(bullets), 3)
+		self.assertIn("serving 1,200 students", bullets[0])
+		self.assertTrue(all("B.Tech" not in b for b in bullets))
 
 
 class StyleTests(TestCase):

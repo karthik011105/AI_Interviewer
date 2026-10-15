@@ -185,18 +185,78 @@ _QUANTIFICATION_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 
-def _count_quantified_bullets(text: str) -> int:
-    """Count sentences/bullets that contain a quantification signal."""
-    bullets = re.split(r"[.\n•\-–—]+", text)
-    return sum(
-        1 for b in bullets
-        if b.strip() and any(p.search(b) for p in _QUANTIFICATION_PATTERNS)
-    )
+# Any other number counts too ("served 1,200 students", "3,000 titles"),
+# except years, version numbers and digits inside names (EC2, S3, HTML5).
+_NUMBER = re.compile(r"(?<![A-Za-z0-9#.])(\d[\d,]*(?:\.\d+)?)(?![A-Za-z0-9])")
+_NOT_A_METRIC_BEFORE = re.compile(
+    r"(python|java|php|node|angular|ios|android|windows|version|v|grade|class|semester|sem|standard)\s*$",
+    re.IGNORECASE,
+)
 
 
-def _total_bullets(text: str) -> int:
-    bullets = re.split(r"[.\n•\-–—]+", text)
-    return sum(1 for b in bullets if len(b.strip()) > 10)
+def _has_metric(text: str) -> bool:
+    if any(p.search(text) for p in _QUANTIFICATION_PATTERNS):
+        return True
+    for match in _NUMBER.finditer(text):
+        digits = match.group(1).replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        if value == 0 or (len(digits) == 4 and 1950 <= value <= 2039):
+            continue
+        if _NOT_A_METRIC_BEFORE.search(text[max(0, match.start() - 14):match.start()]):
+            continue
+        return True
+    return False
+
+
+_BULLET_MARK = "•●▪◦○■-–—*·➢►✓"
+_BULLET_LINE = re.compile(rf"^\s*[{re.escape(_BULLET_MARK)}]\s*(.*)$")
+# "Languages: Python, C++" - a skills list, not an achievement bullet.
+_LABELLED_LIST = re.compile(r"^[A-Za-z][A-Za-z &/+.-]{1,28}:\s")
+
+
+def _resume_bullets(raw_text: str, parsed_resume: dict[str, Any]) -> list[str]:
+    """The resume's bullet points, the unit recruiters' checkers count.
+
+    Read from the PDF text when it has bullet markers, with wrapped lines
+    joined back on (PDFs often put the marker on its own line, or break a
+    bullet mid-sentence). Splitting a joined blob on every "." and "-" (as
+    before) turned "real-time" and "Node.js" into extra bullets and buried
+    real metrics. Falls back to the parsed projects when there are no markers.
+    """
+    from backend.nlp.resume_detector import is_heading
+
+    bullets: list[str] = []
+    open_bullet = False
+    for line in (raw_text or "").splitlines():
+        stripped = line.strip()
+        match = _BULLET_LINE.match(line)
+        if match and not (stripped[:1] == "-" and stripped[1:2].isalnum()):
+            bullets.append(match.group(1).strip())
+            open_bullet = True
+        elif not stripped or is_heading(stripped):
+            open_bullet = False
+        elif open_bullet and bullets:
+            last = bullets[-1]
+            # Text after a bare marker, or a wrapped line of an unfinished bullet.
+            if not last or last[-1] not in ".!?" or stripped[0].islower() or stripped[0].isdigit():
+                bullets[-1] = f"{last} {stripped}".strip()
+            else:
+                open_bullet = False
+    bullets = [b for b in bullets if not (_LABELLED_LIST.match(b) and b.count(",") >= 2)]
+    bullets = [b for b in bullets if len(b) > 15]
+    if len(bullets) >= 3:
+        return bullets
+
+    items: list[str] = []
+    for project in parsed_resume.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        items.extend(re.split(r"(?<=[.!?])\s+(?=[A-Z])", str(project.get("description") or "")))
+        items.extend(str(o) for o in (project.get("outcomes") or []) if o)
+    return [i.strip() for i in items if len(i.strip()) > 15]
 
 
 # ---------------------------------------------------------------------------
@@ -304,9 +364,9 @@ def _score_action_verbs(project_text: str) -> ActionVerbResult:
     )
 
 
-def _score_quantification(project_text: str) -> QuantificationResult:
-    quantified = _count_quantified_bullets(project_text)
-    total = max(_total_bullets(project_text), 1)
+def _score_quantification(bullets: list[str]) -> QuantificationResult:
+    quantified = sum(1 for b in bullets if _has_metric(b))
+    total = max(len(bullets), 1)
 
     ratio = quantified / total
     # Reward even 1-2 quantified bullets heavily — they signal result orientation
@@ -317,10 +377,10 @@ def _score_quantification(project_text: str) -> QuantificationResult:
         tip = "Add specific numbers and metrics. E.g. 'reduced load time by 40%' instead of 'improved performance'."
     elif ratio < 0.3:
         label = "Needs work"
-        tip = f"Only {quantified} of your ~{total} project bullets include metrics. Aim for at least 50%."
+        tip = f"Only {quantified} of your {total} bullet points include a number. Aim for at least half."
     elif ratio < 0.6:
         label = "Good"
-        tip = "Good start. Try to add metrics to more project bullets — even rough estimates count."
+        tip = f"{quantified} of your {total} bullet points include a number. Add metrics to more of them - even rough estimates count."
     else:
         label = "Excellent"
         tip = "Strong quantification. Your resume clearly shows impact through numbers."
@@ -683,7 +743,7 @@ def score_resume(
     full_text = " ".join([raw_text, skills_text, tech_text, summary_text])
 
     action_result = _score_action_verbs(project_text or full_text)
-    quant_result = _score_quantification(project_text or full_text)
+    quant_result = _score_quantification(_resume_bullets(raw_text, parsed_resume))
     completeness_result = _score_section_completeness(parsed_resume)
     style_result = _score_style(raw_text)
 
