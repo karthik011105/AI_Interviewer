@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
-from backend.api.routes_proctoring import ensure_interview_open
+from backend.api.routes_interview_end import ensure_interview_open
 from backend.api.quotas import DSA_EXECUTION, quota_dependency
 from backend.database.queries import (
 	append_dsa_submission,

@@ -348,44 +348,6 @@ class MongoRepository:
 			not_found_message="The supplied session_id does not exist.",
 		)
 
-	def record_proctoring_warning(
-		self,
-		*,
-		session_id: str,
-		round_name: str,
-		reason: str,
-		limit: int,
-	) -> dict[str, Any]:
-		"""Count one full-screen / tab-switch warning against the session and
-		end the interview when it reaches ``limit``. Atomic, so two tabs or a
-		double-fired browser event cannot both slip under the limit."""
-		now = _utcnow_iso()
-		doc = self.db["sessions"].find_one_and_update(
-			self._map_filters({"id": session_id}),
-			{
-				"$inc": {"proctoring.warnings": 1},
-				"$push": {"proctoring.events": {
-					"$each": [{"round": round_name, "reason": reason, "at": now}],
-					"$slice": -20,
-				}},
-			},
-			return_document=ReturnDocument.AFTER,
-		)
-		if doc is None:
-			raise RecordNotFoundError("The supplied session_id does not exist.")
-		proctoring = doc.get("proctoring") or {}
-		if int(proctoring.get("warnings") or 0) >= limit and not proctoring.get("terminated"):
-			doc = self.db["sessions"].find_one_and_update(
-				self._map_filters({"id": session_id}),
-				{"$set": {
-					"proctoring.terminated": True,
-					"proctoring.terminated_at": now,
-					"proctoring.terminated_round": round_name,
-				}},
-				return_document=ReturnDocument.AFTER,
-			)
-		return self._map_id(doc)
-
 	def update_session_role_selected(
 		self,
 		*,

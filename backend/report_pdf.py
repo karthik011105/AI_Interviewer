@@ -53,7 +53,6 @@ td {{ padding: 5pt 6pt; border-bottom: 1px solid {_RULE}; vertical-align: middle
 .good {{ color: {_GOOD}; }}
 .mid {{ color: {_MID}; }}
 .low {{ color: {_LOW}; }}
-.note {{ color: {_LOW}; font-weight: bold; }}
 """
 
 
@@ -128,12 +127,7 @@ def _render_html(data: dict[str, Any]) -> str:
 		f'<p class="muted">Rounds completed: {completed} of {len(rounds)}</p></td>'
 		"</tr></table>"
 	)
-	if data.get("ended_early"):
-		parts.append(
-			f'<p class="note">This interview was ended early: the candidate left full screen or switched '
-			f'tabs {_e(data.get("warning_limit") or 3)} times.</p>'
-		)
-	elif data.get("finished_early"):
+	if data.get("finished_early"):
 		during = f" during the {_e(data['finished_round'])} round" if data.get("finished_round") else ""
 		parts.append(
 			f'<p class="muted"><b>The candidate finished the interview early{during}.</b> '

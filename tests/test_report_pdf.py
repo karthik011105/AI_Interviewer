@@ -36,7 +36,6 @@ class LayoutTests(TestCase):
 					   "role_match": {"role_title": "Backend Python Developer", "match_percent": 59,
 									  "matched": ["python"], "missing": ["kubernetes"]}},
 			"next_steps": ["Finish the HR round."],
-			"ended_early": True,
 		})
 		text = _text(pdf)
 		order = ["Interview report", "Alex Tester", "Summary", "68%", "Scores at a glance",
@@ -44,7 +43,6 @@ class LayoutTests(TestCase):
 		positions = [text.find(item) for item in order]
 		self.assertTrue(all(p >= 0 for p in positions), dict(zip(order, positions)))
 		self.assertEqual(positions, sorted(positions))
-		self.assertIn("ended early", text)
 
 	def test_finishing_early_is_noted(self) -> None:
 		text = _text(build_report_pdf({"rounds": [], "finished_early": True, "finished_round": "Technical"}))
@@ -65,7 +63,7 @@ class PdfDataTests(TestCase):
 				"dsa": {"status": "not_started", "score": None, "summary": "Waiting on saved data."},
 			},
 		}
-		session = {"role_selected": "backend_python_developer", "proctoring": {"terminated": True}}
+		session = {"role_selected": "backend_python_developer", "interview_ended": {"round": "technical"}}
 		with patch("backend.api.routes_report.get_resume_data", return_value=None):
 			data = routes_report._build_pdf_data("session-12345678", session, snapshot)
 		rounds = {r["key"]: r for r in data["rounds"]}
@@ -75,7 +73,8 @@ class PdfDataTests(TestCase):
 		self.assertEqual(rounds["technical"]["improve"], ["Caching"])
 		self.assertEqual(data["overall_score"], 70.0)
 		self.assertEqual(data["role_title"], "Backend Python Developer")
-		self.assertTrue(data["ended_early"])
+		self.assertTrue(data["finished_early"])
+		self.assertEqual(data["finished_round"], "Technical")
 		self.assertTrue(any("Finish the remaining rounds" in s for s in data["next_steps"]))
 
 	def test_endpoint_returns_a_pdf_attachment(self) -> None:

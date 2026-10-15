@@ -33,7 +33,7 @@ from backend.api.routes_dsa import router as dsa_router
 from backend.api.routes_interview import router as interview_router
 from backend.api.routes_report import router as report_router
 from backend.api.routes_resume import router as resume_router
-from backend.api.routes_proctoring import router as proctoring_router
+from backend.api.routes_interview_end import router as interview_end_router
 from backend.api.routes_workflow import router as workflow_router
 from backend.api.routes_voice import router as voice_router
 from backend.api.ws_interview import router as ws_interview_router
@@ -341,7 +341,7 @@ def create_app() -> FastAPI:
 	app.include_router(interview_router)
 	app.include_router(report_router)
 	app.include_router(workflow_router)
-	app.include_router(proctoring_router)
+	app.include_router(interview_end_router)
 	app.include_router(ws_interview_router)
 	app.include_router(voice_router)
 	app.include_router(resume_router)

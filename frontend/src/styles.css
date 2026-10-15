@@ -5977,7 +5977,7 @@ h3 {
 }
 
 /* ==========================================================================
-   Full-screen proctoring
+   Full-screen rounds (FullscreenRound)
    ========================================================================== */
 
 /* While a round runs: no top bar or step list, the round gets the screen. */
@@ -5990,7 +5990,7 @@ body.pp-focus-mode .pp-body {
 	grid-template-columns: minmax(0, 1fr);
 }
 
-.proctor {
+.round-shell {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;
@@ -6000,38 +6000,22 @@ body.pp-focus-mode .pp-body {
 	padding: 32px;
 }
 
-.proctor > svg {
+.round-shell > svg {
 	color: var(--accent);
 }
 
-.proctor h2 {
+.round-shell h2 {
 	margin: 0;
 	font-size: 1.5rem;
 }
 
-.proctor p {
+.round-shell p {
 	margin: 0;
 	color: var(--muted);
 	line-height: 1.55;
 }
 
-.proctor__rules {
-	margin: 0;
-	padding-left: 20px;
-	color: var(--text);
-	line-height: 1.7;
-}
-
-.proctor__used {
-	color: var(--warning) !important;
-	font-weight: 600;
-}
-
-.proctor--ended > svg {
-	color: var(--danger);
-}
-
-.proctor-overlay {
+.round-shell-overlay {
 	position: fixed;
 	inset: 0;
 	z-index: 1000;
@@ -6041,7 +6025,7 @@ body.pp-focus-mode .pp-body {
 	background: var(--bg);
 }
 
-.proctor-overlay__card {
+.round-shell-overlay__card {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -6054,16 +6038,12 @@ body.pp-focus-mode .pp-body {
 	text-align: center;
 }
 
-.proctor-overlay__card > svg {
-	color: var(--warning);
-}
-
-.proctor-overlay__card h2 {
+.round-shell-overlay__card h2 {
 	margin: 0;
 	font-size: 1.4rem;
 }
 
-.proctor-overlay__card p {
+.round-shell-overlay__card p {
 	margin: 0;
 	color: var(--muted);
 	line-height: 1.55;
@@ -6135,15 +6115,15 @@ body.pp-focus-mode .pp-watermark {
 	gap: 8px;
 }
 
-/* "Finish interview": always reachable while a round runs in full screen. */
-.proctor-bar {
+/* "Finish interview" and the full-screen toggle, top-left during a round. */
+.round-shell-bar {
 	position: fixed;
 	top: 16px;
 	left: 16px;
 	z-index: 60;
 }
 
-.proctor-bar__finish {
+.round-shell-bar__button {
 	padding: 8px 14px;
 	border: 1px solid var(--border);
 	border-radius: 10px;
@@ -6155,13 +6135,13 @@ body.pp-focus-mode .pp-watermark {
 	cursor: pointer;
 }
 
-.proctor-bar__finish:hover,
-.proctor-bar__finish:focus-visible {
-	border-color: var(--danger);
-	color: var(--danger);
+.round-shell-bar__button:hover,
+.round-shell-bar__button:focus-visible {
+	border-color: var(--accent);
+	color: var(--text);
 }
 
-.proctor-overlay__actions {
+.round-shell-overlay__actions {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: center;
@@ -6169,11 +6149,28 @@ body.pp-focus-mode .pp-watermark {
 	margin-top: 6px;
 }
 
-.proctor-overlay__danger {
+.round-shell-overlay__danger {
 	background: var(--danger) !important;
 	border-color: var(--danger) !important;
 }
 
-.proctor--finished > svg {
+.round-shell--finished > svg {
 	color: var(--success);
+}
+
+.round-shell-bar {
+	display: flex;
+	gap: 8px;
+}
+
+.round-shell-bar__button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.round-shell-bar__finish:hover,
+.round-shell-bar__finish:focus-visible {
+	border-color: var(--danger);
+	color: var(--danger);
 }

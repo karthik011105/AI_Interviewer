@@ -638,10 +638,9 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
   const missingSkills = Array.isArray(technicalSkillProfileSummary?.absent_skills)
     ? technicalSkillProfileSummary.absent_skills
     : [];
-  // Finished early or stopped by the full-screen rule: no more rounds to start.
+  // Finished early with "Finish interview": no more rounds to start.
   const interviewEnded = Boolean(
-    workflowState?.proctoring?.sessionId === sessionId
-      && (workflowState?.proctoring?.finished || workflowState?.proctoring?.terminated),
+    workflowState?.interviewEnd?.sessionId === sessionId && workflowState?.interviewEnd?.finished,
   );
   const statusOf = (status) => {
     const normalized = String(status || "").toLowerCase();
@@ -697,15 +696,9 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
 
       {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
       {resetMessage ? <p className="info-banner">{resetMessage}</p> : null}
-      {workflowState?.proctoring?.finished && !workflowState.proctoring.terminated && workflowState.proctoring.sessionId === sessionId ? (
+      {interviewEnded ? (
         <p className="info-banner">
           You finished this interview early. The report covers the rounds you completed.
-        </p>
-      ) : null}
-      {workflowState?.proctoring?.terminated && workflowState.proctoring.sessionId === sessionId ? (
-        <p className="error-banner">
-          This interview ended early: you left full screen or switched tabs {workflowState.proctoring.limit} times.
-          The report covers the rounds you finished before that.
         </p>
       ) : null}
 

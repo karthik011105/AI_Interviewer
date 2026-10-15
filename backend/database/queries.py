@@ -35,15 +35,6 @@ def mark_interview_finished(session_id: str, round_name: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.mark_interview_finished(session_id=session_id, round_name=round_name)
 
-def record_proctoring_warning(session_id: str, round_name: str, reason: str, limit: int) -> dict[str, Any]:
-	repo = get_repository()
-	return repo.record_proctoring_warning(
-		session_id=session_id,
-		round_name=round_name,
-		reason=reason,
-		limit=limit,
-	)
-
 def update_session_role_selected(session_id: str, role_selected: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.update_session_role_selected(

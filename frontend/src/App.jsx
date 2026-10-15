@@ -7,8 +7,8 @@ import LandingPage from "./pages/LandingPage";
 import AppTopBar from "./components/AppTopBar";
 import AppSidebar from "./components/AppSidebar";
 import PlatformWatermark from "./components/PlatformWatermark";
-import ProctoredRound from "./components/ProctoredRound";
-import { PROCTORED_ROUNDS } from "./lib/proctoring";
+import FullscreenRound from "./components/FullscreenRound";
+import { FULLSCREEN_ROUNDS } from "./lib/interviewEnd";
 import UploadPage from "./pages/UploadPage";
 import { roleRequiresDsa } from "./lib/roleFlow";
 import { authClient } from "./lib/authClient";
@@ -551,13 +551,13 @@ export default function App() {
 	// Full screen belongs to the rounds: leaving them (to the report, the
 	// resume page...) leaves full screen too.
 	useEffect(() => {
-		if (!PROCTORED_ROUNDS.has(currentPage.key) && document.fullscreenElement) {
+		if (!FULLSCREEN_ROUNDS.has(currentPage.key) && document.fullscreenElement) {
 			document.exitFullscreen().catch(() => {});
 		}
 	}, [currentPage.key]);
 
-	const handleProctoringChange = useCallback((proctoring) => {
-		setWorkflowState((current) => ({ ...current, proctoring: { ...proctoring, sessionId: current.sessionId } }));
+	const handleInterviewEndChange = useCallback((interviewEnd) => {
+		setWorkflowState((current) => ({ ...current, interviewEnd: { ...interviewEnd, sessionId: current.sessionId } }));
 	}, []);
 	const isStandaloneView = false;
 	const isAuthenticated = authState.status === "authenticated";
@@ -925,8 +925,8 @@ export default function App() {
 											renderLockedRoute(page)
 										) : (
 											<Suspense fallback={renderRouteLoading()}>
-												{PROCTORED_ROUNDS.has(page.key) && visibleWorkflowState?.sessionId ? (
-													<ProctoredRound
+												{FULLSCREEN_ROUNDS.has(page.key) && visibleWorkflowState?.sessionId ? (
+													<FullscreenRound
 														key={`${page.key}:${visibleWorkflowState.sessionId}`}
 														roundKey={page.key}
 														roundLabel={page.key === "assessment" ? "The assessment" : `The ${page.label} round`}
@@ -934,7 +934,7 @@ export default function App() {
 														apiBaseUrl={visibleWorkflowState.apiBaseUrl}
 														accessToken={authState.accessToken}
 														onNavigate={navigateToPage}
-														onStateChange={handleProctoringChange}
+														onStateChange={handleInterviewEndChange}
 													>
 														<PageComponent
 															authState={authState}
@@ -944,7 +944,7 @@ export default function App() {
 															roleRequiresDsa={selectedRoleRequiresDsa}
 															{...(page.componentProps || {})}
 														/>
-													</ProctoredRound>
+													</FullscreenRound>
 												) : (
 													<PageComponent
 														authState={authState}
