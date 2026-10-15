@@ -7,16 +7,16 @@ import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
 const INTERVIEW_NLP_ROUNDS = [
-  { key: "technical", label: "Technical Interview" },
-  { key: "project_discussion", label: "Project Discussion" },
-  { key: "hr", label: "HR Interview" },
+  { key: "technical", label: "Technical" },
+  { key: "project_discussion", label: "Projects" },
+  { key: "hr", label: "HR" },
 ];
 const REPORT_SECTION_ORDER = [
   { key: "assessment", label: "Assessment", kicker: "Screening" },
-  { key: "technical", label: "Technical Interview", kicker: "Technical" },
-  { key: "dsa", label: "DSA Round", kicker: "Coding" },
-  { key: "project_discussion", label: "Project Discussion", kicker: "Projects" },
-  { key: "hr", label: "HR Interview", kicker: "Behavioral" },
+  { key: "technical", label: "Technical", kicker: "Technical" },
+  { key: "dsa", label: "Coding", kicker: "Coding" },
+  { key: "project_discussion", label: "Projects", kicker: "Projects" },
+  { key: "hr", label: "HR", kicker: "Behavioral" },
 ];
 
 function resolveErrorMessage(payload, fallback) {
@@ -529,7 +529,8 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
       return {
         key: entry.key,
         kicker: entry.kicker,
-        label: String(section?.label || entry.label),
+        // Same names as the sidebar, whatever the saved report calls them.
+        label: entry.label,
         status: String(section?.status || fallbackSummary?.status || "not_started"),
         score: section?.score ?? fallbackSummary?.score ?? null,
         summary: String(section?.summary || fallbackSummary?.summary || `${entry.label} is waiting on saved data.`),
@@ -690,7 +691,7 @@ export default function ReportPage({ authState, workflowState, onNavigate, onWor
               {status.tone !== "idle" ? <p className="pp-round__summary">{section.summary}</p> : null}
               {status.tone === "idle" ? (
                 <button type="button" className="secondary-button" onClick={() => onNavigate?.(section.key)}>
-                  Start this round →
+                  Start →
                 </button>
               ) : hasDetail ? (
                 <details className="pp-round__details">

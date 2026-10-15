@@ -24,21 +24,18 @@ const ANSWERABLE = new Set(["listening", "speaking", "clarifying"]);
 // One screen serves every conversational round; only the wording changes.
 const ROUND_COPY = {
 	technical: {
-		kicker: "Technical",
 		label: "Technical Interview",
-		heading: (role) => (role ? `${role} technical interview` : "Technical interview"),
+		heading: () => "Technical interview",
 		intro:
 			"This round is a conversation. The interviewer follows up on what you actually say, so answer as you would out loud. Tap the mic to answer (it also interrupts), then the arrow to send.",
 	},
 	hr: {
-		kicker: "HR",
 		label: "HR Interview",
 		heading: () => "HR interview",
 		intro:
 			"A conversation about how you work: real situations, what you did, and what you learned. Tap the mic to answer with specific examples, then the arrow to send.",
 	},
 	project_discussion: {
-		kicker: "Projects",
 		label: "Project Discussion",
 		heading: () => "Project discussion",
 		intro:
@@ -326,8 +323,8 @@ export default function ConversationalInterview({
 
 			{sessionId && isAuthenticated && notStarted ? (
 				<section className="interview-launch-card glass-panel">
-					<span className="section-kicker">{copy.kicker}</span>
-					<h2>{copy.heading(roleTitle)}</h2>
+					<h2>{copy.heading()}</h2>
+					{roleTitle ? <p className="interview-launch-card__role">For {roleTitle}</p> : null}
 					<p>{copy.intro}</p>
 					<button
 						type="button"

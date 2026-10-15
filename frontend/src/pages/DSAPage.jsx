@@ -519,7 +519,6 @@ export default function DSAPage({ authState, workflowState, onNavigate, onWorkfl
         <div className="action-row">{resetControl}</div>
         {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
         <section className="interview-launch-card">
-          <p className="section-kicker">Coding round</p>
           <h2>Two coding problems</h2>
           <p>Solve each one in Python, C++ or Java. Run the sample tests as often as you like, then submit.</p>
           <button

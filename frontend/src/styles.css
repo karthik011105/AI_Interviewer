@@ -4788,7 +4788,8 @@ h3 {
 
 .pp-round-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	/* All five rounds fit one row at desktop width. */
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 	gap: 14px;
 }
 
@@ -6097,4 +6098,33 @@ body.pp-focus-mode .pp-body {
 .pp-roles__note {
 	margin: 0 0 12px;
 	color: var(--muted);
+}
+
+/* Route chunk still downloading: one quiet line, no jargon. */
+.pp-route-loading {
+	margin: 48px auto 0;
+	color: var(--muted);
+	text-align: center;
+}
+
+/* The faint logo watermark peeks out from under the centred round cards. */
+body.pp-focus-mode .pp-watermark {
+	display: none;
+}
+
+.interview-launch-card__role {
+	margin-top: -6px !important;
+	color: var(--muted);
+	font-weight: 600;
+}
+
+.interview-launch-card h2 {
+	text-wrap: balance;
+}
+
+/* Five narrow cards in a row: the status tag sits under the name on every card. */
+.pp-round__top {
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
 }

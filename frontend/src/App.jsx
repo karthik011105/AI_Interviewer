@@ -862,20 +862,11 @@ export default function App() {
 		);
 	}
 
-	function renderRouteLoading(page) {
+	function renderRouteLoading() {
 		return (
-			<section className="page-shell app-entry">
-				<section className="glass-panel app-gate" aria-live="polite" aria-busy="true">
-					<div className="panel-head panel-head--tight">
-						<div>
-							<p className="section-kicker">{page.label}</p>
-							<h2>Loading stage workspace.</h2>
-						</div>
-						<span className="status-pill status-pill--checking">Loading</span>
-					</div>
-					<p className="hero-text">Preparing the {page.label.toLowerCase()} surface and its saved session context.</p>
-				</section>
-			</section>
+			<p className="pp-route-loading" aria-live="polite" aria-busy="true">
+				Loading…
+			</p>
 		);
 	}
 
@@ -933,7 +924,7 @@ export default function App() {
 										page.requiresAuth && !isAuthenticated ? (
 											renderLockedRoute(page)
 										) : (
-											<Suspense fallback={renderRouteLoading(page)}>
+											<Suspense fallback={renderRouteLoading()}>
 												{PROCTORED_ROUNDS.has(page.key) && visibleWorkflowState?.sessionId ? (
 													<ProctoredRound
 														key={`${page.key}:${visibleWorkflowState.sessionId}`}

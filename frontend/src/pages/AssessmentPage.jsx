@@ -239,7 +239,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
     return (
       <div className="pp-page">
         <section className="interview-launch-card">
-          <p className="section-kicker">Assessment</p>
           <h2>Upload your resume first</h2>
           <p>The assessment is built for the role you choose, so start there.</p>
           <button className="primary-button" type="button" onClick={() => onNavigate?.("upload")}>
@@ -292,7 +291,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
 
       {!assessmentSession ? (
         <section className="interview-launch-card">
-          <p className="section-kicker">Assessment</p>
           <h2>Quick skills check</h2>
           <p>A short set of multiple-choice questions on the skills your role needs. Answer at your own pace.</p>
           <button className="primary-button" type="button" onClick={() => startAssessment()} disabled={busyState !== "idle"}>
