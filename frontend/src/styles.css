@@ -6067,3 +6067,34 @@ body.pp-focus-mode .pp-body {
 	color: var(--muted);
 	line-height: 1.55;
 }
+
+/* Role suggestions loading after the score */
+.pp-role--skeleton {
+	min-height: 150px;
+	pointer-events: none;
+}
+
+.pp-role--skeleton i {
+	display: block;
+	height: 12px;
+	border-radius: 6px;
+	background: var(--surface-sunken);
+	animation: pp-skeleton 1.4s ease-in-out infinite;
+}
+
+.pp-role--skeleton i:nth-child(1) { width: 60%; height: 16px; }
+.pp-role--skeleton i:nth-child(2) { width: 95%; }
+.pp-role--skeleton i:nth-child(3) { width: 75%; }
+
+@keyframes pp-skeleton {
+	50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pp-role--skeleton i { animation: none; }
+}
+
+.pp-roles__note {
+	margin: 0 0 12px;
+	color: var(--muted);
+}

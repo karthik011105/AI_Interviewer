@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { FileText, UploadCloud, X } from "lucide-react";
 
@@ -117,6 +117,11 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
   );
   const [parseResult, setParseResult] = useState(workflowState?.resumeParseResult || null);
   const [selectionResult, setSelectionResult] = useState(workflowState?.resumeSelectionResult || null);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [rolesError, setRolesError] = useState("");
+  // The session whose roles we're waiting for; a newer upload makes an older
+  // response stale.
+  const rolesFor = useRef("");
 
   function syncWorkflowState(patch) {
     onWorkflowStateChange?.((current) => ({
@@ -181,6 +186,54 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
           ? "parse"
           : "upload";
 
+  async function loadRoles(parsePayload) {
+    const sessionId = parsePayload?.session_id;
+    if (!sessionId) return;
+    rolesFor.current = sessionId;
+    setRolesLoading(true);
+    setRolesError("");
+    try {
+      const response = await fetch(`${baseUrl}/resume/match-roles`, {
+        method: "POST",
+        headers: buildApiHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          max_roles: maxRoles,
+          persist_role_matches: true,
+          use_groq_profiles: useGroqProfiles,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveErrorMessage(payload, "Role matching failed."));
+      }
+      if (rolesFor.current !== sessionId) return;
+      const matches = payload.matches ?? [];
+      const merged = {
+        ...parsePayload,
+        role_matches: payload,
+        related_job_roles: matches,
+        role_selection_required: matches.length > 0,
+      };
+      setParseResult((current) => (current?.session_id === sessionId ? merged : current));
+      syncWorkflowState({ resumeParseResult: merged });
+    } catch {
+      if (rolesFor.current === sessionId) {
+        setRolesError("Couldn't suggest roles right now. Pick one from the full list below.");
+      }
+    } finally {
+      if (rolesFor.current === sessionId) setRolesLoading(false);
+    }
+  }
+
+  // A reload while roles were still loading: fetch them again.
+  useEffect(() => {
+    if (parseResult?.session_id && !parseResult.related_job_roles && !selectionResult && !rolesFor.current) {
+      void loadRoles(parseResult);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function parseResume() {
     if (!resumeFile) {
       setErrorMessage("Choose a PDF resume first.");
@@ -194,7 +247,9 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     const formData = new FormData();
     formData.append("resume_file", resumeFile);
     formData.append("persist_resume", "true");
-    formData.append("run_role_matching", "true");
+    // Roles come from a second request (loadRoles) so the score shows in ~3 s
+    // instead of waiting ~6 s for both Groq calls.
+    formData.append("run_role_matching", "false");
     formData.append("use_groq_profiles", String(useGroqProfiles));
     formData.append("persist_role_matches", "true");
     formData.append("max_roles", String(maxRoles));
@@ -241,11 +296,8 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
         ...DOWNSTREAM_WORKFLOW_RESET,
       });
       setSelectionResult(autoSelectionResult);
-      setInfoMessage(
-        payload.role_selection_required
-          ? "Parsing done. Choose a role."
-          : "Resume parsed. Ready for assessment.",
-      );
+      setInfoMessage("Parsing done. Choose a role.");
+      void loadRoles(payload);
     } catch (error) {
       setParseResult(null);
       syncWorkflowState({
@@ -506,6 +558,19 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
       {parsed ? (
         <section className="pp-roles" aria-labelledby="pp-roles-title">
           <h2 id="pp-roles-title">Best matches for you</h2>
+
+          {rolesLoading ? (
+            <div className="pp-role-grid" aria-busy="true" aria-label="Finding roles that fit your resume">
+              {[0, 1, 2].map((index) => (
+                <div key={index} className="pp-role pp-role--skeleton" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {rolesError ? <p className="pp-roles__note">{rolesError}</p> : null}
 
           {roleOptions.length > 0 ? (
             <div className="pp-role-grid">
