@@ -7,7 +7,10 @@ import { normalizeProctoring, warningCopy } from "../lib/proctoring";
 // A brief blur happens when the mic permission prompt or a native file dialog
 // opens; only a sustained one means the candidate went to another window.
 const BLUR_GRACE_MS = 1500;
-// After returning to full screen, ignore the events the transition itself fires.
+// Entering full screen can itself fire a stray blur/visibility event, so those
+// are ignored for a moment afterwards. Leaving full screen is never ignored:
+// an Esc pressed inside this window used to slip through uncounted and leave
+// the round usable outside full screen.
 const RESUME_GRACE_MS = 800;
 
 function isFullscreen() {
@@ -35,7 +38,12 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 	const [started, setStarted] = useState(isFullscreen);
 	const [warning, setWarning] = useState(null);
 	const [enterFailed, setEnterFailed] = useState(false);
-	const watching = useRef(false);
+	// True while a warning is being recorded, so one tab switch (which fires
+	// fullscreenchange, visibilitychange and blur together) counts once.
+	const recording = useRef(false);
+	const graceUntil = useRef(0);
+	const stateRef = useRef(state);
+	stateRef.current = state;
 	const blurTimer = useRef(null);
 	const base = String(apiBaseUrl || "").replace(/\/+$/, "");
 
@@ -65,10 +73,12 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 
 	const report = useCallback(
 		async (reason) => {
-			if (!watching.current) return;
-			watching.current = false;
+			if (recording.current) return;
+			if (reason !== "exit_fullscreen" && Date.now() < graceUntil.current) return;
+			recording.current = true;
 			clearTimeout(blurTimer.current);
-			let next = { ...state, warnings: state.warnings + 1 };
+			const current = stateRef.current;
+			let next = { ...current, warnings: current.warnings + 1 };
 			try {
 				const response = await fetch(`${base}/proctoring/warning`, {
 					method: "POST",
@@ -82,16 +92,21 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 			const normalized = publish(next);
 			setWarning(normalized.terminated ? null : { reason, ...warningCopy(reason, normalized.warnings, normalized.limit) });
 			if (normalized.terminated && isFullscreen()) document.exitFullscreen().catch(() => {});
+			recording.current = false;
 		},
-		[accessToken, base, publish, roundKey, sessionId, state],
+		[accessToken, base, publish, roundKey, sessionId],
 	);
 
-	// Watch only while the round is running in full screen with no warning up.
+	// Watch while the round is running with no warning up.
 	useEffect(() => {
-		if (!started || warning || state.terminated || !isFullscreen()) return undefined;
-		const arm = setTimeout(() => {
-			watching.current = true;
-		}, RESUME_GRACE_MS);
+		if (!started || warning || state.terminated) return undefined;
+		graceUntil.current = Date.now() + RESUME_GRACE_MS;
+		// Never let the round run outside full screen without a warning, even if
+		// the exit event was missed.
+		if (!isFullscreen()) {
+			report("exit_fullscreen");
+			return undefined;
+		}
 
 		const onFullscreen = () => !isFullscreen() && report("exit_fullscreen");
 		const onVisibility = () => document.visibilityState === "hidden" && report("tab_hidden");
@@ -106,8 +121,6 @@ export default function ProctoredRound({ roundKey, roundLabel, sessionId, apiBas
 		window.addEventListener("blur", onBlur);
 		window.addEventListener("focus", onFocus);
 		return () => {
-			watching.current = false;
-			clearTimeout(arm);
 			clearTimeout(blurTimer.current);
 			document.removeEventListener("fullscreenchange", onFullscreen);
 			document.removeEventListener("visibilitychange", onVisibility);
