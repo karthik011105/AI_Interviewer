@@ -148,6 +148,16 @@ export function interviewReducer(state, action) {
 					tier: action.payload.question_tier || null,
 					difficulty: action.payload.difficulty || null,
 					fallbackUsed: Boolean(action.payload.fallback_used),
+					...(action.payload.snippet ? { snippet: action.payload.snippet } : {}),
+				}),
+			};
+
+		// Code / table / numbers for the question, shown under Maya's words.
+		case "TURN_SNIPPET":
+			return {
+				...state,
+				turns: upsertTurn(state.turns, action.payload.turn_index, "interviewer", {
+					snippet: action.payload.snippet || null,
 				}),
 			};
 
@@ -308,6 +318,7 @@ export const SOCKET_ACTIONS = {
 	turn_start: "TURN_START",
 	turn_delta: "TURN_DELTA",
 	turn_end: "TURN_END",
+	turn_snippet: "TURN_SNIPPET",
 	transcript: "TRANSCRIPT",
 	stt_partial: "STT_PARTIAL",
 	scoring_state: "SCORING_STATE",

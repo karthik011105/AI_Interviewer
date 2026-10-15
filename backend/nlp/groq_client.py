@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from functools import lru_cache
@@ -35,6 +36,22 @@ class GroqCompletionError(GroqClientError):
 
 class GroqRateLimitError(GroqCompletionError):
 	"""Raised when Groq rejects a request because quota or rate limits were exceeded."""
+
+
+# Groq's per-minute token limit says "Please try again in 2.8125s": a short
+# wait. The daily limit says "try again in 7m12s" and is not worth waiting on.
+_RETRY_AFTER = re.compile(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b", re.IGNORECASE)
+MAX_RATE_LIMIT_WAIT_SECONDS = 8.0
+
+
+def rate_limit_wait_seconds(exc: Exception) -> float | None:
+	"""Seconds Groq asked us to wait, or None when it gave no usable hint."""
+	match = _RETRY_AFTER.search(str(exc))
+	if not match:
+		return None
+	minutes, amount, unit = match.groups()
+	seconds = float(amount) / (1000 if unit.casefold() == "ms" else 1)
+	return seconds + 60 * int(minutes or 0)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -211,6 +228,13 @@ async def stream_chat_completion(
 			last_error = exc
 			if _is_rate_limit_error(exc):
 				_record_groq_attempt(started_at, "rate_limited")
+				wait = rate_limit_wait_seconds(exc)
+				# A live interview turn: waiting a few seconds for the per-minute
+				# window beats falling back to a canned question.
+				if wait is not None and wait <= MAX_RATE_LIMIT_WAIT_SECONDS and attempt < max_attempts:
+					_LOGGER.warning("Groq rate limit on stream; retrying in %.1fs as asked.", wait)
+					await asyncio.sleep(wait + 0.25)
+					continue
 				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
 			_record_groq_attempt(started_at, "error")
 			if attempt >= max_attempts:

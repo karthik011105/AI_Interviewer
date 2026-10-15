@@ -252,3 +252,17 @@ describe("interviewer voice unavailable", () => {
 		assert.equal(state.input.mode, INITIAL_STATE.input.mode);
 	});
 });
+
+describe("question snippets", () => {
+	it("attaches the code to the interviewer's turn as soon as it arrives", () => {
+		const state = apply(INITIAL_STATE, [
+			frame({ type: "turn_start", turn_index: 0 }),
+			frame({ type: "turn_delta", turn_index: 0, text: "Have a look at the code on your screen." }),
+			frame({ type: "turn_snippet", turn_index: 0, snippet: { language: "java", code: "System.out.println(1);" } }),
+			frame({ type: "turn_end", turn_index: 0, text: "Have a look at the code on your screen. What does it print?" }),
+		]);
+		const turn = state.turns.find((t) => t.role === "interviewer");
+		assert.equal(turn.snippet.language, "java");
+		assert.equal(turn.text, "Have a look at the code on your screen. What does it print?");
+	});
+});

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 BudgetPressure = Literal["normal", "tight", "wrap_up_now"]
 
@@ -44,6 +44,10 @@ class CoverageTarget(TypedDict):
 	focus_skill: str
 	question_tier: str
 	status: str  # "pending" | "covered"
+	# Technical round only: concept / code_output / find_bug / numerical ...
+	# (see question_formats). Absent for HR and project targets.
+	question_format: NotRequired[str]
+	snippet_language: NotRequired[str]
 
 
 class CoveragePlan(TypedDict):
@@ -71,7 +75,14 @@ def build_coverage_plan(
 		tier = str(slot.get("question_tier") or "general").strip().casefold()
 		if not skill:
 			continue
-		targets.append(CoverageTarget(focus_skill=skill, question_tier=tier, status="pending"))
+		target = CoverageTarget(focus_skill=skill, question_tier=tier, status="pending")
+		question_format = str(slot.get("question_format") or "").strip()
+		if question_format:
+			target["question_format"] = question_format
+		snippet_language = str(slot.get("snippet_language") or "").strip()
+		if snippet_language:
+			target["snippet_language"] = snippet_language
+		targets.append(target)
 		quota[tier] = quota.get(tier, 0) + 1
 
 	effective_min = max(1, min_turns)
@@ -292,6 +303,12 @@ def build_director_block(
 	else:
 		guidance = TIER_GUIDANCE.get(target["question_tier"], TIER_GUIDANCE["general"])
 		target_text = f"{target['focus_skill']} ({target['question_tier']}) - {guidance}"
+		question_format = target.get("question_format")
+		if question_format:
+			from backend.nlp.question_formats import format_instruction
+
+			language = str(target.get("snippet_language") or plan.get("snippet_language") or "python")
+			target_text += f"\nQuestion format   : {question_format} - {format_instruction(question_format, language)}"
 
 	if pressure == "wrap_up_now":
 		action_text = "This is the final turn. Thank the candidate and close the interview."
@@ -349,7 +366,14 @@ def fallback_question(plan: Mapping[str, Any]) -> str:
 				name = "a" + name[1:]
 			return f"Let's go back to {name}. Tell me about {angle.strip()}."
 		return f"Let's talk about {skill}. Walk me through it in your own words."
-	return f"Let's move on to {skill}. Can you explain what {skill} is, and when you would reach for it?"
+	# Never "explain what X is": that is the definition-recall question the
+	# question formats exist to avoid.
+	if target.get("question_format") == "scenario":
+		return (
+			f"Let's move on to {skill}. Picture something going wrong with {skill} in a project you are "
+			"working on. What would you check first, and why?"
+		)
+	return f"Let's move on to {skill}. What is a mistake people often make with {skill}, and how would you avoid it?"
 
 
 __all__ = [

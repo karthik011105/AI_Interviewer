@@ -536,3 +536,36 @@
 @media (prefers-reduced-motion: reduce) {
 	.mic-bar__mic--recording { animation: none; }
 }
+
+/* Code, a small table or the numbers of a problem, shown under the question
+   (never read aloud). Plain block, like an editor, not a chat attachment. */
+.turn-snippet {
+	margin: 10px 0 0;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.turn-snippet figcaption {
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 600;
+}
+
+.turn-snippet pre {
+	margin: 0;
+	padding: 12px 14px;
+	overflow-x: auto;
+	tab-size: 4;
+}
+
+.turn-snippet code {
+	font-family: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+	font-size: 0.88rem;
+	line-height: 1.55;
+	color: var(--text);
+	white-space: pre;
+}

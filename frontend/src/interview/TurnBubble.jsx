@@ -1,3 +1,20 @@
+const LANGUAGE_LABELS = {
+	java: "Java",
+	python: "Python",
+	javascript: "JavaScript",
+	typescript: "TypeScript",
+	cpp: "C++",
+	"c++": "C++",
+	csharp: "C#",
+	go: "Go",
+	sql: "SQL",
+	bash: "Shell",
+	sh: "Shell",
+	yaml: "YAML",
+	dockerfile: "Dockerfile",
+	text: "Problem",
+};
+
 export default function TurnBubble({ turn }) {
 	const isInterviewer = turn.role === "interviewer";
 
@@ -25,6 +42,15 @@ export default function TurnBubble({ turn }) {
 				{turn.text}
 				{turn.streaming ? <span className="turn-bubble__cursor" aria-hidden="true" /> : null}
 			</p>
+
+			{turn.snippet?.code ? (
+				<figure className="turn-snippet">
+					<figcaption>{LANGUAGE_LABELS[turn.snippet.language] || turn.snippet.language || "Code"}</figcaption>
+					<pre>
+						<code>{turn.snippet.code}</code>
+					</pre>
+				</figure>
+			) : null}
 
 		</article>
 	);

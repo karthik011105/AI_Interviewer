@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
 from anyio import ClosedResourceError
@@ -189,6 +189,19 @@ async def _emit_deltas(
 			)
 		yield sentence
 
+	# The model writes the snippet after the spoken words, so it is known once
+	# the text stream ends - while the audio is still playing "have a look at
+	# the code on your screen". Send it now rather than at turn_end.
+	snippet = (stream.turn or {}).get("snippet")
+	if not snippet and "on your screen" in str((stream.turn or {}).get("say") or "").casefold():
+		_LOGGER.warning(
+			"Interviewer referred to a snippet but sent none; metadata tail: %s",
+			stream.raw.rpartition("<<<META>>>")[2][:600],
+		)
+	if snippet:
+		with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
+			await runtime.send_json({"type": "turn_snippet", "turn_index": turn_index, "snippet": snippet})
+
 
 def _question_item(turn: DirectorTurn) -> dict[str, Any]:
 	"""Shape a director turn like a generated QuestionItem.
@@ -207,7 +220,16 @@ def _question_item(turn: DirectorTurn) -> dict[str, Any]:
 		"focus_skill": turn["focus_skill"],
 		"turn_action": turn["action"],
 		"topic_key": turn["topic_key"],
+		"snippet": turn.get("snippet"),
 	}
+
+
+def _with_snippet(text: str, snippet: Mapping[str, Any] | None) -> str:
+	"""The question as the model and the evaluator need it: words plus what was
+	on screen. A "what does this print?" can't be judged without the code."""
+	if not snippet:
+		return text
+	return f"{text}\n\nShown on screen ({snippet.get('language') or 'text'}):\n{snippet.get('code') or ''}"
 
 
 async def _ask_next_turn(runtime: InterviewRuntime) -> None:
@@ -294,7 +316,7 @@ async def _ask_next_turn(runtime: InterviewRuntime) -> None:
 			list(current.get("_dialogue") or []),
 			make_interviewer_turn(
 				index=turn_index,
-				text=turn["say"],
+				text=_with_snippet(turn["say"], turn.get("snippet")),
 				action=turn["action"],
 				focus_skill=turn["focus_skill"],
 				tier=turn["question_tier"],
@@ -318,6 +340,7 @@ async def _ask_next_turn(runtime: InterviewRuntime) -> None:
 			"question_tier": turn["question_tier"],
 			"difficulty": turn["difficulty"],
 			"topic_key": turn["topic_key"],
+			"snippet": turn.get("snippet"),
 			"fallback_used": stream.fallback_used,
 		}
 	)
@@ -408,7 +431,7 @@ async def _score_answer(
 		async with _CPU_SEMAPHORE:
 			evaluation = await asyncio.to_thread(
 				evaluate_answer,
-				question=str(question.get("question") or ""),
+				question=_with_snippet(str(question.get("question") or ""), question.get("snippet")),
 				ideal_points=list(question.get("ideal_points") or []),
 				follow_up="",
 				answer_text=answer_text,

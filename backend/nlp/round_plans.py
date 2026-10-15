@@ -95,9 +95,34 @@ def build_round_coverage_plan(round_type: str, context: Mapping[str, Any]) -> Co
 	else:
 		# Imported here: question_generator is heavy and the technical round is
 		# the only one that needs it.
+		from backend.nlp.question_formats import (
+			format_mix,
+			place_numerical,
+			snippet_language,
+			target_format_and_language,
+		)
 		from backend.nlp.question_generator import _build_skill_allocation_plan
 
-		plan = build_coverage_plan(_build_skill_allocation_plan(context, TECHNICAL_TARGET_COUNT))
+		role_key = str(context.get("selected_role_key") or "")
+		role_title = str(context.get("selected_role_title") or "")
+		allocation = _build_skill_allocation_plan(context, TECHNICAL_TARGET_COUNT)
+		language = snippet_language(
+			role_key,
+			role_title,
+			[*(context.get("skills") or []), *(context.get("technologies") or [])],
+		)
+		# Mix concept questions with code-reading, bug-finding and numerical
+		# ones, chosen for the role (see question_formats).
+		formats = place_numerical(
+			format_mix(role_key, role_title, len(allocation)),
+			[str(slot.get("focus_skill") or "") for slot in allocation],
+		)
+		for slot, question_format in zip(allocation, formats):
+			slot["question_format"], slot["snippet_language"] = target_format_and_language(
+				question_format, str(slot.get("focus_skill") or ""), language
+			)
+		plan = build_coverage_plan(allocation)
+		plan["snippet_language"] = language
 
 	# The fallback question and the director prompt read this to phrase things
 	# for the right round.
