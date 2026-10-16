@@ -177,3 +177,50 @@ class NumericalPlacementTests(TestCase):
 
 		mix = format_mix("machine_learning_engineer", "", 6)
 		self.assertEqual(place_numerical(mix, ["a", "b", "c", "d", "e", "f"]), mix)
+
+
+class FollowUpTests(TestCase):
+	"""Follow-ups only when an answer leaves a doubt, and not every time."""
+
+	def _plan(self, targets=6):
+		# Room to spare, so "time is short" doesn't override the follow-up rules.
+		return build_coverage_plan(
+			[{"focus_skill": f"Skill {i}", "question_tier": "strong"} for i in range(targets)], max_turns=16
+		)
+
+	def test_budget_is_about_two_in_five_questions(self) -> None:
+		from backend.nlp.coverage_director import follow_up_budget
+
+		self.assertEqual(follow_up_budget(self._plan(6)), 2)
+		self.assertEqual(follow_up_budget(self._plan(1)), 1)
+
+	def test_a_follow_up_is_offered_only_for_unclear_or_wrong_answers(self) -> None:
+		block = build_director_block(self._plan(), turns_used=1)
+		self.assertIn("only if their last answer was unclear", block)
+		self.assertIn("Follow-ups left this round: 2", block)
+
+	def test_never_twice_in_a_row_and_never_past_the_budget(self) -> None:
+		self.assertIn("you just asked one", build_director_block(self._plan(), turns_used=2, last_action="follow_up"))
+		self.assertIn("used up", build_director_block(self._plan(), turns_used=4, follow_ups_used=2, last_action="new_topic"))
+
+	def test_the_opening_question_is_never_a_follow_up(self) -> None:
+		self.assertIn("Open the interview", build_director_block(self._plan(), turns_used=0))
+
+	def test_messages_count_follow_ups_from_the_dialogue(self) -> None:
+		from backend.nlp.interview_director import build_director_messages
+
+		dialogue = [
+			{"i": 0, "role": "interviewer", "text": "Q1", "action": "new_topic"},
+			{"i": 0, "role": "candidate", "text": "A1"},
+			{"i": 1, "role": "interviewer", "text": "Q1b", "action": "follow_up"},
+			{"i": 1, "role": "candidate", "text": "A1b"},
+		]
+		messages = build_director_messages(system="s", dialogue=dialogue, coverage_plan=self._plan(), turns_used=2)
+		self.assertIn("you just asked one", messages[-1]["content"])
+
+	def test_prompts_explain_when_to_follow_up(self) -> None:
+		for round_type in ("technical", "hr", "project_discussion"):
+			prompt = build_director_system_prompt({}, role_title="Java Developer", round_type=round_type)
+			with self.subTest(round_type=round_type):
+				self.assertIn("Most good answers get no follow-up", prompt)
+				self.assertNotIn("unusually strong", prompt)

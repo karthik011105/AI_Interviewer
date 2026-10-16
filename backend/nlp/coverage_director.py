@@ -268,11 +268,25 @@ def resolve_turn_target(
 	return claimed_skill, claimed_tier
 
 
+# Interviewer moves that dig into the last answer instead of moving on.
+FOLLOW_UP_ACTIONS = frozenset({"follow_up", "probe_deeper"})
+# About two in five questions may get one: enough to clear up real doubts,
+# few enough that most good answers simply get the next question.
+FOLLOW_UP_SHARE = 0.4
+
+
+def follow_up_budget(plan: Mapping[str, Any]) -> int:
+	"""How many follow-ups this round may use in total."""
+	return max(1, round(len(plan.get("targets") or []) * FOLLOW_UP_SHARE))
+
+
 def build_director_block(
 	plan: Mapping[str, Any],
 	*,
 	turns_used: int,
 	covered_topics: Sequence[Mapping[str, Any]] = (),
+	follow_ups_used: int = 0,
+	last_action: str = "",
 ) -> str:
 	"""Render the steering text appended to the director's final user message."""
 
@@ -310,14 +324,22 @@ def build_director_block(
 			language = str(target.get("snippet_language") or plan.get("snippet_language") or "python")
 			target_text += f"\nQuestion format   : {question_format} - {format_instruction(question_format, language)}"
 
+	follow_ups_left = max(0, follow_up_budget(plan) - follow_ups_used)
 	if pressure == "wrap_up_now":
 		action_text = "This is the final turn. Thank the candidate and close the interview."
 	elif pressure == "tight":
-		action_text = "Do not follow up. Move to the next target now."
+		action_text = "Do not follow up: time is short. Move to the next target now."
+	elif turns_used == 0:
+		action_text = "Open the interview with the next target."
+	elif last_action in FOLLOW_UP_ACTIONS:
+		action_text = "No follow-up: you just asked one. Acknowledge their answer briefly and move to the next target."
+	elif follow_ups_left == 0:
+		action_text = "No follow-up: this round's follow-ups are used up. Move to the next target."
 	else:
 		action_text = (
-			"One follow-up on the current answer is allowed if it was incomplete "
-			"or unusually strong. Otherwise move to the next target."
+			"A follow-up is allowed only if their last answer was unclear, contradictory, partly wrong "
+			"or skipped the why - ask about that exact point. If it was clear, acknowledge it briefly "
+			f"and move to the next target. Follow-ups left this round: {follow_ups_left}."
 		)
 
 	lines = [
@@ -383,8 +405,10 @@ __all__ = [
 	"DEFAULT_MAX_TURNS",
 	"DEFAULT_MIN_TURNS",
 	"TIER_GUIDANCE",
+	"FOLLOW_UP_ACTIONS",
 	"build_coverage_plan",
 	"build_director_block",
+	"follow_up_budget",
 	"covered_targets",
 	"enforce_absent_coverage",
 	"fallback_question",

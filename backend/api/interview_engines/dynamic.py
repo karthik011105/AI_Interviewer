@@ -276,6 +276,9 @@ async def _ask_next_turn(runtime: InterviewRuntime) -> None:
 		model=settings.resume_parser_model,
 		messages=messages,
 		coverage_plan=plan,
+		# Groq's free tier caps tokens per model per day; the second model has
+		# its own budget, and a real question beats the canned fallback.
+		fallback_models=(settings.answer_evaluator_model,),
 	)
 
 	await runtime.send_json({"type": "turn_start", "turn_index": turn_index})

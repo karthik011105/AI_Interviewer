@@ -54,6 +54,19 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
     setApiBaseUrl(workflowState?.apiBaseUrl || API_DEFAULT);
   }, [workflowState?.apiBaseUrl]);
 
+  // Start writing the test as soon as the page opens (no-op if it is already
+  // being prepared or was started).
+  useEffect(() => {
+    if (!syncedSessionId || !syncedRoleKey || assessmentSession) return;
+    const base = trimTrailingSlash(apiBaseUrl);
+    fetch(`${base}/assessment/prepare`, {
+      method: "POST",
+      headers: buildApiHeaders(authState?.accessToken || "", { "Content-Type": "application/json" }),
+      body: JSON.stringify({ session_id: syncedSessionId }),
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncedSessionId, syncedRoleKey]);
+
   // While the next section is being written, check for it every few seconds.
   const waitingForSection =
     Boolean(assessmentSession) &&

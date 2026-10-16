@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
 from backend.api.routes_interview_end import ensure_interview_open
 from backend.assessment import normalize_assessment_role_key
-from backend.assessment.oa_generator import section_results, start_build, take_build
+from backend.assessment.oa_generator import prefetch, section_results, start_build, take_build
 from backend.database.queries import (
 	append_assessment_questions,
 	create_assessment_session,
@@ -47,6 +47,31 @@ class AssessmentAnswerRequest(BaseModel):
 @router.get("/health")
 def assessment_health() -> dict[str, str]:
 	return {"status": "ok"}
+
+
+class AssessmentPrepareRequest(BaseModel):
+	session_id: str
+
+
+@router.post("/prepare")
+def prepare_assessment(
+	request: AssessmentPrepareRequest,
+	current_user: AuthenticatedUser = Depends(require_current_user),
+) -> dict[str, Any]:
+	"""Start writing the attempt in the background as the candidate heads to
+	the assessment, so it is (nearly) ready when they press Start. A checked
+	attempt costs ~20k tokens, so this is not done on every role choice:
+	Groq's free tier allows 200k a day per model."""
+	parent_session = _require_parent_session(request.session_id, current_user)
+	role_key = _resolve_role_key(parent_session, None)
+	try:
+		existing = fetch_assessment_session(request.session_id)
+	except DatabaseClientError:
+		existing = None
+	if existing is not None:
+		return {"preparing": False, "reason": "already_started"}
+	prefetch(request.session_id, role_key, role_key.replace("_", " ").title())
+	return {"preparing": True}
 
 
 @router.post("/start")

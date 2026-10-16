@@ -234,6 +234,19 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Heading to the assessment: start writing it now so it is ready sooner.
+  function continueToAssessment() {
+    const sessionId = parseResult?.session_id || workflowState?.sessionId;
+    if (sessionId) {
+      fetch(`${baseUrl}/assessment/prepare`, {
+        method: "POST",
+        headers: buildApiHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ session_id: sessionId }),
+      }).catch(() => {});
+    }
+    onNavigate?.("assessment");
+  }
+
   async function parseResume() {
     if (!resumeFile) {
       setErrorMessage("Choose a PDF resume first.");
@@ -652,7 +665,7 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
           <span>
             Preparing for <strong>{roleSelection?.title || selectedRoleTitleFallback(roleOptions, selectedRoleKey)}</strong>
           </span>
-          <button type="button" className="primary-button" onClick={() => onNavigate?.("assessment")}>
+          <button type="button" className="primary-button" onClick={continueToAssessment}>
             Continue to assessment →
           </button>
         </div>

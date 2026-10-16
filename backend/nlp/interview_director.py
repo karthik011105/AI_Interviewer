@@ -29,6 +29,7 @@ from typing import Any, Literal, TypedDict
 from backend.config import GroqSettings
 from backend.nlp.conversation_memory import CompactTurn, build_messages
 from backend.nlp.coverage_director import (
+	FOLLOW_UP_ACTIONS,
 	TIER_GUIDANCE,
 	build_director_block,
 	fallback_question,
@@ -283,7 +284,10 @@ def parse_director_output(
 # System prompt
 # ---------------------------------------------------------------------------
 
-_MAX_CONSECUTIVE_FOLLOW_UPS = 2
+# One follow-up, then move on: a real interviewer clears up a doubt, they
+# don't interrogate. The round's overall follow-up budget is set by the
+# coverage director (follow_up_budget).
+_MAX_CONSECUTIVE_FOLLOW_UPS = 1
 
 _SYSTEM_TEMPLATE = """You are {interviewer_name}, a senior engineer conducting a live technical screen for a {role_title} role.
 
@@ -309,9 +313,17 @@ TIER GUIDANCE
   mentioned : {mentioned_guidance}
   absent    : {absent_guidance}
 
+FOLLOW-UPS (like a real interviewer: only when the answer leaves you unsure)
+Before you speak, judge the candidate's last answer:
+  clear     : correct and specific. Acknowledge it in a few words and move to the next target. No follow-up.
+  unclear   : vague, ambiguous, contradicts itself, uses a term loosely, or skips the "why". Ask ONE follow-up about exactly that point, in their own words: "You said ... - what did you mean by that?", "How does that fit with ...?"
+  wrong     : a clear mistake. Ask ONE question that lets them catch it ("Are you sure? What happens when ...?") without giving the answer away.
+  no_answer : they don't know or skipped it. Don't press: reassure briefly and move on.
+Most good answers get no follow-up. Never follow up twice on the same question. When the coverage director says no follow-up, move on.
+
 CHOOSING YOUR NEXT MOVE
-  follow_up    : their last answer was vague, incomplete, or unusually strong and worth pushing on. At most {max_follow_ups} in a row on one topic.
-  probe_deeper : they were correct but shallow. Go one level down on the same topic.
+  follow_up    : the last answer was unclear or wrong (see above) and the coverage director allows a follow-up. At most {max_follow_ups} in a row.
+  probe_deeper : correct but shallow, and a follow-up is allowed: one level down on the same topic.
   new_topic    : move to the next coverage target you are given.
   wrap_up      : only when the coverage director says wrap_up_now.
 
@@ -336,9 +348,17 @@ Then one JSON object and nothing after it:
 You MUST emit {sentinel} followed by that JSON object. A reply without it is invalid."""
 
 
-_SHARED_MOVES_AND_FORMAT = """CHOOSING YOUR NEXT MOVE
-  follow_up    : their last answer was vague, incomplete, or unusually strong and worth pushing on. At most {max_follow_ups} in a row on one topic.
-  probe_deeper : they answered but stayed general. Ask for the specific detail behind it.
+_SHARED_MOVES_AND_FORMAT = """FOLLOW-UPS (like a real interviewer: only when the answer leaves you unsure)
+Before you speak, judge the candidate's last answer:
+  clear     : correct and specific. Acknowledge it in a few words and move to the next target. No follow-up.
+  unclear   : vague, ambiguous, contradicts itself, uses a term loosely, or skips the "why". Ask ONE follow-up about exactly that point, in their own words: "You said ... - what did you mean by that?", "How does that fit with ...?"
+  wrong     : a clear mistake. Ask ONE question that lets them catch it ("Are you sure? What happens when ...?") without giving the answer away.
+  no_answer : they don't know or skipped it. Don't press: reassure briefly and move on.
+Most good answers get no follow-up. Never follow up twice on the same question. When the coverage director says no follow-up, move on.
+
+CHOOSING YOUR NEXT MOVE
+  follow_up    : the last answer was unclear or wrong (see above) and the coverage director allows a follow-up. At most {max_follow_ups} in a row.
+  probe_deeper : they answered but stayed general, and a follow-up is allowed: ask for the specific detail behind it.
   new_topic    : move to the next coverage target you are given.
   wrap_up      : only when the coverage director says wrap_up_now.
 
@@ -506,6 +526,7 @@ class DirectorTurnStream:
 	__slots__ = (
 		"_accumulator",
 		"_coverage_plan",
+		"_fallback_models",
 		"_fallback_used",
 		"_messages",
 		"_model",
@@ -523,9 +544,13 @@ class DirectorTurnStream:
 		messages: Sequence[Mapping[str, Any]],
 		coverage_plan: Mapping[str, Any] | None = None,
 		temperature: float = 0.7,
+		fallback_models: Sequence[str] = (),
 	) -> None:
 		self._settings = settings
 		self._model = model
+		# Tried in order when the model fails before saying anything - e.g.
+		# its daily token limit is used up - before a canned question.
+		self._fallback_models = tuple(m for m in fallback_models if m and m != model)
 		self._messages = list(messages)
 		self._coverage_plan = coverage_plan or {}
 		self._temperature = temperature
@@ -565,18 +590,22 @@ class DirectorTurnStream:
 	async def sentences(self) -> AsyncIterator[str]:
 		"""Yield the interviewer's speech as it becomes available."""
 
-		try:
-			async for delta in stream_chat_completion(
-				settings=self._settings,
-				model=self._model,
-				temperature=self._temperature,
-				messages=self._messages,
-			):
-				self._raw.append(delta)
-				for sentence in self._accumulator.feed(delta):
-					yield sentence
-		except GroqClientError as exc:
-			_LOGGER.warning("Director stream failed before producing speech: %s", exc)
+		for model in (self._model, *self._fallback_models):
+			try:
+				async for delta in stream_chat_completion(
+					settings=self._settings,
+					model=model,
+					temperature=self._temperature,
+					messages=self._messages,
+				):
+					self._raw.append(delta)
+					for sentence in self._accumulator.feed(delta):
+						yield sentence
+				break
+			except GroqClientError as exc:
+				if self._raw:
+					break  # already speaking: keep what was said
+				_LOGGER.warning("Director stream on %s failed before producing speech: %s", model, exc)
 
 		remainder = self._accumulator.flush()
 		if remainder:
@@ -607,8 +636,13 @@ def build_director_messages(
 ) -> list[dict[str, str]]:
 	"""Assemble the full message array for one director turn."""
 
+	interviewer_actions = [str(t.get("action") or "") for t in dialogue if t.get("role") == "interviewer"]
 	director_block = build_director_block(
-		coverage_plan, turns_used=turns_used, covered_topics=covered_topics
+		coverage_plan,
+		turns_used=turns_used,
+		covered_topics=covered_topics,
+		follow_ups_used=sum(1 for action in interviewer_actions if action in FOLLOW_UP_ACTIONS),
+		last_action=interviewer_actions[-1] if interviewer_actions else "",
 	)
 	if not dialogue:
 		director_block = "[BEGIN] " + director_block

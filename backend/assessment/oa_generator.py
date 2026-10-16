@@ -816,7 +816,7 @@ def section_results(record: Mapping[str, Any]) -> list[dict[str, Any]]:
 _PREFETCH_LOCK = threading.Lock()
 _PREFETCH: dict[str, tuple[str, int, OABuild | None]] = {}
 _BUILD_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="oa-build")
-_PREFETCH_DELAY_SECONDS = 2.0  # the candidate may click through a few roles
+_PREFETCH_DELAY_SECONDS = 0.5
 
 
 def _prefetch_enabled() -> bool:
@@ -838,7 +838,10 @@ def prefetch(session_id: str, role_key: str, role_title: str = "") -> None:
 	if not session_id or not role_key or not _prefetch_enabled():
 		return
 	with _PREFETCH_LOCK:
-		generation = (_PREFETCH.get(session_id, ("", 0, None))[1] or 0) + 1
+		current = _PREFETCH.get(session_id)
+		if current and current[0] == role_key and (current[2] is None or not current[2].failed):
+			return  # already being prepared for this role: never start over
+		generation = (current[1] if current else 0) + 1
 		_PREFETCH[session_id] = (role_key, generation, None)
 
 	def _job() -> None:
