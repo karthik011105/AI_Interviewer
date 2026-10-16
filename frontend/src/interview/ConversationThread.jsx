@@ -18,6 +18,17 @@ export default function ConversationThread({ turns, liveCaption, phase }) {
 		scroller.scrollTop = scroller.scrollHeight;
 	}, [turns, liveCaption]);
 
+	// Typing grows the last bubble without changing `turns`; follow it.
+	useEffect(() => {
+		const scroller = scrollerRef.current;
+		if (!scroller || typeof MutationObserver === "undefined") return undefined;
+		const observer = new MutationObserver(() => {
+			if (pinnedRef.current) scroller.scrollTop = scroller.scrollHeight;
+		});
+		observer.observe(scroller, { childList: true, subtree: true, characterData: true });
+		return () => observer.disconnect();
+	}, []);
+
 	function handleScroll() {
 		const scroller = scrollerRef.current;
 		if (!scroller) return;

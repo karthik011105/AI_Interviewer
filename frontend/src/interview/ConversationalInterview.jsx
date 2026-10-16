@@ -74,7 +74,20 @@ export default function ConversationalInterview({
 
 	const socket = useInterviewSocket({
 		dispatch,
-		onAudio: useCallback((buffer) => playback.enqueue(buffer), [playback]),
+		onAudio: useCallback(
+			(buffer, meta) =>
+				playback.enqueue(buffer, ({ delayMs, durationMs }) => {
+					if (meta?.turnIndex == null) return;
+					dispatch({
+						type: "SPEECH_SCHEDULED",
+						turnIndex: meta.turnIndex,
+						chunkIndex: meta.chunkIndex,
+						start: performance.now() + delayMs,
+						duration: durationMs,
+					});
+				}),
+			[playback],
+		),
 		onClose: useCallback((manual) => {
 			playback.stop();
 			if (!manual && !stateRef.current.round.done) {

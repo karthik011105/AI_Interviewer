@@ -102,9 +102,17 @@ export function useInterviewSocket({ dispatch, onAudio, onOpen, onClose }) {
 				callbacks.current.onOpen?.();
 			};
 
+			// One audio chunk per spoken sentence, in order. Counted here, as the
+			// frames arrive, rather than from React state, which can lag a frame.
+			const audioTrack = { turnIndex: null, chunkIndex: 0 };
+
 			socket.onmessage = (event) => {
 				if (typeof event.data !== "string") {
-					callbacks.current.onAudio?.(event.data);
+					callbacks.current.onAudio?.(event.data, {
+						turnIndex: audioTrack.turnIndex,
+						chunkIndex: audioTrack.chunkIndex,
+					});
+					audioTrack.chunkIndex += 1;
 					return;
 				}
 
@@ -119,8 +127,13 @@ export function useInterviewSocket({ dispatch, onAudio, onOpen, onClose }) {
 					return;
 				}
 
+				if (payload.type === "turn_start") {
+					audioTrack.turnIndex = payload.turn_index;
+					audioTrack.chunkIndex = 0;
+				}
+
 				const actionType = SOCKET_ACTIONS[payload.type];
-				if (actionType) dispatch({ type: actionType, payload });
+				if (actionType) dispatch({ type: actionType, payload, receivedAt: performance.now() });
 			};
 
 			socket.onerror = () => {

@@ -266,3 +266,31 @@ describe("question snippets", () => {
 		assert.equal(turn.text, "Have a look at the code on your screen. What does it print?");
 	});
 });
+
+describe("typing the question while it is spoken", () => {
+	it("keeps each sentence and the time its audio plays", () => {
+		const state = apply(INITIAL_STATE, [
+			frame({ type: "turn_start", turn_index: 0 }),
+			frame({ type: "turn_delta", turn_index: 0, text: "First sentence." }),
+			frame({ type: "turn_delta", turn_index: 0, text: "Second one?" }),
+			{ type: "SPEECH_SCHEDULED", turnIndex: 0, chunkIndex: 0, start: 500, duration: 1200 },
+			{ ...frame({ type: "turn_end", turn_index: 0, text: "First sentence. Second one?" }), receivedAt: 900 },
+		]);
+		const turn = state.turns.find((t) => t.role === "interviewer");
+		assert.deepEqual(turn.sentences, ["First sentence.", "Second one?"]);
+		assert.deepEqual(turn.speech[0], { start: 500, duration: 1200 });
+		assert.equal(turn.endedAt, 900);
+		assert.equal(turn.revealAll, false);
+	});
+
+	it("shows the whole question once the candidate cuts in or answers", () => {
+		const asked = apply(INITIAL_STATE, [
+			frame({ type: "turn_start", turn_index: 0 }),
+			frame({ type: "turn_delta", turn_index: 0, text: "A long question." }),
+		]);
+		const interrupted = reduce(asked, frame({ type: "interrupt_ack" }));
+		assert.equal(interrupted.turns.find((t) => t.role === "interviewer").revealAll, true);
+		const answered = reduce(asked, { type: "LOCAL_ANSWER", turnIndex: 0, text: "My answer" });
+		assert.equal(answered.turns.find((t) => t.role === "interviewer").revealAll, true);
+	});
+});

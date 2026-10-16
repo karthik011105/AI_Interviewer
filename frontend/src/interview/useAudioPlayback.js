@@ -92,7 +92,7 @@ export function useAudioPlayback({ onError } = {}) {
 	}, []);
 
 	const enqueue = useCallback(
-		async (arrayBuffer) => {
+		async (arrayBuffer, onScheduled) => {
 			if (!arrayBuffer || arrayBuffer.byteLength === 0) return;
 
 			const context = ensureContext();
@@ -128,6 +128,11 @@ export function useAudioPlayback({ onError } = {}) {
 			source.start(startAt);
 			cursorRef.current = startAt + audioBuffer.duration;
 			activeRef.current = true;
+			// So the matching sentence can be typed out while it is heard.
+			onScheduled?.({
+				delayMs: Math.max(0, (startAt - context.currentTime) * 1000),
+				durationMs: audioBuffer.duration * 1000,
+			});
 		},
 		[ensureContext, onError],
 	);

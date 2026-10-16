@@ -71,6 +71,10 @@ function upsertTurn(turns, turnIndex, role, patch) {
 	return next;
 }
 
+function revealAllInterviewerTurns(turns) {
+	return turns.map((t) => (t.role === "interviewer" && !t.revealAll ? { ...t, revealAll: true } : t));
+}
+
 export function interviewReducer(state, action) {
 	switch (action.type) {
 		case "RESET":
@@ -112,6 +116,11 @@ export function interviewReducer(state, action) {
 					text: "",
 					streaming: true,
 					action: action.payload.action || null,
+					// Typed out as spoken: see speechReveal.js.
+					sentences: [],
+					speech: {},
+					endedAt: null,
+					revealAll: false,
 				}),
 			};
 
@@ -123,7 +132,13 @@ export function interviewReducer(state, action) {
 			if (at === -1) {
 				return {
 					...state,
-					turns: upsertTurn(state.turns, turnIndex, "interviewer", { text, streaming: true }),
+					turns: upsertTurn(state.turns, turnIndex, "interviewer", {
+						text,
+						streaming: true,
+						sentences: [text],
+						speech: {},
+						endedAt: null,
+					}),
 				};
 			}
 			const turns = state.turns.slice();
@@ -131,6 +146,7 @@ export function interviewReducer(state, action) {
 			turns[at] = {
 				...existing,
 				text: existing.text ? `${existing.text} ${text}` : text,
+				sentences: [...(existing.sentences || []), text],
 			};
 			return { ...state, turns };
 		}
@@ -149,8 +165,21 @@ export function interviewReducer(state, action) {
 					difficulty: action.payload.difficulty || null,
 					fallbackUsed: Boolean(action.payload.fallback_used),
 					...(action.payload.snippet ? { snippet: action.payload.snippet } : {}),
+					endedAt: action.receivedAt ?? 0,
 				}),
 			};
+
+		// When one sentence's audio will play, so it can be typed out with it.
+		case "SPEECH_SCHEDULED": {
+			const at = state.turns.findIndex((t) => t.turnIndex === action.turnIndex && t.role === "interviewer");
+			if (at === -1) return state;
+			const turns = state.turns.slice();
+			turns[at] = {
+				...turns[at],
+				speech: { ...(turns[at].speech || {}), [action.chunkIndex]: { start: action.start, duration: action.duration } },
+			};
+			return { ...state, turns };
+		}
 
 		// Code / table / numbers for the question, shown under Maya's words.
 		case "TURN_SNIPPET":
@@ -191,7 +220,7 @@ export function interviewReducer(state, action) {
 			// not send it back as a transcript.
 			return {
 				...state,
-				turns: upsertTurn(state.turns, action.turnIndex, "candidate", {
+				turns: upsertTurn(revealAllInterviewerTurns(state.turns), action.turnIndex, "candidate", {
 					text: action.text,
 					streaming: false,
 					scoring: true,
@@ -247,6 +276,8 @@ export function interviewReducer(state, action) {
 				tts: { ...state.tts, playing: false },
 				phase: "listening",
 				interruptSeq: state.interruptSeq + 1,
+				// The voice stopped: show the rest of the question at once.
+				turns: revealAllInterviewerTurns(state.turns),
 			};
 
 		case "ROUND_COMPLETE":
