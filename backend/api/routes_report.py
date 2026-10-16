@@ -23,6 +23,7 @@ from backend.database.queries import (
 from pymongo.errors import PyMongoError
 
 from backend.database.db_errors import DatabaseClientError
+from backend.assessment.oa_generator import section_results
 from backend.dsa.report_engine import build_dsa_round_report
 from backend.nlp.resume_quality_scorer import score_resume_as_dict, score_role_match_as_dict
 from backend.report_pdf import build_report_pdf
@@ -480,6 +481,23 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 		recommendations.append(LOW_SCORE_GUIDANCE["assessment"])
 	else:
 		recommendations.append("Keep revising core fundamentals with short timed MCQ sets before the next mock session.")
+
+	# Online-assessment attempts are sectioned (aptitude, fundamentals, role,
+	# code): say which sections were strong and which to practise.
+	sections = [entry for entry in section_results(record) if entry["answered"]]
+	if len(sections) > 1:
+		metrics["sections"] = sections
+		for entry in sections:
+			ratio = entry["correct"] / entry["total"]
+			label = f"{entry['title']} ({entry['correct']}/{entry['total']})"
+			evidence.append(f"{entry['title']}: {entry['correct']} of {entry['total']} correct.")
+			if ratio >= 0.7:
+				strengths.insert(0, f"Strong in {label}.")
+			elif ratio < 0.5:
+				risks.insert(0, f"Weak in {label}.")
+		weakest = min(sections, key=lambda e: e["correct"] / e["total"])
+		if weakest["correct"] / weakest["total"] < 0.6:
+			recommendations.insert(0, f"Practise {weakest['title']} questions under a timer - it was your weakest section.")
 	return {
 		"score": score,
 		"summary": {

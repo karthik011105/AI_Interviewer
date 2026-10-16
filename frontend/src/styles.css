@@ -6174,3 +6174,107 @@ body.pp-focus-mode .pp-watermark {
 	border-color: var(--danger);
 	color: var(--danger);
 }
+
+/* Online assessment */
+.pp-question__section {
+	padding: 3px 10px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	color: var(--text);
+	font-size: 0.8rem;
+	white-space: nowrap;
+}
+
+.pp-question__code {
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.pp-question__code figcaption {
+	padding: 6px 12px;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 0.78rem;
+	font-weight: 600;
+}
+
+.pp-question__code pre {
+	margin: 0;
+	padding: 12px 14px;
+	overflow-x: auto;
+	tab-size: 4;
+}
+
+.pp-question__code code,
+.assessment-option__text--code {
+	font-family: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+	/* Coding fonts join "<>" into a diamond: show the characters as typed. */
+	font-variant-ligatures: none;
+	font-feature-settings: "liga" 0, "calt" 0;
+	font-size: 0.9rem;
+	line-height: 1.55;
+	white-space: pre-wrap;
+}
+
+.pp-question__code code {
+	white-space: pre;
+	color: var(--text);
+}
+
+.pp-question__hint {
+	margin: -6px 0 0;
+	color: var(--muted);
+	font-size: 0.9rem;
+	font-weight: 600;
+}
+
+.pp-assessment__wait {
+	margin-top: 10px !important;
+	color: var(--muted);
+	font-size: 0.9rem;
+}
+
+.pp-assessment__done {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 14px;
+	max-width: 620px;
+	margin: 0 auto;
+}
+
+.pp-assessment__done h2 {
+	margin: 0;
+}
+
+.pp-assessment__done p {
+	margin: 0;
+	color: var(--muted);
+}
+
+.pp-assessment__sections {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.pp-assessment__sections th,
+.pp-assessment__sections td {
+	padding: 9px 4px;
+	border-bottom: 1px solid var(--border);
+	text-align: left;
+}
+
+.pp-assessment__sections th {
+	color: var(--muted);
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+.pp-assessment__sections td:last-child,
+.pp-assessment__sections th:last-child {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}

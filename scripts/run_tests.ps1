@@ -54,6 +54,11 @@ if (-not $env:DISABLE_SKILL_EXTRACTOR) {
     $env:DISABLE_SKILL_EXTRACTOR = "1"
 }
 
+# Never generate assessments with Groq in the background during tests.
+if (-not $env:DISABLE_OA_PREFETCH) {
+    $env:DISABLE_OA_PREFETCH = "1"
+}
+
 $pyArgs = @("-m", "unittest")
 
 if ($Module) {

@@ -114,8 +114,15 @@ def create_chat_completion(
 	messages: Sequence[Mapping[str, Any]],
 	timeout: float | None = None,
 	response_format: Mapping[str, Any] | None = None,
+	extra_body: Mapping[str, Any] | None = None,
+	max_rate_limit_wait: float = 0.0,
 ) -> Any:
-	"""Create a Groq chat completion with shared retry/backoff behavior."""
+	"""Create a Groq chat completion with shared retry/backoff behavior.
+
+	``max_rate_limit_wait``: when Groq's per-minute limit answers "try again in
+	Xs" with X at most this, wait and retry instead of failing. 0 keeps the old
+	fail-fast behaviour for callers that have a cheaper fallback.
+	"""
 
 	client = get_groq_client(settings.api_key, settings.api_base_url)
 	request_timeout = settings.timeout_seconds if timeout is None else timeout
@@ -130,6 +137,8 @@ def create_chat_completion(
 	}
 	if response_format is not None:
 		request_kwargs["response_format"] = dict(response_format)
+	if extra_body:
+		request_kwargs["extra_body"] = dict(extra_body)
 
 	for attempt in range(1, max_attempts + 1):
 		started_at = time.monotonic()
@@ -139,6 +148,11 @@ def create_chat_completion(
 			last_error = exc
 			if _is_rate_limit_error(exc):
 				_record_groq_attempt(started_at, "rate_limited")
+				wait = rate_limit_wait_seconds(exc)
+				if wait is not None and wait <= max_rate_limit_wait and attempt < max_attempts:
+					_LOGGER.warning("Groq rate limit; retrying in %.1fs as asked.", wait)
+					time.sleep(wait + 0.25)
+					continue
 				raise GroqRateLimitError(f"Groq rate limit reached: {exc}") from exc
 			_record_groq_attempt(started_at, "error")
 			if attempt >= max_attempts:

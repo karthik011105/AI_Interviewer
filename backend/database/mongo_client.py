@@ -339,6 +339,32 @@ class MongoRepository:
 			not_found_message="The supplied session_id does not exist.",
 		)
 
+	def save_oa_questions(self, docs: Sequence[Mapping[str, Any]]) -> int:
+		"""Add checked assessment questions to the shared pool. Keyed by a hash
+		of the question text, so the same question is stored once."""
+		saved = 0
+		for doc in docs:
+			doc_id = str(doc.get("_id") or "")
+			if not doc_id:
+				continue
+			result = self.db["oa_questions"].update_one(
+				{"_id": doc_id},
+				{"$setOnInsert": {**dict(doc), "created_at": _utcnow_iso()}},
+				upsert=True,
+			)
+			saved += 1 if result.upserted_id is not None else 0
+		return saved
+
+	def sample_oa_questions(self, *, family: str, section: str, limit: int) -> list[dict[str, Any]]:
+		"""Random questions from the pool for one role family and section."""
+		if limit <= 0:
+			return []
+		cursor = self.db["oa_questions"].aggregate([
+			{"$match": {"family": family, "section": section}},
+			{"$sample": {"size": int(limit)}},
+		])
+		return [dict(doc) for doc in cursor]
+
 	def mark_interview_finished(self, *, session_id: str, round_name: str) -> dict[str, Any]:
 		"""The candidate chose to end the interview early (Finish interview)."""
 		return self.update_one(
@@ -575,6 +601,51 @@ class MongoRepository:
 
 	def delete_assessment_session(self, *, session_id: str) -> int:
 		return self.delete_many("assessment_sessions", filters={"session_id": session_id})
+
+	def append_assessment_questions(
+		self,
+		*,
+		session_id: str,
+		build_id: str,
+		questions: Sequence[Mapping[str, Any]],
+		pending: bool,
+		sections: Sequence[Mapping[str, Any]],
+		total_questions: int,
+	) -> dict[str, Any] | None:
+		"""Add a finished section to an assessment the candidate is already
+		taking. Matched on the build that started it, so a build left running
+		after "New test" or a reset changes nothing. When the last section
+		lands and every question is already answered, the attempt completes."""
+		update: dict[str, Any] = {
+			"$set": {
+				"batch_json.pending": pending,
+				"batch_json.sections": [dict(s) for s in sections],
+				"total_questions": total_questions,
+				"updated_at": _utcnow_iso(),
+			}
+		}
+		if questions:
+			update["$push"] = {"batch_json.questions": {"$each": [dict(q) for q in questions]}}
+		doc = self.db["assessment_sessions"].find_one_and_update(
+			{"session_id": session_id, "batch_json.build_id": build_id},
+			update,
+			return_document=ReturnDocument.AFTER,
+		)
+		if doc is None:
+			return None
+		answered = int(doc.get("answered_count") or 0)
+		if not pending and doc.get("status") != "completed" and total_questions and answered >= total_questions:
+			correct = int(doc.get("correct_count") or 0)
+			doc = self.db["assessment_sessions"].find_one_and_update(
+				{"session_id": session_id, "batch_json.build_id": build_id},
+				{"$set": {
+					"status": "completed",
+					"completed_at": _utcnow_iso(),
+					"score_percent": round(correct / total_questions * 100, 2),
+				}},
+				return_document=ReturnDocument.AFTER,
+			)
+		return self._map_id(doc) if doc else None
 
 	def persist_assessment_session(
 		self,

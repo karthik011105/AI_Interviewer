@@ -31,6 +31,33 @@ def update_session_status(session_id: str, status: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.update_session_status(session_id=session_id, status=status)
 
+def append_assessment_questions(
+	session_id: str,
+	build_id: str,
+	questions: Sequence[Mapping[str, Any]],
+	*,
+	pending: bool,
+	sections: Sequence[Mapping[str, Any]],
+	total_questions: int,
+) -> dict[str, Any] | None:
+	repo = get_repository()
+	return repo.append_assessment_questions(
+		session_id=session_id,
+		build_id=build_id,
+		questions=questions,
+		pending=pending,
+		sections=sections,
+		total_questions=total_questions,
+	)
+
+def save_oa_questions(docs: Sequence[Mapping[str, Any]]) -> int:
+	repo = get_repository()
+	return repo.save_oa_questions(docs)
+
+def sample_oa_questions(family: str, section: str, limit: int) -> list[dict[str, Any]]:
+	repo = get_repository()
+	return repo.sample_oa_questions(family=family, section=section, limit=limit)
+
 def mark_interview_finished(session_id: str, round_name: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.mark_interview_finished(session_id=session_id, round_name=round_name)

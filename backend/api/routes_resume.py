@@ -22,6 +22,7 @@ from backend.api.auth import (
 )
 from backend.api.quotas import RESUME_PARSE, ROLE_MATCH, quota_dependency
 from backend.assessment import normalize_assessment_role_key
+from backend.assessment.oa_generator import prefetch as prefetch_assessment
 from backend.config import ConfigurationError, get_settings
 from backend.database.queries import (
 	create_session,
@@ -479,6 +480,18 @@ def select_role(
 	except Exception:
 		_LOGGER.warning("Role match scoring failed for %s.", role_key, exc_info=True)
 		role_match = None
+
+	# Start building this role's online assessment now; generating and
+	# checking 15-25 questions takes a while, and it is usually ready by the
+	# time the candidate opens the assessment.
+	try:
+		prefetch_assessment(
+			request.session_id,
+			normalize_assessment_role_key(role_key),
+			str(selected_role_match["title"] or ""),
+		)
+	except Exception:
+		_LOGGER.warning("Could not start preparing the assessment for %s.", role_key, exc_info=True)
 
 	return {
 		"session_id": request.session_id,

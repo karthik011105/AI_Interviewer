@@ -6,6 +6,7 @@ import ast
 import base64
 import binascii
 import json
+import os
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -959,6 +960,48 @@ def _submit_harness(harness_code: str, *, language: str) -> dict[str, Any]:
 	token = str(response.get("token") or "").strip()
 	if not token:
 		raise CodeExecutionError("Judge0 submission did not return a token. Cannot poll for results.")
+	return _poll_submission(token)
+
+
+# Judge0 CE language ids for whole programs (assessment answer checks). The
+# three DSA languages come from settings; the rest are Judge0 CE defaults.
+_PROGRAM_LANGUAGE_IDS_DEFAULT = {"c": 50, "javascript": 63, "bash": 46}
+
+
+def run_program(source_code: str, language: str) -> dict[str, Any]:
+	"""Run a complete program on Judge0 and return its raw result
+	(stdout, stderr, compile_output, status). Used to check the answer key of
+	"what does this print?" assessment questions, so unlike the DSA runner it
+	takes a whole program with its own main()."""
+	settings = get_settings().judge0
+	key = str(language or "").strip().casefold()
+	if key in {"python", "py", "python3"}:
+		language_id = settings.python_language_id
+	elif key in {"cpp", "c++"}:
+		language_id = settings.cpp_language_id
+	elif key == "java":
+		language_id = settings.java_language_id
+	elif key in _PROGRAM_LANGUAGE_IDS_DEFAULT:
+		language_id = int(os.getenv(f"JUDGE0_{key.upper()}_LANGUAGE_ID") or _PROGRAM_LANGUAGE_IDS_DEFAULT[key])
+	else:
+		raise CodeExecutionError(f"Judge0 has no program runner for {language!r}.")
+	if len(source_code) > settings.max_source_characters:
+		raise SafetyViolationError("Program exceeds the configured source limit.")
+	query = urllib_parse.urlencode({"base64_encoded": "false"})
+	payload = {
+		"language_id": language_id,
+		"source_code": source_code,
+		"stdin": "",
+		"cpu_time_limit": settings.cpu_time_limit_seconds,
+		"wall_time_limit": settings.wall_time_limit_seconds,
+		"memory_limit": settings.memory_limit_kb,
+		"enable_per_process_and_thread_time_limit": True,
+		"enable_per_process_and_thread_memory_limit": True,
+	}
+	response = _open_json_request(f"{settings.api_base_url}/submissions?{query}", method="POST", payload=payload)
+	token = str((response or {}).get("token") or "").strip() if isinstance(response, Mapping) else ""
+	if not token:
+		raise CodeExecutionError("Judge0 submission did not return a token.")
 	return _poll_submission(token)
 
 

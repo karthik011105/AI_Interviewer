@@ -50,6 +50,8 @@ export AUTH_JWT_SECRET="${AUTH_JWT_SECRET:-local-test-secret-not-used-outside-te
 export MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:59999}"
 # Never load the 431 MB JobBERT skill model in tests (CI never downloads it).
 export DISABLE_SKILL_EXTRACTOR="${DISABLE_SKILL_EXTRACTOR:-1}"
+# Never generate assessments with Groq in the background during tests.
+export DISABLE_OA_PREFETCH="${DISABLE_OA_PREFETCH:-1}"
 
 # A bare module name (tests.test_auth) runs just that module; anything starting
 # with a dash is a unittest flag and is appended to discovery.

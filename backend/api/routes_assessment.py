@@ -10,13 +10,10 @@ from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
 from backend.api.routes_interview_end import ensure_interview_open
-from backend.assessment import (
-	AssessmentBankError,
-	AssessmentBatch,
-	build_assessment_batch,
-	normalize_assessment_role_key,
-)
+from backend.assessment import normalize_assessment_role_key
+from backend.assessment.oa_generator import section_results, start_build, take_build
 from backend.database.queries import (
+	append_assessment_questions,
 	create_assessment_session,
 	get_assessment_session as fetch_assessment_session,
 	get_session,
@@ -34,14 +31,17 @@ def _utcnow_iso() -> str:
 class AssessmentStartRequest(BaseModel):
 	session_id: str
 	role_key: str | None = None
-	total_questions: int = Field(default=8, ge=4, le=20)
+	# None: the attempt picks its own size (15-25, see oa_blueprint).
+	total_questions: int | None = Field(default=None, ge=4, le=30)
 	force_restart: bool = False
 
 
 class AssessmentAnswerRequest(BaseModel):
 	session_id: str
 	question_id: str
-	selected_option_id: str = Field(min_length=1, max_length=32)
+	selected_option_id: str | None = Field(default=None, min_length=1, max_length=32)
+	# "Select all that apply" questions send every chosen option.
+	selected_option_ids: list[str] | None = Field(default=None, max_length=5)
 
 
 @router.get("/health")
@@ -68,7 +68,8 @@ def start_assessment(
 	if existing_record is not None and not request.force_restart:
 		existing_role_key = str(existing_record.get("role_key") or "").strip()
 		existing_total_questions = int(existing_record.get("total_questions") or 0)
-		if existing_role_key != role_key or existing_total_questions != request.total_questions:
+		size_conflict = request.total_questions is not None and existing_total_questions != request.total_questions
+		if existing_role_key != role_key or size_conflict:
 			raise HTTPException(
 				status_code=status.HTTP_409_CONFLICT,
 				detail=(
@@ -80,29 +81,56 @@ def start_assessment(
 		response["created_assessment_session"] = False
 		return response
 
-	try:
-		batch = build_assessment_batch(
-			session_id=request.session_id,
+	# Usually already being built in the background since the role was
+	# chosen; a restart, or no/failed preparation, starts one now. Either way
+	# the candidate starts as soon as the first section is ready, and later
+	# sections are appended to the stored attempt while they work.
+	build = None
+	if not request.force_restart and request.total_questions is None:
+		build = take_build(request.session_id, role_key)
+	if build is None:
+		build = start_build(
 			role_key=role_key,
+			role_title=role_key.replace("_", " ").title(),
 			total_questions=request.total_questions,
 		)
-		record = create_assessment_session(
-			session_id=request.session_id,
-			role_key=role_key,
-			total_questions=request.total_questions,
-			batch_json=_build_batch_snapshot(batch),
-			state_json=_build_initial_state(total_questions=request.total_questions),
-			status="in_progress",
-			answered_count=0,
-			correct_count=0,
-			score_percent=0.0,
-			started_at=_utcnow_iso(),
-		)
-	except AssessmentBankError as exc:
+	if not build.wait_first_section(timeout=120):
 		raise HTTPException(
-			status_code=status.HTTP_400_BAD_REQUEST,
-			detail=str(exc),
-		) from exc
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Couldn't prepare questions for this role right now. Please try again in a minute.",
+		)
+
+	session_id = request.session_id
+
+	def _append(items: list[dict[str, Any]], meta: dict[str, Any]) -> None:
+		append_assessment_questions(
+			session_id,
+			build.build_id,
+			items,
+			pending=bool(meta["pending"]),
+			sections=meta["sections"],
+			total_questions=int(meta["total_questions"]),
+		)
+
+	try:
+		# Snapshot and attach under the build's lock, so a section finishing
+		# in between is neither lost nor stored twice.
+		with build.lock:
+			batch_snapshot = build.snapshot()
+			total_questions = build.planned_total()
+			record = create_assessment_session(
+				session_id=session_id,
+				role_key=role_key,
+				total_questions=total_questions,
+				batch_json=batch_snapshot,
+				state_json=_build_initial_state(total_questions=total_questions),
+				status="in_progress",
+				answered_count=0,
+				correct_count=0,
+				score_percent=0.0,
+				started_at=_utcnow_iso(),
+			)
+			build.attach(_append)
 	except DatabaseClientError as exc:
 		raise HTTPException(
 			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -180,10 +208,20 @@ def submit_assessment_answer(
 		str(option.get("id") or "")
 		for option in _require_option_snapshots(question_snapshot)
 	}
-	if request.selected_option_id not in option_ids:
+	selected_ids = sorted({
+		str(option_id)
+		for option_id in (request.selected_option_ids or ([request.selected_option_id] if request.selected_option_id else []))
+	})
+	if not selected_ids or not set(selected_ids) <= option_ids:
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail="selected_option_id is not valid for the supplied question_id.",
+		)
+	multi_select = bool(question_snapshot.get("multi_select"))
+	if not multi_select and len(selected_ids) != 1:
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="This question takes exactly one answer.",
 		)
 
 	state = _require_mapping(
@@ -198,9 +236,12 @@ def submit_assessment_answer(
 		)
 
 	answered_at = _utcnow_iso()
-	is_correct = request.selected_option_id == str(question_snapshot.get("correct_option_id") or "")
+	correct_ids = _correct_option_ids(question_snapshot)
+	# All-or-nothing, like real OAs: every right option and no wrong one.
+	is_correct = set(selected_ids) == set(correct_ids)
 	answers[request.question_id] = {
-		"selected_option_id": request.selected_option_id,
+		"selected_option_id": selected_ids[0],
+		"selected_option_ids": selected_ids,
 		"is_correct": is_correct,
 		"answered_at": answered_at,
 	}
@@ -246,12 +287,19 @@ def submit_assessment_answer(
 	response = _serialize_assessment_record(updated_record)
 	response["submitted_result"] = {
 		"question_id": request.question_id,
-		"selected_option_id": request.selected_option_id,
-		"correct_option_id": str(question_snapshot.get("correct_option_id") or ""),
+		"selected_option_id": selected_ids[0],
+		"selected_option_ids": selected_ids,
+		"correct_option_id": correct_ids[0] if correct_ids else "",
+		"correct_option_ids": correct_ids,
 		"is_correct": is_correct,
 		"explanation": str(question_snapshot.get("explanation") or ""),
 	}
 	return response
+
+
+def _correct_option_ids(question_snapshot: Mapping[str, Any]) -> list[str]:
+	ids = [str(i) for i in (question_snapshot.get("correct_option_ids") or []) if str(i or "")]
+	return sorted(ids) or [str(question_snapshot.get("correct_option_id") or "")]
 
 
 def _require_parent_session(
@@ -303,40 +351,6 @@ def _resolve_role_key(parent_session: Mapping[str, Any], requested_role_key: str
 	return resolved_role_key
 
 
-def _build_batch_snapshot(batch: AssessmentBatch) -> dict[str, Any]:
-	explanations = _build_explanations_map()
-	return {
-		"role_families": list(batch.role_families),
-		"domains": list(batch.domains),
-		"questions": [
-			{
-				"question_id": question.question_id,
-				"prompt": question.prompt,
-				"question_type": question.question_type,
-				"topic": question.topic,
-				"difficulty": question.difficulty,
-				"skill_tag": question.skill_tag,
-				"options": [dict(option) for option in question.options],
-				"correct_option_id": question.correct_option_id,
-				"option_order": list(question.option_order),
-				"selection_source": question.selection_source,
-				"is_core": question.is_core,
-				"explanation": explanations.get(question.question_id, ""),
-			}
-			for question in batch.questions
-		],
-	}
-
-
-def _build_explanations_map() -> dict[str, str]:
-	from backend.assessment.question_bank import load_question_bank
-
-	return {
-		question.question_id: question.explanation
-		for question in load_question_bank()
-	}
-
-
 def _build_initial_state(*, total_questions: int) -> dict[str, Any]:
 	return {
 		"answers": {},
@@ -370,10 +384,16 @@ def _serialize_assessment_record(record: Mapping[str, Any]) -> dict[str, Any]:
 		"answered_count": int(record.get("answered_count") or len(answers)),
 		"correct_count": int(record.get("correct_count") or 0),
 		"score_percent": float(record.get("score_percent") or 0.0),
-		"current_question_index": int(state.get("current_question_index") or 0),
+		# From the answers, not the stored index: sections are appended after
+		# the last submit that stored it.
+		"current_question_index": _find_next_question_index(question_snapshots, answers),
 		"next_question_id": next_question_id,
 		"role_families": list(batch_snapshot.get("role_families") or []),
 		"domains": list(batch_snapshot.get("domains") or []),
+		"format": str(batch_snapshot.get("format") or "bank"),
+		# More sections are still being written; the page waits for them.
+		"pending": bool(batch_snapshot.get("pending")),
+		"sections": section_results(record),
 		"questions": [
 			_serialize_question_snapshot(question, answers)
 			for question in question_snapshots
@@ -400,11 +420,18 @@ def _serialize_question_snapshot(
 		],
 		"selection_source": str(question_snapshot.get("selection_source") or ""),
 		"is_core": bool(question_snapshot.get("is_core", False)),
+		"section": str(question_snapshot.get("section") or ""),
+		"section_title": str(question_snapshot.get("section_title") or ""),
+		"code": str(question_snapshot.get("code") or ""),
+		"code_language": str(question_snapshot.get("code_language") or ""),
+		"multi_select": bool(question_snapshot.get("multi_select")),
 		"selected_option_id": None,
+		"selected_option_ids": [],
 		"answered": False,
 	}
 	if answer is not None:
 		payload["selected_option_id"] = str(answer.get("selected_option_id") or "")
+		payload["selected_option_ids"] = list(answer.get("selected_option_ids") or [payload["selected_option_id"]])
 		payload["answered"] = True
 		payload["was_correct"] = bool(answer.get("is_correct"))
 		payload["answered_at"] = answer.get("answered_at")
