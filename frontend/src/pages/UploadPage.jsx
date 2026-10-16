@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { FileText, UploadCloud, X } from "lucide-react";
 
 import ResumeScoreCard from "../components/ResumeScoreCard";
+import RoleMatchCard from "../components/RoleMatchCard";
 import { buildApiHeaders } from "../lib/api";
 import { roleRequiresDsa } from "../lib/roleFlow";
 
@@ -114,6 +117,11 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
   );
   const [parseResult, setParseResult] = useState(workflowState?.resumeParseResult || null);
   const [selectionResult, setSelectionResult] = useState(workflowState?.resumeSelectionResult || null);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [rolesError, setRolesError] = useState("");
+  // The session whose roles we're waiting for; a newer upload makes an older
+  // response stale.
+  const rolesFor = useRef("");
 
   function syncWorkflowState(patch) {
     onWorkflowStateChange?.((current) => ({
@@ -178,6 +186,67 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
           ? "parse"
           : "upload";
 
+  async function loadRoles(parsePayload) {
+    const sessionId = parsePayload?.session_id;
+    if (!sessionId) return;
+    rolesFor.current = sessionId;
+    setRolesLoading(true);
+    setRolesError("");
+    try {
+      const response = await fetch(`${baseUrl}/resume/match-roles`, {
+        method: "POST",
+        headers: buildApiHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          session_id: sessionId,
+          max_roles: maxRoles,
+          persist_role_matches: true,
+          use_groq_profiles: useGroqProfiles,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(resolveErrorMessage(payload, "Role matching failed."));
+      }
+      if (rolesFor.current !== sessionId) return;
+      const matches = payload.matches ?? [];
+      const merged = {
+        ...parsePayload,
+        role_matches: payload,
+        related_job_roles: matches,
+        role_selection_required: matches.length > 0,
+      };
+      setParseResult((current) => (current?.session_id === sessionId ? merged : current));
+      syncWorkflowState({ resumeParseResult: merged });
+    } catch {
+      if (rolesFor.current === sessionId) {
+        setRolesError("Couldn't suggest roles right now. Pick one from the full list below.");
+      }
+    } finally {
+      if (rolesFor.current === sessionId) setRolesLoading(false);
+    }
+  }
+
+  // A reload while roles were still loading: fetch them again.
+  useEffect(() => {
+    if (parseResult?.session_id && !parseResult.related_job_roles && !selectionResult && !rolesFor.current) {
+      void loadRoles(parseResult);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Heading to the assessment: start writing it now so it is ready sooner.
+  function continueToAssessment() {
+    const sessionId = parseResult?.session_id || workflowState?.sessionId;
+    if (sessionId) {
+      fetch(`${baseUrl}/assessment/prepare`, {
+        method: "POST",
+        headers: buildApiHeaders(accessToken, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ session_id: sessionId }),
+      }).catch(() => {});
+    }
+    onNavigate?.("assessment");
+  }
+
   async function parseResume() {
     if (!resumeFile) {
       setErrorMessage("Choose a PDF resume first.");
@@ -191,7 +260,9 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     const formData = new FormData();
     formData.append("resume_file", resumeFile);
     formData.append("persist_resume", "true");
-    formData.append("run_role_matching", "true");
+    // Roles come from a second request (loadRoles) so the score shows in ~3 s
+    // instead of waiting ~6 s for both Groq calls.
+    formData.append("run_role_matching", "false");
     formData.append("use_groq_profiles", String(useGroqProfiles));
     formData.append("persist_role_matches", "true");
     formData.append("max_roles", String(maxRoles));
@@ -238,11 +309,8 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
         ...DOWNSTREAM_WORKFLOW_RESET,
       });
       setSelectionResult(autoSelectionResult);
-      setInfoMessage(
-        payload.role_selection_required
-          ? "Parsing done. Choose a role."
-          : "Resume parsed. Ready for assessment.",
-      );
+      setInfoMessage("Parsing done. Choose a role.");
+      void loadRoles(payload);
     } catch (error) {
       setParseResult(null);
       syncWorkflowState({
@@ -342,6 +410,20 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     setInfoMessage(`${file.name} ready.`);
   }
 
+  function pickFile(file) {
+    if (!file) return;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    if (!isPdf) {
+      setErrorMessage("That file isn't a PDF. Please upload your resume as a PDF.");
+      return;
+    }
+    if (file.size > MAX_RESUME_BYTES) {
+      setErrorMessage(`That file is ${formatBytes(file.size)}. The limit is ${formatBytes(MAX_RESUME_BYTES)}.`);
+      return;
+    }
+    handleFileSelection(file);
+  }
+
   function handleDrop(event) {
     event.preventDefault();
     setDragActive(false);
@@ -374,97 +456,63 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
     : "Path pending";
   const sessionLabel = parseResult?.session_id ? "Session live" : "No session";
 
+  // Two steps and nothing else: upload the resume, then choose the role.
+  // The old status panels (flow, session feed, readiness, spotlight) and the
+  // raw JSON payloads repeated the same state several times over.
+  const parsed = Boolean(parseResult?.session_id);
+  const skillCount = (parsedResume.skills?.length || 0) + (parsedResume.technologies?.length || 0);
+  const projectCount = parsedResume.projects?.length || 0;
+
   return (
-    <div className="page-shell upload-shell">
-      <section className="upload-hero">
-        <div className="glass-panel upload-hero__primary">
-          <div className="eyebrow-row">
-            <span className="eyebrow">Resume Studio</span>
-            <span className={`status-pill status-pill--${backendStatus}`}>
-              {backendStatus === "online" ? "Backend live" : backendStatus === "checking" ? "Checking backend" : "Backend offline"}
+    <div className="pp-page pp-resume">
+      <header className="pp-page__head">
+        <h1>{parsed ? "Choose your role" : "Upload your resume"}</h1>
+        <p>
+          {parsed
+            ? "Pick the role you're preparing for. Your interview questions are built around it."
+            : "We read your resume to tailor every interview question to you."}
+        </p>
+      </header>
+
+      <form
+        className="pp-card pp-upload"
+        onSubmit={(event) => {
+          event.preventDefault();
+          parseResume();
+        }}
+      >
+        {resumeFile ? (
+          // File chosen: a file row, like Google Drive / Dropbox.
+          <div className={`pp-file ${busyState === "parsing" ? "pp-file--busy" : ""}`}>
+            <span className="pp-file__icon" aria-hidden="true">
+              <FileText size={22} />
             </span>
+            <span className="pp-file__meta">
+              <strong title={resumeFile.name}>{resumeFile.name}</strong>
+              <small>
+                {formatBytes(resumeFile.size)}
+                {busyState === "parsing" ? " · Reading…" : parsed ? " · Done" : " · Ready"}
+              </small>
+              {busyState === "parsing" ? <span className="pp-file__progress" aria-hidden="true"><i /></span> : null}
+            </span>
+            <button
+              type="button"
+              className="pp-file__remove"
+              onClick={() => {
+                setResumeFile(null);
+                setErrorMessage("");
+              }}
+              disabled={busyState === "parsing"}
+              aria-label="Remove file"
+              title="Remove file"
+            >
+              <X size={18} />
+            </button>
           </div>
-          <h1>Resume Intake</h1>
-          <p className="upload-hero__summary">Upload the resume, extract the candidate profile, then lock the interview path.</p>
-          <div className="hero-tags upload-hero__tags">
-            <span>{currentPhaseLabel}</span>
-            <span>{selectedPathLabel}</span>
-            <span>{sessionLabel}</span>
-          </div>
-
-          <div className="upload-hero__stats">
-            <article className="upload-stat-card">
-              <span>Resume</span>
-              <strong>{resumeFile?.name || workflowState?.resumeFileName || "No PDF yet"}</strong>
-              <p>{uploadHint}</p>
-            </article>
-            <article className="upload-stat-card">
-              <span>Role lock</span>
-              <strong>{roleSelection?.title || topRoleTitle}</strong>
-              <p>{selectedRoleKey ? "Ready for assessment." : roleOptions.length ? `${roleOptions.length} matches waiting.` : "Awaiting parser output."}</p>
-            </article>
-            <article className="upload-stat-card">
-              <span>Project data</span>
-              <strong>{projects.length}</strong>
-              <p>{projects.length ? "Project discussion context available." : "Projects will appear after parsing."}</p>
-            </article>
-          </div>
-        </div>
-
-        <aside className="upload-hero__rail">
-          <section className="glass-panel upload-rail-card">
-            <p className="section-kicker">Flow</p>
-            <h2>{currentPhaseLabel}</h2>
-            <div className="upload-phase-list">
-              {Object.entries(UPLOAD_PHASE_LABELS).map(([phaseKey, label]) => (
-                <div
-                  key={phaseKey}
-                  className={`upload-phase-list__item ${currentStep === phaseKey ? "upload-phase-list__item--active" : ""} ${currentStep === "contexts" || (currentStep === "roles" && phaseKey === "upload") || (parseResult && phaseKey === "parse") ? "upload-phase-list__item--complete" : ""}`}
-                >
-                  <span>{label}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="glass-panel upload-rail-card">
-            <p className="section-kicker">Session feed</p>
-            <div className="upload-feed">
-              <article>
-                <span>Session</span>
-                <strong>{parseResult?.session_id ?? "Not created"}</strong>
-              </article>
-              <article>
-                <span>Contexts</span>
-                <strong>{Object.keys(visibleContexts).length || 0}</strong>
-              </article>
-              <article>
-                <span>Role path</span>
-                <strong>{selectedPathLabel}</strong>
-              </article>
-            </div>
-          </section>
-        </aside>
-      </section>
-
-      <section className="upload-studio">
-        <form
-          className="glass-panel upload-drop-panel"
-          onSubmit={(event) => {
-            event.preventDefault();
-            parseResume();
-          }}
-        >
-          <div className="panel-head">
-            <div>
-              <p className="section-kicker">Upload deck</p>
-              <h2>Start with one resume.</h2>
-            </div>
-            <span className="role-count">{resumeFile ? "PDF ready" : "Waiting for file"}</span>
-          </div>
-
+        ) : (
+          // Empty: a large drop area with an upload icon and a browse link.
           <label
-            className={`dropzone ${dragActive ? "dropzone--active" : ""}`}
+            className={`pp-drop ${dragActive ? "pp-drop--active" : ""}`}
             onDragEnter={(event) => {
               event.preventDefault();
               setDragActive(true);
@@ -474,384 +522,173 @@ export default function UploadPage({ authState, workflowState, onWorkflowStateCh
               event.preventDefault();
               setDragActive(false);
             }}
-            onDrop={handleDrop}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragActive(false);
+              pickFile(event.dataTransfer.files?.[0] ?? null);
+            }}
           >
             <input
               type="file"
-              accept="application/pdf"
-              onChange={(event) => handleFileSelection(event.target.files?.[0] ?? null)}
-            />
-            <div className="dropzone__icon">PDF</div>
-            <div>
-              <strong>{resumeFileLabel}</strong>
-              <p>{uploadHint}</p>
-            </div>
-          </label>
-
-          <div className="action-row upload-actions">
-            <button className="primary-button action-row__button" type="submit" disabled={!canSubmitResume}>
-              {busyState === "parsing" ? "Parsing resume..." : "Parse resume"}
-            </button>
-
-            {selectedRoleKey && parseResult?.session_id ? (
-              <button
-                className="secondary-button action-row__button"
-                type="button"
-                onClick={() => onNavigate?.("assessment")}
-              >
-                Open assessment
-              </button>
-            ) : null}
-          </div>
-
-          <div className="upload-drop-panel__footer">
-            <div className="upload-control-chip-row">
-              <span className="upload-control-chip">PDF only</span>
-              <span className="upload-control-chip">Role matching included</span>
-              <span className="upload-control-chip">Session-safe parsing</span>
-            </div>
-            {backendStatusHint ? <p className="stack-note">{backendStatusHint}</p> : null}
-          </div>
-
-          <details className="raw-block intake-settings">
-            <summary>Parser options</summary>
-            <label className="field-label" htmlFor="api-base-url">
-              Backend URL
-            </label>
-            <input
-              id="api-base-url"
-              className="text-input"
-              value={apiBaseUrl}
+              accept="application/pdf,.pdf"
               onChange={(event) => {
-                const nextValue = event.target.value;
-                setApiBaseUrl(nextValue);
-                syncWorkflowState({ apiBaseUrl: nextValue });
+                pickFile(event.target.files?.[0] ?? null);
+                event.target.value = "";
               }}
-              placeholder="http://127.0.0.1:8000"
             />
+            <span className="pp-drop__icon" aria-hidden="true">
+              <UploadCloud size={26} />
+            </span>
+            <strong className="pp-drop__title">
+              {dragActive ? "Drop it here" : "Drag and drop your resume"}
+            </strong>
+            <span className="pp-drop__sub">
+              or <span className="pp-drop__link">browse files</span>
+            </span>
+            <small className="pp-drop__limits">PDF · up to {formatBytes(MAX_RESUME_BYTES)}</small>
+          </label>
+        )}
 
-            <div className="control-grid">
-              <label className="toggle-card">
-                <input
-                  type="checkbox"
-                  checked={useGroqProfiles}
-                  onChange={(event) => setUseGroqProfiles(event.target.checked)}
-                />
-                <div>
-                  <strong>LLM role generation</strong>
-                  <p>Groq first, curated fallback second.</p>
+        {resumeFile && !parsed ? (
+          <button className="primary-button pp-upload__submit" type="submit" disabled={!canSubmitResume}>
+            {busyState === "parsing" ? "Reading your resume…" : "Read my resume"}
+          </button>
+        ) : null}
+
+        {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
+
+        {parsed ? (
+          <p className="pp-upload__found">
+            <span aria-hidden="true">✓</span>
+            Found {parsedResume.name ? <strong>{parsedResume.name}</strong> : "your profile"}
+            {` · ${skillCount} skills · ${projectCount} ${projectCount === 1 ? "project" : "projects"}`}
+          </p>
+        ) : null}
+      </form>
+
+      {parsed ? <ResumeScoreCard score={parseResult?.resume_quality} /> : null}
+
+      {parsed ? (
+        <section className="pp-roles" aria-labelledby="pp-roles-title">
+          <h2 id="pp-roles-title">Best matches for you</h2>
+
+          {rolesLoading ? (
+            <div className="pp-role-grid" aria-busy="true" aria-label="Finding roles that fit your resume">
+              {[0, 1, 2].map((index) => (
+                <div key={index} className="pp-role pp-role--skeleton" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
                 </div>
-              </label>
-
-              <label className="toggle-card toggle-card--compact">
-                <span>
-                  <strong>Role suggestions</strong>
-                  <p>1 to 10</p>
-                </span>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={maxRoles}
-                  onChange={(event) => setMaxRoles(Number(event.target.value) || 1)}
-                />
-              </label>
+              ))}
             </div>
+          ) : null}
+          {rolesError ? <p className="pp-roles__note">{rolesError}</p> : null}
 
-            <a className="docs-link" href={`${baseUrl}/docs`} target="_blank" rel="noreferrer">
-              Open backend docs
-            </a>
+          {roleOptions.length > 0 ? (
+            <div className="pp-role-grid">
+              {roleOptions.map((role) => {
+                const isSelected = selectedRoleKey === role.role_key;
+                return (
+                  <article key={role.role_key} className={`pp-role ${isSelected ? "pp-role--selected" : ""}`}>
+                    <div className="pp-role__top">
+                      <h3>{role.title}</h3>
+                      <span className="pp-role__match">{Math.round(role.match_percent)}%</span>
+                    </div>
+                    <p>{role.description}</p>
+                    {role.skill_gaps?.length ? (
+                      <p className="pp-role__gaps">
+                        <span>To brush up:</span> {role.skill_gaps.slice(0, 4).join(", ")}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={isSelected ? "primary-button" : "secondary-button"}
+                      onClick={() => selectRole(role)}
+                      disabled={busyState === "selecting"}
+                    >
+                      {isSelected ? "✓ Selected" : busyState === "selecting" ? "Saving…" : "Choose this role"}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <details className="pp-more" open={showAllFresherRoles} onToggle={(event) => setShowAllFresherRoles(event.currentTarget.open)}>
+            <summary>Browse all fresher roles ({COMMON_FRESHER_ROLES.length})</summary>
+            <div className="pp-role-grid pp-role-grid--compact">
+              {COMMON_FRESHER_ROLES.map((role) => {
+                const isSelected = selectedRoleKey === role.role_key;
+                return (
+                  <button
+                    key={role.role_key}
+                    type="button"
+                    className={`pp-role-chip ${isSelected ? "pp-role-chip--selected" : ""}`}
+                    onClick={() => selectRole(role)}
+                    disabled={busyState === "selecting"}
+                  >
+                    {isSelected ? "✓ " : ""}{role.title}
+                  </button>
+                );
+              })}
+            </div>
           </details>
 
-          <div className="message-stack">
-            <p className="info-banner">{infoMessage}</p>
-            {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
+          <div className="pp-custom-role">
+            <input
+              className="text-input"
+              type="text"
+              aria-label="Custom role"
+              placeholder="Or type any role, e.g. Junior Android Developer"
+              value={customRoleTitle}
+              onChange={(e) => setCustomRoleTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") selectCustomRole(); }}
+              disabled={busyState === "selecting"}
+            />
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={selectCustomRole}
+              disabled={!customRoleTitle.trim() || busyState === "selecting"}
+            >
+              Use this role
+            </button>
           </div>
-        </form>
+        </section>
+      ) : null}
 
-        <div className="upload-side-stack">
-          <section className="glass-panel upload-readiness-panel">
-            <div className="panel-head panel-head--tight">
-              <div>
-                <p className="section-kicker">Readiness</p>
-                <h2>Current state.</h2>
-              </div>
-            </div>
-            <div className="upload-readiness-grid">
-              <article className="upload-readiness-card">
-                <span>Profile</span>
-                <strong>{parsedResume.name || "Waiting for resume"}</strong>
-                <p>{parseResult ? "Resume extracted." : "Parse not started."}</p>
-              </article>
-              <article className="upload-readiness-card">
-                <span>Roles</span>
-                <strong>{roleSelection?.title || (roleOptions.length ? `${roleOptions.length} options` : "No roles yet")}</strong>
-                <p>{roleSelection ? "Locked for assessment." : "Awaiting selection."}</p>
-              </article>
-              <article className="upload-readiness-card">
-                <span>Contexts</span>
-                <strong>{Object.keys(visibleContexts).length || 0}</strong>
-                <p>{Object.keys(visibleContexts).length ? "Saved for later rounds." : "No context payloads yet."}</p>
-              </article>
-            </div>
-          </section>
+      {selectedRoleKey && parsed ? <RoleMatchCard match={selectionResult?.role_match} /> : null}
 
-          <section className="glass-panel upload-spotlight-panel">
-            <div className="panel-head panel-head--tight">
-              <div>
-                <p className="section-kicker">Spotlight</p>
-                <h2>{roleSelection?.title || "Role not locked"}</h2>
-              </div>
-            </div>
-            <p className="hero-text">
-              {roleSelection
-                ? `${roleSelection.title} is locked. Continue to assessment when you are ready.`
-                : parseResult
-                  ? "Parser output is ready. Pick the role that should drive the interview flow."
-                  : "Upload and parse a resume to unlock role matching."}
-            </p>
-            <div className="hero-tags upload-spotlight-panel__tags">
-              <span>{selectedPathLabel}</span>
-              <span>{parseResult ? `${roleOptions.length} role matches` : "No matches yet"}</span>
-            </div>
-          </section>
+      {selectedRoleKey && parsed ? (
+        <div className="pp-continue" role="status">
+          <span>
+            Preparing for <strong>{roleSelection?.title || selectedRoleTitleFallback(roleOptions, selectedRoleKey)}</strong>
+          </span>
+          <button type="button" className="primary-button" onClick={continueToAssessment}>
+            Continue to assessment →
+          </button>
         </div>
-      </section>
-
-      {parseResult ? (
-        <>
-          <section className="upload-insight-grid">
-            <section className="glass-panel upload-profile-card">
-              <div className="panel-head panel-head--tight">
-                <div>
-                  <p className="section-kicker">Profile</p>
-                  <h2>Candidate snapshot</h2>
-                </div>
-              </div>
-              <div className="metric-strip">
-                <div>
-                  <span>Skills</span>
-                  <strong>{metricValue(skillChips)}</strong>
-                </div>
-                <div>
-                  <span>Projects</span>
-                  <strong>{metricValue(projects)}</strong>
-                </div>
-                <div>
-                  <span>Interests</span>
-                  <strong>{metricValue(interests)}</strong>
-                </div>
-              </div>
-              <h3 className="candidate-name">{parsedResume.name || "Unnamed candidate"}</h3>
-              {parsedResume.summary ? <p className="candidate-summary">{parsedResume.summary}</p> : null}
-              <div className="chip-row">
-                {visibleSkills.map((skill) => (
-                  <span key={skill} className="chip">{skill}</span>
-                ))}
-              </div>
-              {skillChips.length > visibleSkills.length ? (
-                <p className="stack-note">+{skillChips.length - visibleSkills.length} more skills</p>
-              ) : null}
-              {interests.length ? (
-                <div className="subsection">
-                  <p className="subsection-title">Interests</p>
-                  <p>{interests.join(" • ")}</p>
-                </div>
-              ) : null}
-            </section>
-
-            <section className="glass-panel upload-project-card">
-              <div className="panel-head panel-head--tight">
-                <div>
-                  <p className="section-kicker">Projects</p>
-                  <h2>Discussion anchors</h2>
-                </div>
-              </div>
-              <div className="project-stack">
-                {visibleProjects.length ? (
-                  visibleProjects.map((project) => (
-                    <article key={`${project.title}-${project.role}`} className="project-card">
-                      <div className="project-card__header">
-                        <h3>{project.title}</h3>
-                        <span>{project.role || "Contribution not extracted"}</span>
-                      </div>
-                      <p>{project.description}</p>
-                      <div className="chip-row chip-row--tight">
-                        {(project.tech_stack || []).map((item) => (
-                          <span key={item} className="chip chip--ghost">{item}</span>
-                        ))}
-                      </div>
-                    </article>
-                  ))
-                ) : (
-                  <p className="empty-state">No projects were extracted from this resume.</p>
-                )}
-                {hiddenProjectCount > 0 ? <p className="stack-note">+{hiddenProjectCount} more project{hiddenProjectCount === 1 ? "" : "s"}</p> : null}
-              </div>
-            </section>
-          </section>
-
-          <ResumeScoreCard score={parseResult?.resume_quality} />
-
-          <section className="glass-panel upload-role-board">
-            <div className="panel-head">
-              <div>
-                <p className="section-kicker">Roles</p>
-                <h2>Lock the interview track.</h2>
-              </div>
-              <span className="role-count">{roleSelection?.title || `${roleOptions.length} matches`}</span>
-            </div>
-
-            {roleOptions.length > 0 && (
-              <>
-                <div className="role-card-grid">
-                  {roleOptions.map((role) => {
-                    const isSelected = selectedRoleKey === role.role_key;
-                    const requiresDsa = roleRequiresDsa(role.role_key);
-                    return (
-                      <article key={role.role_key} className={`role-card ${isSelected ? "role-card--selected" : ""}`}>
-                        <div className="role-card__topline">
-                          <span>{role.title}</span>
-                          <strong>{role.match_percent}%</strong>
-                        </div>
-                        <div className="chip-row chip-row--tight role-card__chips">
-                          <span className="chip chip--ghost">{requiresDsa ? "DSA round" : "No DSA"}</span>
-                          {isSelected ? <span className="chip">Locked</span> : null}
-                        </div>
-                        <p>{role.description}</p>
-                        {role.skill_gaps?.length ? (
-                          <div className="subsection">
-                            <p className="subsection-title">Skill gaps</p>
-                            <div className="chip-row chip-row--tight">
-                              {role.skill_gaps.map((gap) => (
-                                <span key={gap} className="chip chip--warning">{gap}</span>
-                              ))}
-                            </div>
-                          </div>
-                        ) : null}
-                        <div className="role-card__actions">
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => selectRole(role)}
-                            disabled={busyState === "selecting"}
-                          >
-                            {isSelected ? "Role Locked" : busyState === "selecting" ? "Saving role..." : "Select role"}
-                          </button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-
-            <div className="all-roles-section">
-              <button
-                type="button"
-                className="all-roles-toggle"
-                onClick={() => setShowAllFresherRoles((v) => !v)}
-              >
-                <span>{showAllFresherRoles ? "Hide" : "Browse"} all fresher roles ({COMMON_FRESHER_ROLES.length})</span>
-                <span className="all-roles-toggle__arrow">{showAllFresherRoles ? "▲" : "▼"}</span>
-              </button>
-
-              {showAllFresherRoles && (
-                <div className="fresher-role-grid">
-                  {COMMON_FRESHER_ROLES.map((role) => {
-                    const isSelected = selectedRoleKey === role.role_key;
-                    const alreadyInMatches = roleOptions.some((r) => r.role_key === role.role_key);
-                    const requiresDsa = roleRequiresDsa(role.role_key);
-                    return (
-                      <article key={role.role_key} className={`fresher-role-card ${isSelected ? "fresher-role-card--selected" : ""}`}>
-                        <div className="fresher-role-card__head">
-                          <strong>{role.title}</strong>
-                          {alreadyInMatches && <span className="badge badge--sea">In your matches</span>}
-                        </div>
-                        <div className="chip-row chip-row--tight role-card__chips">
-                          <span className="chip chip--ghost">{requiresDsa ? "DSA round" : "No DSA"}</span>
-                          {isSelected ? <span className="chip">Locked</span> : null}
-                        </div>
-                        <p>{role.description}</p>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => selectRole(role)}
-                          disabled={busyState === "selecting"}
-                        >
-                          {isSelected ? "Role Locked" : busyState === "selecting" ? "Saving role..." : "Select role"}
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="custom-role-section">
-              <p className="section-kicker" style={{ margin: 0 }}>Custom role</p>
-              <div className="custom-role-input-row">
-                <input
-                  className="text-input"
-                  type="text"
-                  placeholder="Type a role title"
-                  value={customRoleTitle}
-                  onChange={(e) => setCustomRoleTitle(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") selectCustomRole(); }}
-                  disabled={!parseResult || busyState === "selecting"}
-                />
-                <button
-                  type="button"
-                  className="primary-button custom-role-btn"
-                  onClick={selectCustomRole}
-                  disabled={!customRoleTitle.trim() || !parseResult || busyState === "selecting"}
-                >
-                  {busyState === "selecting" ? "Saving..." : "Use this role"}
-                </button>
-              </div>
-              {customRoleTitle.trim() && (
-                <p className="custom-role-preview">Will save as: <code>{titleToRoleKey(customRoleTitle)}</code></p>
-              )}
-            </div>
-          </section>
-
-          <section className="glass-panel advanced-panel">
-            <div className="panel-head panel-head--tight">
-              <div>
-                <p className="section-kicker">Developer Data</p>
-                <h2>Raw payloads.</h2>
-              </div>
-            </div>
-
-            {contextEntries.length ? (
-              <details className="raw-block">
-                <summary>Stored round contexts ({contextEntries.length})</summary>
-                <div className="context-stack">
-                  {contextEntries.map(([roundKey, context]) => (
-                    <article key={roundKey} className="context-card">
-                      <div className="context-card__header">
-                        <h3>{ROUND_LABELS[roundKey] || formatTitleFromKey(roundKey)}</h3>
-                        <span>{context.selected_role_title || formatTitleFromKey(context.selected_role_key || "") || "No role selected"}</span>
-                      </div>
-                      <pre className="json-preview">{JSON.stringify(context, null, 2)}</pre>
-                    </article>
-                  ))}
-                </div>
-              </details>
-            ) : null}
-
-            <details className="raw-block">
-              <summary>Parsed resume JSON</summary>
-              <pre className="json-preview">{JSON.stringify(parsedResume, null, 2)}</pre>
-            </details>
-
-            <details className="raw-block">
-              <summary>Role matcher JSON</summary>
-              <pre className="json-preview">{JSON.stringify(roleOptions, null, 2)}</pre>
-            </details>
-          </section>
-        </>
       ) : null}
     </div>
   );
+}
+
+// Matches RESUME_MAX_UPLOAD_BYTES' default in backend/config.py, which still
+// enforces it; checking here just reports a wrong file before uploading it.
+const MAX_RESUME_BYTES = 5 * 1024 * 1024;
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) {
+    const mb = value / (1024 * 1024);
+    return `${Number.isInteger(mb) || mb >= 10 ? Math.round(mb) : mb.toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function selectedRoleTitleFallback(roleOptions, selectedRoleKey) {
+  const match = roleOptions.find((role) => role.role_key === selectedRoleKey)
+    || COMMON_FRESHER_ROLES.find((role) => role.role_key === selectedRoleKey);
+  return match?.title || "your chosen role";
 }

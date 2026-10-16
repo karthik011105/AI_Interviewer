@@ -7,21 +7,31 @@ from typing import Any, Mapping, Sequence
 
 import pymongo
 from pymongo.collection import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from backend.config import MongoSettings
 
+from .driver_errors import TranslatingDatabase
 from .db_errors import (
 	ConcurrentUpdateError,
 	DatabaseClientError,
 	DatabaseConfigurationError,
 	DatabaseDependencyError,
 	DSAStage,
+	DuplicateRecordError,
 	JudgeStatus,
 	RecordNotFoundError,
 	_utcnow_iso,
 	build_default_candidate_model,
 	build_default_dsa_state,
 )
+
+
+# How many DSA code submissions are retained per problem. See the note in
+# append_dsa_submission: the array was unbounded, each entry can carry 50 KB of
+# source, and MongoDB refuses documents over 16 MB — so this is a correctness
+# bound, not just a storage one. The count of attempts is preserved separately.
+MAX_STORED_DSA_SUBMISSIONS = 20
 
 
 class MongoRepository:
@@ -35,7 +45,11 @@ class MongoRepository:
 				serverSelectionTimeoutMS=5000,
 				uuidRepresentation="standard"
 			)
-			self.db = self.client[self.settings.database_name]
+			# Wrapped so every query below — and every direct `repo.db.<coll>`
+			# use in the route layer — raises this package's errors rather than
+			# pymongo's. Without it an Atlas failover surfaced as a 500 from all
+			# 46 `except DatabaseClientError` handlers instead of a 503.
+			self.db = TranslatingDatabase(self.client[self.settings.database_name])
 			self._ensure_indexes()
 		except Exception as exc:
 			raise DatabaseDependencyError(
@@ -67,6 +81,10 @@ class MongoRepository:
 		# at the time stored in this field".
 		self.db.revoked_tokens.create_index("jti", unique=True)
 		self.db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
+		# Password reset tokens, keyed by a hash of the one-time secret (never
+		# the secret itself — same reasoning as hashing passwords). The TTL
+		# index bounds the collection the same way revoked_tokens does.
+		self.db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
 		self.db.interview_round_sessions.create_index(
 			[("session_id", 1), ("round", 1)], unique=True
 		)
@@ -103,14 +121,26 @@ class MongoRepository:
 		return self._map_id(doc)
 
 	def insert_one(self, collection_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-		"""Insert a single record."""
+		"""Insert a single record.
+
+		A unique-index violation is translated into ``DuplicateRecordError``.
+		pymongo's own ``DuplicateKeyError`` is not a ``DatabaseClientError``, so
+		untranslated it escaped every ``except DatabaseClientError`` in the
+		route layer and became an unhandled 500.
+		"""
 		doc = dict(payload)
 		if "id" in doc:
 			doc["_id"] = doc.pop("id")
 		else:
 			doc["_id"] = self._generate_id()
 
-		self.db[collection_name].insert_one(doc)
+		try:
+			self.db[collection_name].insert_one(doc)
+		except (DuplicateRecordError, DuplicateKeyError) as exc:
+			raise DuplicateRecordError(
+				f"A record violating a unique index already exists in "
+				f"'{collection_name}'."
+			) from exc
 		return self._map_id(doc)
 
 	def insert_many(
@@ -130,8 +160,17 @@ class MongoRepository:
 			
 		if not docs:
 			return []
-			
-		self.db[collection_name].insert_many(docs)
+
+		try:
+			self.db[collection_name].insert_many(docs)
+		except (DuplicateRecordError, DuplicateKeyError) as exc:
+			# insert_many is ordered by default, so this leaves the documents
+			# before the offending one inserted. Callers must treat a failure
+			# here as "partially applied", not "nothing happened".
+			raise DuplicateRecordError(
+				f"A record violating a unique index already exists in "
+				f"'{collection_name}'; the batch was only partially inserted."
+			) from exc
 		return [self._map_id(doc) for doc in docs]
 
 	def update_one(
@@ -183,6 +222,28 @@ class MongoRepository:
 			upsert=True,
 		)
 
+	def consume_token_once(self, *, jti: str, user_id: str, expires_at: Any) -> bool:
+		"""Mark a single-use token as spent; True only for the first caller.
+
+		Reuses revoked_tokens, so a spent token is also a revoked one and the
+		same TTL index cleans it up. The upsert is atomic and jti is uniquely
+		indexed, so two racing callers cannot both see a first use — the loser
+		either matches the existing row or hits the unique index.
+		"""
+		result = self.db.revoked_tokens.update_one(
+			{"jti": jti},
+			{
+				"$setOnInsert": {
+					"jti": jti,
+					"user_id": user_id,
+					"expires_at": expires_at,
+					"revoked_at": _utcnow_iso(),
+				}
+			},
+			upsert=True,
+		)
+		return result.upserted_id is not None
+
 	def is_token_revoked(self, *, jti: str) -> bool:
 		"""Return True when this token has been revoked.
 
@@ -191,6 +252,44 @@ class MongoRepository:
 		past its own exp is already rejected by signature verification.
 		"""
 		return self.db.revoked_tokens.find_one({"jti": jti}, {"_id": 1}) is not None
+
+	def create_password_reset_token(
+		self, *, token_hash: str, user_id: str, expires_at: Any
+	) -> None:
+		"""Record a password reset token by the hash of its raw secret.
+
+		``token_hash`` is used as the document's ``_id``, which gives the
+		lookup in ``consume_password_reset_token`` a unique-index guarantee
+		for free rather than needing a second index.
+		"""
+		self.db.password_reset_tokens.insert_one(
+			{
+				"_id": token_hash,
+				"user_id": user_id,
+				"expires_at": expires_at,
+				"used_at": None,
+				"created_at": _utcnow_iso(),
+			}
+		)
+
+	def consume_password_reset_token(
+		self, *, token_hash: str, now: Any
+	) -> dict[str, Any] | None:
+		"""Atomically mark a reset token used and return it, or None.
+
+		Returns None when the token does not exist, has already been used, or
+		has expired — the caller cannot distinguish which, which is the point:
+		telling an attacker "that token was already used" versus "that token
+		never existed" leaks information a generic 400 does not. The update is
+		atomic (find-and-update in one round trip) so two concurrent requests
+		racing the same token cannot both see it as valid.
+		"""
+		doc = self.db.password_reset_tokens.find_one_and_update(
+			{"_id": token_hash, "used_at": None, "expires_at": {"$gt": now}},
+			{"$set": {"used_at": _utcnow_iso()}},
+			return_document=ReturnDocument.AFTER,
+		)
+		return dict(doc) if doc is not None else None
 
 	def create_session(
 		self,
@@ -217,6 +316,16 @@ class MongoRepository:
 	def get_session(self, session_id: str) -> dict[str, Any] | None:
 		return self.fetch_one("sessions", filters={"id": session_id})
 
+	def list_sessions_for_user(self, *, user_id: str) -> list[dict[str, Any]]:
+		"""Return every session owned by a user, newest first.
+
+		Used by the cross-session interview analytics, which aggregates a
+		candidate's results across all of their sessions.
+		"""
+
+		cursor = self.db["sessions"].find({"user_id": user_id}).sort("created_at", -1)
+		return [self._map_id(doc) for doc in cursor]
+
 	def update_session_status(
 		self,
 		*,
@@ -226,6 +335,41 @@ class MongoRepository:
 		return self.update_one(
 			"sessions",
 			values={"status": status},
+			filters={"id": session_id},
+			not_found_message="The supplied session_id does not exist.",
+		)
+
+	def save_oa_questions(self, docs: Sequence[Mapping[str, Any]]) -> int:
+		"""Add checked assessment questions to the shared pool. Keyed by a hash
+		of the question text, so the same question is stored once."""
+		saved = 0
+		for doc in docs:
+			doc_id = str(doc.get("_id") or "")
+			if not doc_id:
+				continue
+			result = self.db["oa_questions"].update_one(
+				{"_id": doc_id},
+				{"$setOnInsert": {**dict(doc), "created_at": _utcnow_iso()}},
+				upsert=True,
+			)
+			saved += 1 if result.upserted_id is not None else 0
+		return saved
+
+	def sample_oa_questions(self, *, family: str, section: str, limit: int) -> list[dict[str, Any]]:
+		"""Random questions from the pool for one role family and section."""
+		if limit <= 0:
+			return []
+		cursor = self.db["oa_questions"].aggregate([
+			{"$match": {"family": family, "section": section}},
+			{"$sample": {"size": int(limit)}},
+		])
+		return [dict(doc) for doc in cursor]
+
+	def mark_interview_finished(self, *, session_id: str, round_name: str) -> dict[str, Any]:
+		"""The candidate chose to end the interview early (Finish interview)."""
+		return self.update_one(
+			"sessions",
+			values={"interview_ended": {"reason": "finished", "round": round_name, "at": _utcnow_iso()}},
 			filters={"id": session_id},
 			not_found_message="The supplied session_id does not exist.",
 		)
@@ -314,9 +458,21 @@ class MongoRepository:
 		*,
 		session_id: str,
 	) -> dict[str, Any]:
-		"""Fetch all stored round contexts for a session keyed by round name."""
+		"""Fetch all stored round contexts for a session keyed by round name.
+
+		Skips any document missing either field rather than raising. The
+		previous comprehension guarded ``round`` but then indexed
+		``context_json`` unguarded, so a single partially written document
+		raised ``KeyError`` and took out report generation for the whole
+		session — a read path failing because of one bad row, when the
+		remaining rows were perfectly usable.
+		"""
 		cursor = self.db["interview_round_contexts"].find({"session_id": session_id})
-		return {doc["round"]: doc["context_json"] for doc in cursor if "round" in doc}
+		return {
+			doc["round"]: doc["context_json"]
+			for doc in cursor
+			if doc.get("round") and doc.get("context_json") is not None
+		}
 
 	@staticmethod
 	def _normalize_interview_response_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -446,6 +602,51 @@ class MongoRepository:
 	def delete_assessment_session(self, *, session_id: str) -> int:
 		return self.delete_many("assessment_sessions", filters={"session_id": session_id})
 
+	def append_assessment_questions(
+		self,
+		*,
+		session_id: str,
+		build_id: str,
+		questions: Sequence[Mapping[str, Any]],
+		pending: bool,
+		sections: Sequence[Mapping[str, Any]],
+		total_questions: int,
+	) -> dict[str, Any] | None:
+		"""Add a finished section to an assessment the candidate is already
+		taking. Matched on the build that started it, so a build left running
+		after "New test" or a reset changes nothing. When the last section
+		lands and every question is already answered, the attempt completes."""
+		update: dict[str, Any] = {
+			"$set": {
+				"batch_json.pending": pending,
+				"batch_json.sections": [dict(s) for s in sections],
+				"total_questions": total_questions,
+				"updated_at": _utcnow_iso(),
+			}
+		}
+		if questions:
+			update["$push"] = {"batch_json.questions": {"$each": [dict(q) for q in questions]}}
+		doc = self.db["assessment_sessions"].find_one_and_update(
+			{"session_id": session_id, "batch_json.build_id": build_id},
+			update,
+			return_document=ReturnDocument.AFTER,
+		)
+		if doc is None:
+			return None
+		answered = int(doc.get("answered_count") or 0)
+		if not pending and doc.get("status") != "completed" and total_questions and answered >= total_questions:
+			correct = int(doc.get("correct_count") or 0)
+			doc = self.db["assessment_sessions"].find_one_and_update(
+				{"session_id": session_id, "batch_json.build_id": build_id},
+				{"$set": {
+					"status": "completed",
+					"completed_at": _utcnow_iso(),
+					"score_percent": round(correct / total_questions * 100, 2),
+				}},
+				return_document=ReturnDocument.AFTER,
+			)
+		return self._map_id(doc) if doc else None
+
 	def persist_assessment_session(
 		self,
 		*,
@@ -502,6 +703,7 @@ class MongoRepository:
 			"approach_text": approach_text,
 			"current_code_draft": current_code_draft,
 			"all_code_submissions": [],
+			"submission_count": 0,
 			"last_submission_id": state.get("last_submission_id"),
 			"last_judge_status": state.get(
 				"last_judge_status",
@@ -558,13 +760,35 @@ class MongoRepository:
 		stage: DSAStage | str | None = None,
 		approach_text: str | None = None,
 	) -> dict[str, Any]:
-		"""Persist the canonical DSA state with optimistic concurrency."""
+		"""Persist the canonical DSA state with optimistic concurrency.
+
+		``expected_state_version=None`` is the unguarded path: it writes without
+		a version-matched filter. It must still move the counter *forwards*.
+
+		The previous implementation derived the next version from the caller's
+		``state_json`` on that path, which let the counter go backwards and so
+		defeated the guard for every later writer. Measured against a real
+		MongoDB: with the stored version at 5, a blind write carrying a stale
+		``state_json`` (``state_version: 1``) set the stored version to 2, after
+		which a writer still holding version 2 was accepted and silently
+		overwrote the newer state. No current caller omits the argument, so this
+		was latent rather than live, but the default value made it a footgun for
+		the next one. The stored version is now the only source of truth.
+		"""
 		state = dict(state_json)
-		current_version = int(
-			expected_state_version
-			if expected_state_version is not None
-			else state.get("state_version", 0)
-		)
+		if expected_state_version is not None:
+			current_version = int(expected_state_version)
+		else:
+			# Read the version from the database, never from the caller.
+			stored = self.db["dsa_sessions"].find_one(
+				{"session_id": session_id, "question_number": question_number},
+				{"state_version": 1},
+			)
+			if stored is None:
+				raise RecordNotFoundError(
+					"DSA session not found while attempting to persist state."
+				)
+			current_version = int(stored.get("state_version") or 0)
 		next_version = current_version + 1
 		stage_value = str(stage or state.get("stage", DSAStage.PROBLEM_SETUP.value))
 		state["stage"] = stage_value
@@ -629,11 +853,35 @@ class MongoRepository:
 
 		submissions = list(record.get("all_code_submissions") or [])
 		submissions.append(dict(submission))
+
+		# Keep a monotonic count BEFORE trimming. The report only ever needed
+		# the number of attempts, not their text, so trimming the history must
+		# not make the report under-report effort. Falls back to the list length
+		# for records written before this field existed.
+		submission_count = int(
+			record.get("submission_count") or len(record.get("all_code_submissions") or [])
+		) + 1
+
+		# Trim to the most recent N. Unbounded before this, and the ceiling is
+		# hard rather than merely wasteful: each submission carries source code
+		# up to JUDGE0_MAX_SOURCE_CHARACTERS (50,000), which measured at ~50 KB
+		# of BSON per entry. MongoDB refuses any document over 16 MB, so around
+		# 333 submissions on a single problem makes this document unwritable and
+		# breaks that DSA session permanently — a user can do that to themselves
+		# in a few hours at the configured 60-per-hour execution quota, and it
+		# eats a 512 MB Atlas M0 cluster long before that.
+		#
+		# Oldest dropped first: the recent attempts are the ones worth reviewing,
+		# and the count above preserves the only aggregate anything reads.
+		if len(submissions) > MAX_STORED_DSA_SUBMISSIONS:
+			submissions = submissions[len(submissions) - MAX_STORED_DSA_SUBMISSIONS :]
+
 		next_version = current_version + 1
 		state["state_version"] = next_version
 
 		payload = {
 			"all_code_submissions": submissions,
+			"submission_count": submission_count,
 			"current_code_draft": current_code_draft,
 			"last_submission_id": last_submission_id,
 			"last_judge_status": state["last_judge_status"],

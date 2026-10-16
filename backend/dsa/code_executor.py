@@ -6,6 +6,7 @@ import ast
 import base64
 import binascii
 import json
+import os
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -16,6 +17,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from backend.config import get_settings
+from backend.metrics import judge0_request_duration_seconds, judge0_requests_total
 
 _HARNESS_START_MARKER = "__INTERVIEW_SIMULATOR_RESULTS_START__"
 _HARNESS_END_MARKER = "__INTERVIEW_SIMULATOR_RESULTS_END__"
@@ -55,6 +57,18 @@ _DSA_LANGUAGE_ALIASES = {
 	"jav": "java",
 }
 
+# Substring-matched against the lowercased C++ source. Every token here is one
+# that genuinely reaches outside the sandbox: file redirection, process spawning,
+# or networking. Judge0 is the real isolation boundary; this is a pre-filter.
+#
+# `printf(` and `scanf(` were deliberately REMOVED. They are not security
+# relevant — they do console I/O against the same stdin/stdout the harness
+# already feeds, exactly like cin/cout — and because the match is a naive
+# substring test they collided with the safe, in-memory string-formatting
+# family: `sprintf(`, `snprintf(`, and `fprintf(` all contain `printf(`, and
+# `sscanf(` contains `scanf(`. A candidate formatting into a buffer with
+# `std::sprintf` had a correct solution rejected for using a function that
+# cannot escape anything.
 _CPP_FORBIDDEN_TOKENS = {
 	"#include <filesystem>",
 	"#include <fstream>",
@@ -64,8 +78,6 @@ _CPP_FORBIDDEN_TOKENS = {
 	"system(",
 	"fork(",
 	"socket(",
-	"scanf(",
-	"printf(",
 }
 
 _JAVA_FORBIDDEN_TOKENS = {
@@ -101,10 +113,31 @@ _FORBIDDEN_BUILTINS = {
 	"__import__",
 }
 
+# Attribute-call names blocked regardless of the object they are called on,
+# because the static gate cannot do type inference to tell os.system(x) from
+# a harmless method of the same name.
+#
+# IMPORTANT: this is a DEFENSE-IN-DEPTH pre-filter, not the sandbox. The real
+# isolation boundary is Judge0, which runs every submission in an ephemeral
+# container. So the only cost of a false NEGATIVE here is that a submission
+# reaches a sandbox that is already designed to contain it; the cost of a false
+# POSITIVE is that a candidate's correct solution is rejected outright.
+#
+# `remove` and `replace` were deliberately REMOVED from this set. They are the
+# two names here that collide with everyday DSA operations — `list.remove(x)`,
+# `set.remove(x)`, `str.replace(a, b)`, `bytes.replace(...)` — and blocking them
+# rejected a large fraction of legitimate solutions ("remove duplicates",
+# "clean a string"). Their only DANGEROUS forms are `os.remove` / `Path.replace`
+# and similar, all of which require importing `os`, `pathlib`, or `shutil` — and
+# every one of those modules is already in _FORBIDDEN_MODULES. You cannot obtain
+# a dangerous object to call `.remove`/`.replace` on without a banned import, so
+# these two entries added nothing but false positives.
+#
+# The names kept below have no common builtin-type collision, so they stay as
+# cheap belt-and-suspenders against a dangerous call slipping through on an
+# object obtained some way the module bans did not anticipate.
 _FORBIDDEN_ATTRIBUTE_CALLS = {
 	"popen",
-	"remove",
-	"replace",
 	"rmdir",
 	"rmtree",
 	"system",
@@ -771,17 +804,25 @@ def _open_json_request(
 		headers[settings.auth_header] = settings.auth_token
 
 	request = urllib_request.Request(url, data=request_body, headers=headers, method=method)
+	started_at = time.monotonic()
 	try:
 		with urllib_request.urlopen(request, timeout=settings.request_timeout_seconds) as response:
 			charset = response.headers.get_content_charset() or "utf-8"
 			body = response.read().decode(charset)
 	except urllib_error.HTTPError as exc:
+		judge0_requests_total.labels(outcome="error").inc()
+		judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 		body = exc.read().decode("utf-8", errors="replace")
 		raise CodeExecutionError(
 			f"Judge0 request failed with HTTP {exc.code}: {body.strip() or exc.reason}."
 		) from exc
 	except urllib_error.URLError as exc:
+		judge0_requests_total.labels(outcome="error").inc()
+		judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 		raise CodeExecutionError(f"Judge0 is unavailable: {exc.reason}.") from exc
+
+	judge0_requests_total.labels(outcome="success").inc()
+	judge0_request_duration_seconds.observe(time.monotonic() - started_at)
 
 	try:
 		parsed = json.loads(body)
@@ -919,6 +960,48 @@ def _submit_harness(harness_code: str, *, language: str) -> dict[str, Any]:
 	token = str(response.get("token") or "").strip()
 	if not token:
 		raise CodeExecutionError("Judge0 submission did not return a token. Cannot poll for results.")
+	return _poll_submission(token)
+
+
+# Judge0 CE language ids for whole programs (assessment answer checks). The
+# three DSA languages come from settings; the rest are Judge0 CE defaults.
+_PROGRAM_LANGUAGE_IDS_DEFAULT = {"c": 50, "javascript": 63, "bash": 46}
+
+
+def run_program(source_code: str, language: str) -> dict[str, Any]:
+	"""Run a complete program on Judge0 and return its raw result
+	(stdout, stderr, compile_output, status). Used to check the answer key of
+	"what does this print?" assessment questions, so unlike the DSA runner it
+	takes a whole program with its own main()."""
+	settings = get_settings().judge0
+	key = str(language or "").strip().casefold()
+	if key in {"python", "py", "python3"}:
+		language_id = settings.python_language_id
+	elif key in {"cpp", "c++"}:
+		language_id = settings.cpp_language_id
+	elif key == "java":
+		language_id = settings.java_language_id
+	elif key in _PROGRAM_LANGUAGE_IDS_DEFAULT:
+		language_id = int(os.getenv(f"JUDGE0_{key.upper()}_LANGUAGE_ID") or _PROGRAM_LANGUAGE_IDS_DEFAULT[key])
+	else:
+		raise CodeExecutionError(f"Judge0 has no program runner for {language!r}.")
+	if len(source_code) > settings.max_source_characters:
+		raise SafetyViolationError("Program exceeds the configured source limit.")
+	query = urllib_parse.urlencode({"base64_encoded": "false"})
+	payload = {
+		"language_id": language_id,
+		"source_code": source_code,
+		"stdin": "",
+		"cpu_time_limit": settings.cpu_time_limit_seconds,
+		"wall_time_limit": settings.wall_time_limit_seconds,
+		"memory_limit": settings.memory_limit_kb,
+		"enable_per_process_and_thread_time_limit": True,
+		"enable_per_process_and_thread_memory_limit": True,
+	}
+	response = _open_json_request(f"{settings.api_base_url}/submissions?{query}", method="POST", payload=payload)
+	token = str((response or {}).get("token") or "").strip() if isinstance(response, Mapping) else ""
+	if not token:
+		raise CodeExecutionError("Judge0 submission did not return a token.")
 	return _poll_submission(token)
 
 

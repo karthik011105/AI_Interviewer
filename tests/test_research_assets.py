@@ -40,7 +40,16 @@ class ResearchAssetRegistryTests(TestCase):
 	def test_health_exposes_research_asset_summary_without_changing_runtime_contract(self) -> None:
 		with patch("backend.main.warmup_semantic_encoder"), \
 			 patch("backend.main.warmup_research_asset_registry"), \
-			 patch("backend.main.get_settings", return_value=SimpleNamespace(groq=None)), \
+			 patch(
+				 "backend.main.get_settings",
+				 return_value=SimpleNamespace(
+					 groq=None,
+					 cors=SimpleNamespace(
+						 allowed_origins=("http://127.0.0.1:5173", "http://localhost:5173"),
+						 allow_origin_regex=r"http://(127\.0\.0\.1|localhost):(517[0-9]|3000)",
+					 ),
+				 ),
+			 ), \
 			 patch("backend.main.get_semantic_backend_status", return_value={"ready": True}), \
 			 patch("backend.main.get_research_asset_summary", return_value={
 				"available": True,
@@ -62,4 +71,13 @@ class ResearchAssetRegistryTests(TestCase):
 		self.assertIn("groq", payload)
 		self.assertIn("research_assets", payload)
 		self.assertEqual(payload["research_assets"]["model_count"], 3)
-		self.assertEqual(payload["research_assets"]["registered_model_names"][2], "t5_model.pth")
+		# The filenames deliberately do NOT appear here. /health is
+		# unauthenticated, and `registered_model_names` /
+		# `registered_notebook_names` are real paths from the server's
+		# filesystem — needless disclosure on an anonymous endpoint. Counts are
+		# enough to tell whether the registry found anything; the names moved
+		# to /ready.
+		self.assertNotIn("registered_model_names", payload["research_assets"])
+		self.assertNotIn("registered_notebook_names", payload["research_assets"])
+		self.assertNotIn(".pth", response.text)
+		self.assertNotIn(".ipynb", response.text)

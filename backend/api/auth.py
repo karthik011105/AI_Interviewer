@@ -8,8 +8,10 @@ verification, the bearer-token dependencies, and session-ownership checks.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, HTTPException, status
@@ -17,7 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 
 from backend.config import get_settings
-from backend.database.db_errors import DatabaseClientError
+from backend.database.db_errors import DatabaseClientError, DuplicateRecordError
 
 _LOGGER = logging.getLogger(__name__)
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -110,6 +112,11 @@ def authenticate_access_token(access_token: str) -> AuthenticatedUser:
 		user_id = str(payload.get("sub") or "").strip()
 		if not user_id:
 			raise ValueError("Invalid JWT payload: missing sub")
+
+		# A WebSocket ticket is signed with the same key, so without this check
+		# it would work as a (short-lived) bearer token on every HTTP route.
+		if payload.get("typ") == WS_TICKET_TYPE:
+			raise jwt.InvalidTokenError("A WebSocket ticket is not an access token.")
 
 		# Reject tokens that have been explicitly revoked (logout). Tokens issued
 		# before revocation existed carry no jti; those are still accepted, since
@@ -224,9 +231,113 @@ def ensure_session_access(
 	return parent_session
 
 
+# WebSocket tickets
+# -----------------
+# Browsers cannot set headers on a WebSocket handshake, so the socket has to be
+# authenticated through its URL — and URLs are written to proxy and access logs,
+# including the platform ingress in front of the deployment. Putting the 24-hour
+# access token there meant a single log line was a day of account access.
+#
+# Instead the client trades its access token (sent as a header, over HTTP) for a
+# ticket that is good for one connection within a minute. A ticket recovered
+# from a log has already been spent, and it is refused everywhere except the
+# socket handshake.
+WS_TICKET_TYPE = "ws_ticket"
+WS_TICKET_TTL_SECONDS = 60
+
+
+def issue_websocket_ticket(user: AuthenticatedUser) -> str:
+	auth_settings = get_settings().auth
+	now = datetime.now(timezone.utc)
+	return jwt.encode(
+		{
+			"sub": user.user_id,
+			"email": user.email,
+			"typ": WS_TICKET_TYPE,
+			"iat": now,
+			"exp": now + timedelta(seconds=WS_TICKET_TTL_SECONDS),
+			"jti": uuid.uuid4().hex,
+		},
+		auth_settings.jwt_secret,
+		algorithm=auth_settings.jwt_algorithm,
+	)
+
+
+def authenticate_websocket_ticket(ticket: str) -> AuthenticatedUser:
+	"""Validate a WebSocket ticket and spend it.
+
+	Unlike access-token revocation, a database failure here fails *closed*: the
+	single-use guarantee is the whole point, and the interview cannot run
+	without the database anyway.
+	"""
+
+	trimmed = str(ticket or "").strip()
+	if not trimmed:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="Sign in is required for this operation.",
+		)
+	auth_settings = get_settings().auth
+	try:
+		payload = jwt.decode(
+			trimmed,
+			auth_settings.jwt_secret,
+			algorithms=[auth_settings.jwt_algorithm],
+			options={"require": ["exp", "jti", "sub"]},
+		)
+	except jwt.ExpiredSignatureError as exc:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="The connection ticket has expired. Please reconnect.",
+		) from exc
+	except jwt.InvalidTokenError as exc:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="Invalid connection ticket.",
+		) from exc
+
+	if payload.get("typ") != WS_TICKET_TYPE:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="Invalid connection ticket.",
+		)
+
+	user_id = str(payload["sub"]).strip()
+	try:
+		from backend.database.mongo_client import get_repository
+
+		first_use = get_repository().consume_token_once(
+			jti=str(payload["jti"]),
+			user_id=user_id,
+			expires_at=datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc),
+		)
+	except DuplicateRecordError:
+		first_use = False
+	except DatabaseClientError as exc:
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="Could not verify the connection ticket. Please try again.",
+		) from exc
+	if not first_use:
+		raise HTTPException(
+			status_code=status.HTTP_401_UNAUTHORIZED,
+			detail="This connection ticket has already been used.",
+		)
+
+	email = str(payload.get("email") or "").strip() or None
+	return AuthenticatedUser(
+		user_id=user_id,
+		email=email,
+		raw_user={"id": user_id, "email": email, "app_metadata": {}, "user_metadata": {}},
+	)
+
+
 __all__ = [
 	"AuthenticatedUser",
+	"WS_TICKET_TTL_SECONDS",
 	"authenticate_access_token",
+	"authenticate_websocket_ticket",
+	"issue_websocket_ticket",
 	"ensure_session_access",
 	"get_optional_current_user",
 	"require_current_user",

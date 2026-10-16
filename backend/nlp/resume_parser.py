@@ -12,6 +12,7 @@ from typing import Any
 
 from backend.config import AppSettings, ConfigurationError, GroqSettings, get_settings
 from backend.database.queries import save_resume_data
+from backend.nlp.resume_detector import check_resume
 from backend.nlp.groq_client import GroqCompletionError, GroqDependencyError, create_chat_completion
 from backend.nlp.ner_extractor import extract_entities, validate_skills
 
@@ -45,6 +46,11 @@ class ResumeSchemaError(ResumeParserError):
 
 class ResumeLlmError(ResumeParserError):
 	"""Raised when the structured resume extraction call fails."""
+
+
+class NotAResumeError(ResumeParserError):
+	"""Raised when the PDF reads fine but is not a resume (a job posting,
+	notes, a marksheet...)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,7 +431,29 @@ class ResumeParser:
 		"""Extract text from a PDF and reject encrypted or low-signal documents."""
 
 		fitz = _load_pymupdf()
-		document = fitz.open(str(pdf_path))
+
+		# PyMuPDF raises its own FileDataError (and, depending on the failure,
+		# other RuntimeError subclasses) on a file it cannot parse. Those are
+		# not in this module's error hierarchy, so untranslated they escaped
+		# every handler in routes_resume.py and became an unhandled 500.
+		#
+		# This is trivially reachable: the upload guard only verifies the first
+		# five bytes, so a 9-byte body of b"%PDF-1.4\n" passes validation and
+		# then fails to open. A malformed upload is the caller's problem and
+		# belongs in the 4xx family.
+		#
+		# The original message embeds the absolute temp-file path, which is why
+		# it is deliberately not interpolated into the replacement.
+		try:
+			document = fitz.open(str(pdf_path))
+		except ResumeParserError:
+			raise
+		except Exception as exc:
+			raise ResumeExtractionError(
+				"The uploaded file could not be opened as a PDF. It may be "
+				"corrupt, truncated, or not actually a PDF."
+			) from exc
+
 		try:
 			if getattr(document, "needs_pass", False) or getattr(
 				document,
@@ -482,6 +510,13 @@ class ResumeParser:
 		extractor: StructuredResumeExtractor | None = None,
 	) -> ResumeParseResult:
 		raw_text = self.extract_text(pdf_path)
+		# Checked before the LLM call: a wrong file should fail fast and free.
+		if not check_resume(raw_text).is_resume:
+			raise NotAResumeError(
+				"This doesn't look like a resume. Upload your own resume as a PDF - "
+				"it should have your contact details and sections such as Education, "
+				"Projects and Skills."
+			)
 		parsed_resume = self.parse_structured_resume(
 			session_id=session_id,
 			raw_text=raw_text,
