@@ -358,7 +358,7 @@ class ReportRouteTests(TestCase):
 		self.assertEqual(technical["metrics"]["response_count"], 6)
 		self.assertEqual(technical["metrics"]["response_count_source"], "progress_fallback")
 		self.assertIsNone(technical["score"])
-		self.assertIn("prompts completed", technical["summary"])
+		self.assertIn("questions answered", technical["summary"])
 		self.assertIn("not fully preserved", technical["detail"])
 
 	def test_report_snapshot_rebuilds_stale_dsa_question_report(self) -> None:

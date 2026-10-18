@@ -41,11 +41,11 @@ ROUND_LABELS = {
 	"hr": "HR Interview",
 }
 LOW_SCORE_GUIDANCE = {
-	"assessment": "Revisit core fundamentals and timed MCQ practice so the screening round becomes more consistent.",
-	"technical": "Focus on clearer technical explanations with direct tradeoffs, examples, and terminology.",
-	"dsa": "Practice problem setup, edge cases, and complexity explanations before the next coding round.",
-	"project_discussion": "Strengthen project storytelling around architecture choices, metrics, and tradeoffs.",
-	"hr": "Tighten HR answers around ownership, motivation, and concise communication.",
+	"assessment": "Practise timed sets of aptitude and core-subject questions.",
+	"technical": "Explain each technical answer with a clear trade-off and an example.",
+	"dsa": "Say your approach, edge cases and complexity before you start coding.",
+	"project_discussion": "Explain your projects through design choices, results and trade-offs.",
+	"hr": "Keep HR answers short: the situation, what you did, and the result.",
 }
 
 
@@ -438,7 +438,6 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=["Complete the Assessment to add it to your report."],
 				extras=metrics,
 			),
 		}
@@ -450,7 +449,7 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 	correct_count = int(record.get("correct_count") or 0)
 	score_percent = _coerce_numeric_score(record.get("score_percent"))
 	score = round((score_percent or 0.0) / 100.0, 4) if score_percent is not None else None
-	summary_text = f"{correct_count}/{total_questions} correct" if total_questions else "Awaiting assessment session."
+	summary_text = f"{correct_count} of {total_questions} correct" if total_questions else "Not started yet."
 	detail_text = f"{answered_count}/{total_questions} answered" if total_questions else "Assessment data unavailable."
 	metrics = {
 		"answered_count": answered_count,
@@ -468,19 +467,19 @@ def _build_assessment_snapshot(session_id: str) -> dict[str, Any]:
 		evidence.append(f"{correct_count} of {total_questions} screening questions were answered correctly.")
 		evidence.append(f"{answered_count} of {total_questions} screening questions were attempted.")
 	if total_questions and answered_count == total_questions:
-		strengths.append("All assessment questions were attempted within the timed screening window.")
+		strengths.append("You attempted every question.")
 	elif total_questions and answered_count < total_questions:
-		risks.append("Some assessment questions were left unanswered, which reduced the screening signal.")
+		risks.append("You left some questions unanswered.")
 	if score is not None and score >= 0.75:
-		strengths.append("Assessment fundamentals held up well under timed screening conditions.")
+		strengths.append("Strong fundamentals under time pressure.")
 	elif score is not None and score < 0.6:
-		risks.append("Screening accuracy stayed below the target bar.")
+		risks.append("Fewer than 60% of your answers were correct.")
 	if status_value != "complete":
-		recommendations.append("Complete the Assessment to add it to your report.")
+		pass
 	elif score is not None and score < 0.6:
 		recommendations.append(LOW_SCORE_GUIDANCE["assessment"])
 	else:
-		recommendations.append("Keep revising core fundamentals with short timed MCQ sets before the next mock session.")
+		recommendations.append("Keep practising short timed question sets.")
 
 	# Online-assessment attempts are sectioned (aptitude, fundamentals, role,
 	# code): say which sections were strong and which to practise.
@@ -556,7 +555,6 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=[f"Complete the {ROUND_LABELS[round_name]} to add it to your report."],
 				extras={
 					**metrics,
 					"feedback_samples": [],
@@ -652,10 +650,9 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 	if covered_topics:
 		dimension_scores["covered_topics"] = covered_topics
 	if total_questions:
-		summary_noun = "answers logged" if response_count_source == "responses" else "prompts completed"
-		summary_text = f"{response_count}/{total_questions} {summary_noun}"
+		summary_text = f"{response_count} of {total_questions} questions answered"
 	else:
-		summary_text = "Waiting for round questions."
+		summary_text = "Not started yet."
 	if status_value == "complete" and response_count_source == "progress_fallback":
 		detail_text = "Round completed, but detailed per-answer analytics were not fully preserved for this session."
 	else:
@@ -677,24 +674,24 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 	average_confidence = _coerce_numeric_score(confidence_signal.get("average_confidence")) if confidence_signal else None
 	dominant_confidence_label = str(confidence_signal.get("dominant_confidence_label") or "").strip().lower() if confidence_signal else ""
 	if total_score is not None and total_score >= 0.75:
-		strengths.append(f"{ROUND_LABELS[round_name]} stayed above the target bar with clear scored responses.")
+		strengths.append(f"You scored well in the {ROUND_LABELS[round_name]}.")
 	elif total_score is not None and total_score < 0.6:
-		risks.append(f"{ROUND_LABELS[round_name]} scoring stayed below the target bar.")
+		risks.append(f"You scored below 60% in the {ROUND_LABELS[round_name]}.")
 	if average_ratio is not None and average_ratio >= 0.7:
-		strengths.append("Expected answer concepts were covered consistently across saved responses.")
+		strengths.append("Your answers covered the key points.")
 	elif average_ratio is not None and average_ratio < 0.5:
-		risks.append("Saved answers missed too many of the expected answer concepts.")
+		risks.append("Your answers missed many of the key points.")
 	if average_confidence is not None and average_confidence >= 0.7:
-		strengths.append("Delivery stayed mostly direct and low on uncertainty markers.")
+		strengths.append("You answered directly and confidently.")
 	elif dominant_confidence_label == "hesitant" or (average_confidence is not None and average_confidence < 0.5):
-		risks.append("Saved answers showed visible hesitation and need tighter delivery.")
+		risks.append("You hesitated often - lead with your answer.")
 	if round_name == "technical" and skill_profile_summary:
 		strong_count = int(skill_profile_summary.get("strong_count") or 0)
 		absent_count = int(skill_profile_summary.get("absent_count") or 0)
 		if strong_count > 0:
-			strengths.append("The technical round reached resume-backed strengths instead of staying generic.")
+			strengths.append("You did well on skills from your resume.")
 		if absent_count > 0:
-			risks.append("Some role-critical skills still look under-developed relative to the target role.")
+			risks.append("Some skills this role needs did not come through in your answers.")
 	if concept_coverage:
 		sample_covered_points = _unique_text(list(concept_coverage.get("sample_covered_points") or []), limit=2)
 		sample_missing_points = _unique_text(list(concept_coverage.get("sample_missing_points") or []), limit=2)
@@ -711,16 +708,16 @@ def _build_interview_round_snapshot(session_id: str, round_name: str) -> dict[st
 		if absent_skills:
 			evidence.append(f"Role-skill gaps: {', '.join(absent_skills)}.")
 	if status_value != "complete":
-		recommendations.append(f"Complete the {ROUND_LABELS[round_name]} to add it to your report.")
+		pass
 	elif total_score is not None and total_score < 0.6:
 		recommendations.append(LOW_SCORE_GUIDANCE[round_name])
 	else:
 		if average_ratio is not None and average_ratio < 0.7:
-			recommendations.append("Cover the expected answer points earlier before expanding into examples.")
+			recommendations.append("Cover the key points first, then give examples.")
 		if dominant_confidence_label == "hesitant" or (average_confidence is not None and average_confidence < 0.6):
-			recommendations.append("Reduce hedging and filler phrases so the first answer lands more directly.")
-	if not recommendations:
-		recommendations.append("Preserve this answer structure and keep pairing concise explanations with concrete examples.")
+			recommendations.append("Cut filler words and start with the answer.")
+	if not recommendations and status_value == "complete":
+		recommendations.append("Keep pairing short explanations with concrete examples.")
 	report_section_extras = {
 		**metrics,
 		"feedback_samples": feedback_samples,
@@ -880,7 +877,6 @@ def _build_dsa_snapshot(session_id: str) -> dict[str, Any]:
 				summary=summary_text,
 				detail=detail_text,
 				metrics=metrics,
-				recommendations=["Complete the DSA Round to add it to your report."],
 				extras={
 					**metrics,
 					"questions": progress_summary.get("questions") or [],
@@ -901,9 +897,9 @@ def _build_dsa_snapshot(session_id: str) -> dict[str, Any]:
 	recommendations = list(dsa_round_report.get("recommendations") or [])
 	evidence: list[str] = []
 	if progress_summary.get("aggregate_score") is not None and float(progress_summary["aggregate_score"] or 0.0) >= 0.75:
-		strengths.insert(0, "DSA performance stayed strong across both questions with the weighted aggregate above target.")
+		strengths.insert(0, "Strong coding round across both questions.")
 	elif has_started and not progress_summary["round_completed"]:
-		risks.append("Only part of the DSA round is complete, so the weighted aggregate is not final yet.")
+		risks.append("Only one coding question is done, so the round score is not final.")
 	for report in question_reports:
 		question_number = int(report.get("question_number") or 0)
 		summary_text = str(report.get("strategy_summary") or report.get("analysis_summary") or "").strip()
@@ -914,12 +910,12 @@ def _build_dsa_snapshot(session_id: str) -> dict[str, Any]:
 		if submission_count > 0:
 			evidence.append(f"Q{question_number}: {submission_count} saved submissions before the final evaluation.")
 	if not progress_summary["round_completed"]:
-		recommendations.insert(0, "Complete both DSA questions to unlock the full weighted round score.")
+		recommendations.insert(0, "Finish both coding questions to get the round score.")
 	elif progress_summary.get("aggregate_score") is not None and float(progress_summary["aggregate_score"] or 0.0) < 0.6:
 		recommendations.append(LOW_SCORE_GUIDANCE["dsa"])
 	if not recommendations:
-		recommendations.append("Keep explaining complexity, edge cases, and tradeoffs explicitly during the debrief.")
-	summary_text = f"{progress_summary['completed_question_count']}/2 questions complete"
+		recommendations.append("Keep explaining complexity and edge cases out loud.")
+	summary_text = f"{progress_summary['completed_question_count']} of 2 questions solved"
 	detail_text = "Weighted Q1/Q2 aggregate is available." if progress_summary.get("aggregate_score") is not None else "Complete both DSA questions to unlock the aggregate score."
 	metrics = {
 		"aggregate_score": progress_summary.get("aggregate_score"),
@@ -971,16 +967,12 @@ def _build_highlights(round_summaries: list[dict[str, Any]]) -> list[str]:
 		if entry.get("status") != "complete" or score is None or score < 0.75:
 			continue
 		if entry.get("key") == "assessment":
-			highlights.append("Assessment fundamentals held up well under timed screening conditions.")
+			highlights.append("Strong fundamentals in the assessment.")
 		elif entry.get("key") == "dsa":
-			highlights.append("DSA performance stayed strong across both questions with the weighted aggregate above target.")
+			highlights.append("Strong coding round across both questions.")
 		else:
-			highlights.append(f"{entry.get('label')} stayed above the target bar with clear scored responses.")
-	if highlights:
-		return highlights[:3]
-	if any(entry.get("status") == "complete" for entry in round_summaries):
-		return ["Finish more rounds to see your strengths here."]
-	return ["No completed stages are available yet for highlight extraction."]
+			highlights.append(f"You scored well in the {entry.get('label')}.")
+	return highlights[:3]
 
 
 def _build_recommendations(round_summaries: list[dict[str, Any]], persistence_detail: str | None = None) -> list[str]:
@@ -989,14 +981,11 @@ def _build_recommendations(round_summaries: list[dict[str, Any]], persistence_de
 		status_value = str(entry.get("status") or "not_started")
 		score = _coerce_numeric_score(entry.get("score"))
 		if status_value != "complete":
-			recommendations.append(f"Complete the {entry.get('label')} to add it to your report.")
-			continue
+			continue  # the round card already offers to start it
 		if score is not None and score < 0.6:
 			recommendations.append(LOW_SCORE_GUIDANCE.get(str(entry.get("key")) or "", "Revisit this stage before the next mock session."))
 	if persistence_detail:
-		recommendations.append("This report was generated but could not be saved. Check the database connection so report snapshots persist across sessions.")
-	if not recommendations:
-		recommendations.append("No critical gaps were flagged from the currently persisted stages.")
+		recommendations.append("This report could not be saved. Try again in a moment.")
 	unique_recommendations: list[str] = []
 	for item in recommendations:
 		if item not in unique_recommendations:
