@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -31,6 +33,7 @@ from backend.database.queries import (
 from backend.database.db_errors import DatabaseClientError
 from backend.nlp.interview_context import build_interview_round_contexts
 from backend.nlp.resume_parser import (
+	NotAResumeError,
 	ResumeEncryptedPdfError,
 	ResumeExtractionError,
 	ResumeLlmError,
@@ -38,7 +41,8 @@ from backend.nlp.resume_parser import (
 	ResumeSchemaError,
 )
 from backend.nlp.role_matcher import match_and_store_roles, rank_roles, serialize_role_match_result
-from backend.nlp.resume_quality_scorer import score_resume_as_dict
+from backend.nlp.resume_quality_scorer import score_resume_as_dict, score_role_match_as_dict
+from backend.nlp.skill_extractor import extract_skills
 
 router = APIRouter(prefix="/resume", tags=["resume"])
 _LOGGER = logging.getLogger(__name__)
@@ -107,7 +111,15 @@ async def parse_resume_upload(
 	run_role_matching: bool = Form(True),
 	use_groq_profiles: bool = Form(True),
 	persist_role_matches: bool = Form(True),
-	max_roles: int = Form(5),
+	# The bounds must be declared HERE, not only on ResumeParseRequest.
+	# This handler builds that model itself, further down, from these loose Form
+	# values. A pydantic ValidationError raised inside a handler body is not the
+	# request-parsing error FastAPI turns into a 422 — it propagates as an
+	# unhandled exception, so max_roles=0 or max_roles=99999 returned a 500.
+	# Declaring the same ge/le on the Form makes FastAPI reject it during
+	# parsing, where it belongs, and the model's own Field stays as the
+	# backstop for callers that construct it directly.
+	max_roles: int = Form(5, ge=1, le=10),
 	persist_interview_contexts: bool = Form(True),
 	# Metered: this route runs a full-resume Groq extraction, the most expensive
 	# single LLM call in the application.
@@ -136,7 +148,13 @@ async def parse_resume_upload(
 			max_roles=max_roles,
 			persist_interview_contexts=persist_interview_contexts,
 		)
-		response = _parse_resume_request(request, temp_pdf_path, current_user=current_user)
+		# Off the event loop: this is PDF parsing, a Groq extraction with
+		# retries, and embedding-based role matching — seconds at best. Called
+		# inline from this async handler it froze every live interview socket
+		# in the process until it returned.
+		response = await asyncio.to_thread(
+			_parse_resume_request, request, temp_pdf_path, current_user=current_user
+		)
 		response["uploaded_filename"] = filename
 		return response
 	finally:
@@ -256,7 +274,7 @@ def _parse_resume_request(
 				pdf_path=pdf_path,
 				extractor=extractor,
 			)
-	except (ConfigurationError, ResumeEncryptedPdfError, ResumeExtractionError, ResumeSchemaError, ResumeLlmError) as exc:
+	except (ConfigurationError, ResumeEncryptedPdfError, ResumeExtractionError, ResumeSchemaError, ResumeLlmError, NotAResumeError) as exc:
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail=str(exc),
@@ -324,18 +342,18 @@ def _parse_resume_request(
 
 	# Resume Quality Score — local NLP, no API calls. Safe to always compute.
 	try:
-		role_key_for_scoring = (
-			request.role_selected
-			or (selected_role_match or {}).get("role_key")
-			or "software_engineer"
-		)
+		# General quality only: no role has been chosen yet at upload time.
+		# The role match is computed by /resume/select-role.
 		response["resume_quality"] = score_resume_as_dict(
 			parsed_resume=parse_result.parsed_resume,
 			raw_text=parse_result.raw_text,
-			role_key=str(role_key_for_scoring),
 		)
 	except Exception:
 		response["resume_quality"] = None
+
+	# Run JobBERT over the resume now, while the user reads the score, so the
+	# role match at /resume/select-role finds the skills already cached.
+	threading.Thread(target=extract_skills, args=(parse_result.raw_text or "",), daemon=True).start()
 
 	return response
 
@@ -449,9 +467,24 @@ def select_role(
 			detail=str(exc),
 		) from exc
 
+	# The role-specific keyword match (Jobscan-style), now that there is a role
+	# to match against. Best-effort: a scoring failure must not block selection.
+	try:
+		role_match = score_role_match_as_dict(
+			parsed_resume,
+			str(resume_record.get("raw_text") or ""),
+			role_key,
+			selected_role_match["title"],
+		)
+	except Exception:
+		_LOGGER.warning("Role match scoring failed for %s.", role_key, exc_info=True)
+		role_match = None
+
+
 	return {
 		"session_id": request.session_id,
 		"selected_role": selected_role_match,
+		"role_match": role_match,
 		"interview_contexts": round_contexts,
 		"persisted_interview_contexts": True,
 		"role_selection_required": False,

@@ -60,30 +60,44 @@ WEAK_ACTION_VERBS: frozenset[str] = frozenset({
 # Role keyword signal maps (TF-IDF-style seed vocabulary per role family)
 # ---------------------------------------------------------------------------
 
+# Each entry is one skill; "a|b|c" lists interchangeable alternatives, any one
+# of which counts. Without a job description to compare against, expecting a
+# fresher to know Flask *and* Django *and* Spring would make every match low.
 ROLE_KEYWORDS: dict[str, list[str]] = {
-    "backend":    ["api", "rest", "graphql", "microservice", "database", "sql", "cache",
-                   "redis", "docker", "kubernetes", "ci", "cd", "authentication", "jwt",
-                   "flask", "django", "fastapi", "spring", "node", "express", "postgresql",
-                   "mysql", "mongodb", "kafka", "rabbitmq", "grpc"],
-    "frontend":   ["react", "vue", "angular", "typescript", "javascript", "html", "css",
-                   "webpack", "vite", "redux", "component", "ui", "ux", "responsive",
-                   "accessibility", "dom", "hooks", "state management", "tailwind"],
-    "data":       ["pandas", "numpy", "sql", "etl", "pipeline", "spark", "airflow",
-                   "tableau", "power bi", "data warehouse", "dbt", "snowflake", "bigquery",
-                   "redshift", "jupyter", "matplotlib", "seaborn", "statistics",
-                   "hypothesis", "a/b test", "regression", "classification"],
-    "ai_ml":      ["machine learning", "deep learning", "neural network", "pytorch",
-                   "tensorflow", "scikit-learn", "nlp", "computer vision", "bert",
-                   "transformer", "llm", "fine-tuning", "rag", "embedding", "vector",
-                   "model training", "hyperparameter", "cross-validation", "roc", "f1"],
-    "devops":     ["docker", "kubernetes", "terraform", "ansible", "jenkins", "github actions",
-                   "ci/cd", "aws", "gcp", "azure", "monitoring", "prometheus", "grafana",
-                   "linux", "bash", "infrastructure", "iac", "helm", "argocd"],
-    "security":   ["penetration testing", "owasp", "firewall", "encryption", "ssl", "tls",
-                   "soc", "siem", "vulnerability", "threat", "incident response", "iam",
-                   "zero trust", "authentication", "oauth", "jwt", "rbac"],
-    "software_foundations": ["data structures", "algorithms", "oop", "solid", "design patterns",
-                             "git", "unit test", "testing", "debug", "complexity", "recursion"],
+    "backend":    ["python|java|golang|node.js|nodejs|c#|kotlin", "api", "rest|restful", "sql|mysql|postgresql|sqlite", "database",
+                   "nosql|mongodb|dynamodb|cassandra", "cache|caching|redis",
+                   "flask|django|fastapi|spring|spring boot|express|node.js|nodejs",
+                   "authentication|jwt|oauth", "docker", "microservice",
+                   "ci/cd|github actions|jenkins|gitlab ci", "kubernetes|k8s",
+                   "graphql|grpc", "kafka|rabbitmq|message queue"],
+    "frontend":   ["javascript", "typescript", "html", "css", "react|vue|angular|svelte|next.js",
+                   "component", "hooks", "redux|zustand|state management|context api",
+                   "responsive", "tailwind|bootstrap|sass|scss", "accessibility|a11y|aria",
+                   "dom", "vite|webpack", "ui|ux"],
+    "data":       ["python|r", "sql|mysql|postgresql", "pandas", "numpy", "excel", "statistics|statistical",
+                   "tableau|power bi|looker", "matplotlib|seaborn|plotly", "jupyter",
+                   "etl", "pipeline", "spark|pyspark", "airflow",
+                   "data warehouse|snowflake|bigquery|redshift|dbt", "hypothesis|a/b test",
+                   "regression", "classification"],
+    "ai_ml":      ["python", "machine learning", "deep learning", "neural network",
+                   "pytorch|tensorflow|keras", "scikit-learn|sklearn",
+                   "nlp|natural language processing", "computer vision|opencv",
+                   "transformer|bert|hugging face", "llm|gpt", "rag|retrieval",
+                   "embedding|vector database", "fine-tuning|fine-tuned",
+                   "hyperparameter", "cross-validation",
+                   "precision|recall|f1|roc|auc"],
+    "devops":     ["python|bash|go|golang", "linux", "bash|shell scripting", "docker", "kubernetes|k8s",
+                   "ci/cd", "jenkins|github actions|gitlab ci", "aws|gcp|azure",
+                   "terraform|infrastructure as code|iac", "ansible", "helm",
+                   "monitoring", "prometheus|grafana", "networking|dns|load balancer"],
+    "security":   ["penetration testing|pentest", "owasp", "vulnerability", "threat",
+                   "firewall", "encryption|cryptography", "ssl|tls", "siem|soc",
+                   "incident response", "iam|rbac|access control", "zero trust",
+                   "authentication|oauth|jwt", "nmap|wireshark|burp suite|metasploit"],
+    "software_foundations": ["data structures", "algorithms", "oop|object-oriented",
+                             "design patterns|solid", "git|github",
+                             "unit test|pytest|junit|jest", "testing",
+                             "debug|debugged|debugging", "complexity|big-o", "recursion"],
 }
 
 # Map role_key prefixes/families to keyword groups
@@ -99,16 +113,64 @@ _ROLE_FAMILY_MAP: list[tuple[list[str], list[str]]] = [
 ]
 
 
-def _role_keywords_for_key(role_key: str) -> list[str]:
-    """Return keyword list for a role_key by matching family prefixes."""
+# Role names the matcher invents ("junior_backend_engineer", "api_engineer")
+# rarely start with a family prefix, so fall back to the words in the key/title.
+_FAMILY_TOKEN_HINTS: list[tuple[set[str], list[str]]] = [
+    ({"security", "cyber", "cybersecurity", "soc"}, ["security"]),
+    ({"ml", "ai", "machine", "learning", "scientist", "nlp", "vision", "llm"}, ["ai_ml", "data"]),
+    ({"data", "analyst", "analytics", "bi", "etl", "warehouse"}, ["data"]),
+    ({"devops", "cloud", "sre", "platform", "infrastructure", "reliability"}, ["devops"]),
+    ({"frontend", "front", "react", "ui", "web", "angular", "vue", "mobile", "android", "ios"}, ["frontend", "software_foundations"]),
+    ({"backend", "back", "api", "python", "java", "node", "django", "spring", "server"}, ["backend", "software_foundations"]),
+]
+
+
+def _role_keywords_for_key(role_key: str, role_title: str = "") -> list[str]:
+    """Keyword list for a role: family prefix first, then words in the key/title."""
     rk = (role_key or "").lower()
-    for prefixes, families in _ROLE_FAMILY_MAP:
-        if any(rk.startswith(p) for p in prefixes):
-            keywords: list[str] = []
-            for fam in families:
-                keywords.extend(ROLE_KEYWORDS.get(fam, []))
-            return keywords
-    return ROLE_KEYWORDS["software_foundations"]
+    families: list[str] | None = None
+    for prefixes, fams in _ROLE_FAMILY_MAP:
+        # Anywhere in the key, so "junior_data_engineer" still reads as data_engineer.
+        if any(re.search(rf"(^|_){re.escape(p)}", rk) for p in prefixes):
+            families = fams
+            break
+    if families is None:
+        tokens = set(re.split(r"[^a-z0-9]+", f"{rk} {(role_title or '').lower()}"))
+        for hints, fams in _FAMILY_TOKEN_HINTS:
+            if tokens & hints:
+                families = fams
+                break
+    if families is None:
+        families = ["software_foundations", "backend"]
+    keywords: list[str] = []
+    for fam in families:
+        for kw in ROLE_KEYWORDS.get(fam, []):
+            if kw not in keywords:
+                keywords.append(kw)
+    return keywords
+
+
+def _has_keyword(text_lower: str, keyword: str) -> bool:
+    """Whole-word match, allowing a plural ("APIs", "databases") and any of the
+    "a|b" alternatives. Plain substring matching found "ci" in "specific",
+    "ui" in "build" and "rest" in "interest", inflating every keyword score."""
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(alt.strip())}(?:e?s)?(?![a-z0-9])", text_lower)
+        for alt in keyword.lower().split("|")
+    )
+
+
+def _keyword_label(text_lower: str, keyword: str) -> str:
+    """What to show for a skill: the alternative the resume uses, or the first
+    few alternatives ("flask / django / fastapi") when none is there."""
+    alts = [alt.strip() for alt in keyword.split("|")]
+    for alt in alts:
+        if _has_keyword(text_lower, alt):
+            return alt
+    # Grammar variants of the first one ("debugged", "statistical") are for
+    # matching, not for showing.
+    shown = [alt for alt in alts if alt == alts[0] or not alt.startswith(alts[0][:5])]
+    return " / ".join(shown[:3])
 
 
 # ---------------------------------------------------------------------------
@@ -122,73 +184,82 @@ _QUANTIFICATION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\b(reduced|improved|increased|decreased|boosted|cut|saved)\b.{0,40}\b\d+", re.I),
     re.compile(r"\b\d[\d,]*\s*(users?|requests?|calls?|records?|rows?|files?|tests?|errors?)\b", re.I),
     re.compile(r"\b(first|top|2nd|3rd|\d+th)\b", re.I),        # ranked first, top 5
-    re.compile(r"\b(million|billion|thousand|k|m)\b", re.I),   # 1 million records
+    re.compile(r"\b\d+(?:\.\d+)?\s*(million|billion|thousand|k|m)\b", re.I),  # 2 million, 10k - a bare "k"/"m" is not a metric
 ]
 
 
-def _count_quantified_bullets(text: str) -> int:
-    """Count sentences/bullets that contain a quantification signal."""
-    bullets = re.split(r"[.\n•\-–—]+", text)
-    return sum(
-        1 for b in bullets
-        if b.strip() and any(p.search(b) for p in _QUANTIFICATION_PATTERNS)
-    )
+# Any other number counts too ("served 1,200 students", "3,000 titles"),
+# except years, version numbers and digits inside names (EC2, S3, HTML5).
+_NUMBER = re.compile(r"(?<![A-Za-z0-9#.])(\d[\d,]*(?:\.\d+)?)(?![A-Za-z0-9])")
+_NOT_A_METRIC_BEFORE = re.compile(
+    r"(python|java|php|node|angular|ios|android|windows|version|v|grade|class|semester|sem|standard)\s*$",
+    re.IGNORECASE,
+)
 
 
-def _total_bullets(text: str) -> int:
-    bullets = re.split(r"[.\n•\-–—]+", text)
-    return sum(1 for b in bullets if len(b.strip()) > 10)
+def _has_metric(text: str) -> bool:
+    if any(p.search(text) for p in _QUANTIFICATION_PATTERNS):
+        return True
+    for match in _NUMBER.finditer(text):
+        digits = match.group(1).replace(",", "")
+        try:
+            value = float(digits)
+        except ValueError:
+            continue
+        if value == 0 or (len(digits) == 4 and 1950 <= value <= 2039):
+            continue
+        if _NOT_A_METRIC_BEFORE.search(text[max(0, match.start() - 14):match.start()]):
+            continue
+        return True
+    return False
 
 
-# ---------------------------------------------------------------------------
-# TF-IDF keyword density (pure Python, no sklearn for this function)
-# ---------------------------------------------------------------------------
+_BULLET_MARK = "•●▪◦○■-–—*·➢►✓"
+_BULLET_LINE = re.compile(rf"^\s*[{re.escape(_BULLET_MARK)}]\s*(.*)$")
+# "Languages: Python, C++" - a skills list, not an achievement bullet.
+_LABELLED_LIST = re.compile(r"^[A-Za-z][A-Za-z &/+.-]{1,28}:\s")
 
-def _compute_keyword_density(resume_text: str, keywords: list[str]) -> float:
+
+def _resume_bullets(raw_text: str, parsed_resume: dict[str, Any]) -> list[str]:
+    """The resume's bullet points, the unit recruiters' checkers count.
+
+    Read from the PDF text when it has bullet markers, with wrapped lines
+    joined back on (PDFs often put the marker on its own line, or break a
+    bullet mid-sentence). Splitting a joined blob on every "." and "-" (as
+    before) turned "real-time" and "Node.js" into extra bullets and buried
+    real metrics. Falls back to the parsed projects when there are no markers.
     """
-    Fraction of role-relevant keywords that appear in the resume text.
-    Uses simple term presence (binary TF) then computes coverage %.
-    """
-    if not keywords:
-        return 0.0
-    lower = resume_text.lower()
-    hits = sum(1 for kw in keywords if kw.lower() in lower)
-    return hits / len(keywords)
+    from backend.nlp.resume_detector import is_heading
 
+    bullets: list[str] = []
+    open_bullet = False
+    for line in (raw_text or "").splitlines():
+        stripped = line.strip()
+        match = _BULLET_LINE.match(line)
+        if match and not (stripped[:1] == "-" and stripped[1:2].isalnum()):
+            bullets.append(match.group(1).strip())
+            open_bullet = True
+        elif not stripped or is_heading(stripped):
+            open_bullet = False
+        elif open_bullet and bullets:
+            last = bullets[-1]
+            # Text after a bare marker, or a wrapped line of an unfinished bullet.
+            if not last or last[-1] not in ".!?" or stripped[0].islower() or stripped[0].isdigit():
+                bullets[-1] = f"{last} {stripped}".strip()
+            else:
+                open_bullet = False
+    bullets = [b for b in bullets if not (_LABELLED_LIST.match(b) and b.count(",") >= 2)]
+    bullets = [b for b in bullets if len(b) > 15]
+    if len(bullets) >= 3:
+        return bullets
 
-def _compute_tfidf_similarity(resume_text: str, keywords: list[str]) -> float:
-    """
-    Cosine similarity between resume text and role keyword document using
-    sklearn TfidfVectorizer (runs entirely in-process).
-
-    Raw cosine similarity between a short resume and a keyword bag is naturally
-    very low (0.03–0.12) even for strong resumes.  We remap the raw value onto
-    a realistic 0–1 scale using empirical bounds:
-      raw <= 0.03  → 0.0  (no meaningful overlap)
-      raw >= 0.20  → 1.0  (excellent overlap)
-    so that a typical good resume scores 0.5–0.8 instead of 0.05–0.15.
-    """
-    if not resume_text.strip() or not keywords:
-        return 0.0
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
-        import numpy as np  # type: ignore
-
-        role_doc = " ".join(keywords)
-        vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
-        tfidf = vectorizer.fit_transform([resume_text.lower(), role_doc.lower()])
-        vec_a = tfidf[0].toarray()[0]
-        vec_b = tfidf[1].toarray()[0]
-        norm_a = np.linalg.norm(vec_a)
-        norm_b = np.linalg.norm(vec_b)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        raw = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
-        # Remap [0.03, 0.20] → [0.0, 1.0]
-        low, high = 0.03, 0.20
-        return max(0.0, min(1.0, (raw - low) / (high - low)))
-    except Exception:
-        return _compute_keyword_density(resume_text, keywords)
+    items: list[str] = []
+    for project in parsed_resume.get("projects") or []:
+        if not isinstance(project, dict):
+            continue
+        items.extend(re.split(r"(?<=[.!?])\s+(?=[A-Z])", str(project.get("description") or "")))
+        items.extend(str(o) for o in (project.get("outcomes") or []) if o)
+    return [i.strip() for i in items if len(i.strip()) > 15]
 
 
 # ---------------------------------------------------------------------------
@@ -217,17 +288,6 @@ class QuantificationResult:
 
 
 @dataclass
-class KeywordDensityResult:
-    role_key: str
-    keywords_matched: int
-    keywords_total: int
-    tfidf_similarity: float
-    score: float
-    label: str
-    tip: str
-
-
-@dataclass
 class SectionCompletenessResult:
     sections_present: list[str]
     sections_missing: list[str]
@@ -243,8 +303,8 @@ class ResumeQualityScore:
     overall_label: str            # "Strong" / "Good" / "Needs improvement" / "Weak"
     action_verbs: ActionVerbResult
     quantification: QuantificationResult
-    keyword_density: KeywordDensityResult
     section_completeness: SectionCompletenessResult
+    style: "StyleResult"
     top_tip: str                  # Single most impactful improvement
 
 
@@ -307,9 +367,9 @@ def _score_action_verbs(project_text: str) -> ActionVerbResult:
     )
 
 
-def _score_quantification(project_text: str) -> QuantificationResult:
-    quantified = _count_quantified_bullets(project_text)
-    total = max(_total_bullets(project_text), 1)
+def _score_quantification(bullets: list[str]) -> QuantificationResult:
+    quantified = sum(1 for b in bullets if _has_metric(b))
+    total = max(len(bullets), 1)
 
     ratio = quantified / total
     # Reward even 1-2 quantified bullets heavily — they signal result orientation
@@ -320,10 +380,10 @@ def _score_quantification(project_text: str) -> QuantificationResult:
         tip = "Add specific numbers and metrics. E.g. 'reduced load time by 40%' instead of 'improved performance'."
     elif ratio < 0.3:
         label = "Needs work"
-        tip = f"Only {quantified} of your ~{total} project bullets include metrics. Aim for at least 50%."
+        tip = f"Only {quantified} of your {total} bullet points include a number. Aim for at least half."
     elif ratio < 0.6:
         label = "Good"
-        tip = "Good start. Try to add metrics to more project bullets — even rough estimates count."
+        tip = f"{quantified} of your {total} bullet points include a number. Add metrics to more of them - even rough estimates count."
     else:
         label = "Excellent"
         tip = "Strong quantification. Your resume clearly shows impact through numbers."
@@ -331,41 +391,6 @@ def _score_quantification(project_text: str) -> QuantificationResult:
     return QuantificationResult(
         quantified_bullets=quantified,
         total_bullets=total,
-        score=round(score, 3),
-        label=label,
-        tip=tip,
-    )
-
-
-def _score_keyword_density(resume_text: str, role_key: str) -> KeywordDensityResult:
-    keywords = _role_keywords_for_key(role_key)
-    tfidf_sim = _compute_tfidf_similarity(resume_text, keywords)
-    coverage = _compute_keyword_density(resume_text, keywords)
-    matched = sum(1 for kw in keywords if kw.lower() in resume_text.lower())
-
-    # 50% normalised TF-IDF + 50% raw binary keyword coverage.
-    # Coverage alone already gives a fair reading; TF-IDF adds semantic depth.
-    score = 0.50 * tfidf_sim + 0.50 * coverage
-
-    if score < 0.20:
-        label = "Weak"
-        missing = [kw for kw in keywords if kw.lower() not in resume_text.lower()][:3]
-        tip = f"Your resume lacks key technical terms for this role. Add: {', '.join(missing)}."
-    elif score < 0.40:
-        label = "Needs work"
-        tip = "Add more domain-specific technologies and tools relevant to this role."
-    elif score < 0.60:
-        label = "Good"
-        tip = "Decent keyword coverage. Mention specific tools and technologies by name in your project descriptions."
-    else:
-        label = "Excellent"
-        tip = "Strong alignment with this role's technical vocabulary."
-
-    return KeywordDensityResult(
-        role_key=role_key,
-        keywords_matched=matched,
-        keywords_total=len(keywords),
-        tfidf_similarity=round(tfidf_sim, 4),
         score=round(score, 3),
         label=label,
         tip=tip,
@@ -450,7 +475,17 @@ def _score_section_completeness(parsed_resume: dict[str, Any]) -> SectionComplet
         "Skills": 0.20, "Projects": 0.28,
         "Education": 0.15, "Certifications": 0.05, "Achievements": 0.05,
     }
-    required = ["Name", "Email", "Summary / Objective", "Skills / Technologies", "Projects", "Education"]
+    # (name recorded in sections_present, name shown to the candidate). These
+    # used to compare "Summary / Objective" against the recorded "Summary", so
+    # a resume with every section was still told to add Summary and Skills.
+    required = [
+        ("Name", "Name"),
+        ("Email", "Email"),
+        ("Summary", "Summary / Objective"),
+        ("Skills", "Skills"),
+        ("Projects", "Projects"),
+        ("Education", "Education"),
+    ]
     present_set = set(sections_present)
     # Match partial section names to weight keys
     base_score = 0.0
@@ -464,7 +499,7 @@ def _score_section_completeness(parsed_resume: dict[str, Any]) -> SectionComplet
     depth_penalty = min(len([n for n in depth_notes if "missing" in n.lower() or "no " in n.lower()]) * 0.05, 0.10)
     score = max(0.0, min(1.0, base_score - depth_penalty))
 
-    missing_required = [s for s in required if s not in present_set]
+    missing_required = [shown for recorded, shown in required if recorded not in present_set]
     if missing_required:
         tip = f"Add missing sections: {', '.join(missing_required[:2])}."
     elif depth_notes:
@@ -482,6 +517,199 @@ def _score_section_completeness(parsed_resume: dict[str, Any]) -> SectionComplet
     )
 
 
+_BUZZWORDS: tuple[str, ...] = (
+    "hardworking", "hard-working", "hard working", "team player", "go-getter",
+    "self-motivated", "self motivated", "detail-oriented", "detail oriented",
+    "passionate", "dynamic", "synergy", "results-driven", "results driven",
+    "think outside the box", "quick learner", "fast learner", "responsible for",
+    "duties included", "various",
+)
+_PRONOUN_RE = re.compile(r"\b(I|me|my|mine|myself)\b")
+_BULLET_RE = re.compile(r"^\s*(?:[-*\u2022\u25aa\u25cf\u2013]|\d+[.)])\s+(.+)$", re.M)
+
+
+@dataclass
+class StyleResult:
+    word_count: int
+    pronoun_count: int
+    buzzwords_found: list[str]
+    long_bullets: int
+    score: float
+    label: str
+    tip: str
+
+
+def _score_style(raw_text: str) -> StyleResult:
+    """Clarity and style, the checks Resume Worded groups as brevity/style:
+    length, first-person pronouns, buzzwords and over-long bullet points."""
+
+    text = raw_text or ""
+    lower = text.lower()
+    word_count = len(re.findall(r"[A-Za-z0-9][A-Za-z0-9'+#.-]*", text))
+    pronouns = len(_PRONOUN_RE.findall(text))
+    buzzwords = [b for b in _BUZZWORDS if _has_keyword(lower, b)]
+    bullets = [m.group(1) for m in _BULLET_RE.finditer(text)]
+    long_bullets = sum(1 for b in bullets if len(b.split()) > 32)
+
+    issues: list[tuple[float, str]] = []
+    if word_count < 200:
+        issues.append((0.20 + 0.40 * (200 - word_count) / 200, f"Your resume is short ({word_count} words). Add detail to projects and skills - aim for 350-700 words."))
+    elif word_count > 900:
+        issues.append((0.15, f"Your resume is long ({word_count} words). Keep a fresher resume to one page - about 350-700 words."))
+    if pronouns:
+        issues.append((min(pronouns * 0.04, 0.20), f'Drop first-person words like "I" and "my" ({pronouns} found). Start bullets with an action verb instead.'))
+    if buzzwords:
+        quoted = ", ".join(f'"{b}"' for b in buzzwords[:3])
+        issues.append((min(len(buzzwords) * 0.07, 0.30), f"Replace vague phrases like {quoted} with a concrete example of what you did."))
+    if long_bullets:
+        issues.append((min(long_bullets * 0.06, 0.20), f"{long_bullets} bullet point{'s are' if long_bullets > 1 else ' is'} very long. Keep each to one or two lines."))
+
+    score = max(0.0, 1.0 - sum(weight for weight, _ in issues))
+    tip = max(issues, key=lambda item: item[0])[1] if issues else "Clear and concise - no filler words or first-person phrasing."
+    return StyleResult(
+        word_count=word_count,
+        pronoun_count=pronouns,
+        buzzwords_found=buzzwords,
+        long_bullets=long_bullets,
+        score=round(score, 3),
+        label=_label_from_score(score),
+        tip=tip,
+    )
+
+
+@dataclass
+class RoleMatchResult:
+    role_key: str
+    role_title: str
+    matched: list[str]
+    missing: list[str]
+    match_percent: float
+    tip: str
+    skill_coverage: float = 0.0
+    profile_similarity: float | None = None
+    other_skills: list[str] = field(default_factory=list)
+
+
+# A JobBERT skill counts for a role skill when MiniLM puts them this close
+# ("postgres" ~ "postgresql", "ci pipelines" ~ "ci/cd").
+_SKILL_SIMILARITY = 0.72
+# Resume-vs-role cosine similarity measured on a backend resume: ~0.33-0.40
+# for unrelated roles, 0.55 for a neighbouring one (devops), 0.71 for the
+# right one. Stretch 0.35-0.75 onto 0-100 so the score separates them.
+_PROFILE_SIM_LOW, _PROFILE_SIM_HIGH = 0.35, 0.75
+_COVERAGE_WEIGHT, _SIMILARITY_WEIGHT = 0.6, 0.4
+
+
+def _semantic_encoder() -> Any | None:
+    from backend.nlp.role_matcher import get_semantic_encoder  # heavy module; import lazily
+    return get_semantic_encoder()
+
+
+def _model_skills(raw_text: str) -> list[str]:
+    from backend.nlp.skill_extractor import extract_skills
+    return list(extract_skills(raw_text or ""))
+
+
+def _semantic_hits(encoder: Any, keywords: list[str], skills: list[str]) -> dict[str, str]:
+    """Role skills (keyword entries) that one of the extracted resume skills
+    means, mapped to that resume skill."""
+    if not keywords or not skills:
+        return {}
+    alts = [(kw, alt.strip()) for kw in keywords for alt in kw.split("|")]
+    alt_vecs = encoder.encode([alt for _, alt in alts], normalize_embeddings=True)
+    skill_vecs = encoder.encode(skills, normalize_embeddings=True)
+    sims = alt_vecs @ skill_vecs.T
+    hits: dict[str, str] = {}
+    for row, (kw, _) in enumerate(alts):
+        col = int(sims[row].argmax())
+        if kw not in hits and float(sims[row][col]) >= _SKILL_SIMILARITY:
+            hits[kw] = skills[col]
+    return hits
+
+
+def _profile_similarity(encoder: Any, resume_profile: str, role_profile: str) -> float:
+    vecs = encoder.encode([resume_profile, role_profile], normalize_embeddings=True)
+    cosine = float(vecs[0] @ vecs[1])
+    return max(0.0, min(1.0, (cosine - _PROFILE_SIM_LOW) / (_PROFILE_SIM_HIGH - _PROFILE_SIM_LOW)))
+
+
+def _resume_profile(parsed_resume: dict[str, Any], skills: list[str]) -> str:
+    parts = [str(parsed_resume.get("summary") or "")]
+    parts.append(", ".join(str(s) for s in (parsed_resume.get("skills") or [])))
+    parts.append(", ".join(str(t) for t in (parsed_resume.get("technologies") or [])))
+    for project in parsed_resume.get("projects") or []:
+        if isinstance(project, dict):
+            parts.append(f"{project.get('title') or ''}: {project.get('description') or ''}")
+    parts.append(", ".join(skills))
+    return ". ".join(p for p in parts if p.strip())
+
+
+def score_role_match(
+    parsed_resume: dict[str, Any],
+    raw_text: str,
+    role_key: str,
+    role_title: str = "",
+) -> RoleMatchResult:
+    """How well the resume covers one role's hard skills - the Jobscan-style
+    match rate. Only meaningful once a role has been chosen, so it is scored
+    separately from the general resume quality score."""
+
+    keywords = _role_keywords_for_key(role_key, role_title)
+    title = role_title or role_key.replace("_", " ").title()
+    skills_text = " ".join(str(s) for s in (parsed_resume.get("skills") or []))
+    tech_text = " ".join(str(t) for t in (parsed_resume.get("technologies") or []))
+    text = " ".join([raw_text or "", skills_text, tech_text, parsed_resume.get("summary") or ""]).lower()
+    hits = {kw: _keyword_label(text, kw) for kw in keywords if _has_keyword(text, kw)}
+
+    # Pretrained models, when installed: JobBERT finds the skills, MiniLM
+    # matches them to the role by meaning and scores overall profile fit.
+    model_skills = _model_skills(raw_text)
+    encoder = _semantic_encoder()
+    similarity: float | None = None
+    if encoder is not None:
+        try:
+            unmatched = [kw for kw in keywords if kw not in hits]
+            hits.update(_semantic_hits(encoder, unmatched, model_skills))
+            role_profile = f"{title}. Skills: " + ", ".join(kw.replace("|", ", ") for kw in keywords)
+            similarity = _profile_similarity(encoder, _resume_profile(parsed_resume, model_skills), role_profile)
+        except Exception:
+            similarity = None
+
+    matched = [hits[kw] for kw in keywords if kw in hits]
+    missing = [_keyword_label(text, kw) for kw in keywords if kw not in hits]
+    coverage = len(hits) / len(keywords) if keywords else 0.0
+    blended = coverage if similarity is None else _COVERAGE_WEIGHT * coverage + _SIMILARITY_WEIGHT * similarity
+    pct = round(100 * blended, 1)
+    used = {m.lower() for m in matched}
+    other_skills = [
+        skill for skill in model_skills
+        if skill not in used and not any(_has_keyword(skill, kw) for kw in keywords)
+    ][:10]
+    to_add = ", ".join(m.split(" / ")[0] for m in missing[:3])
+    if pct >= 60:
+        tip = "Strong match. Make sure these skills also appear inside your project bullets, not only in the skills list."
+    elif pct >= 35:
+        tip = f"Reasonable match. If you have used them, add {to_add}."
+    else:
+        tip = f"Low match for this role. Learn or highlight {to_add}."
+    return RoleMatchResult(
+        role_key=role_key,
+        role_title=title,
+        matched=matched,
+        missing=missing[:12],
+        match_percent=pct,
+        tip=tip,
+        skill_coverage=round(100 * coverage, 1),
+        profile_similarity=None if similarity is None else round(100 * similarity, 1),
+        other_skills=other_skills,
+    )
+
+
+def score_role_match_as_dict(parsed_resume: dict[str, Any], raw_text: str, role_key: str, role_title: str = "") -> dict[str, Any]:
+    from dataclasses import asdict
+    return asdict(score_role_match(parsed_resume, raw_text, role_key, role_title))
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -489,20 +717,18 @@ def _score_section_completeness(parsed_resume: dict[str, Any]) -> SectionComplet
 def score_resume(
     parsed_resume: dict[str, Any],
     raw_text: str,
-    role_key: str = "software_engineer",
+    role_key: str | None = None,
 ) -> ResumeQualityScore:
-    """
-    Score a parsed resume across four NLP dimensions.
+    """General resume quality - no role needed.
 
-    Args:
-        parsed_resume: The structured resume dict from resume_parser.
-        raw_text:      The raw extracted PDF text (used for TF-IDF).
-        role_key:      The role the candidate selected (used for keyword density).
+    Four dimensions modelled on what recruiter-facing checkers (Resume Worded,
+    Jobscan's formatting checks) flag: measurable impact, action verbs, section
+    completeness, and clarity/style. Role keyword coverage is NOT part of this
+    score any more: it used to be 35% of it, computed against a default role
+    before the candidate had chosen one. See score_role_match.
 
-    Returns:
-        ResumeQualityScore with per-dimension scores and overall.
+    ``role_key`` is accepted for backward compatibility and ignored.
     """
-    # Build project text from all project descriptions + outcomes
     projects: list[dict] = parsed_resume.get("projects") or []
     project_texts: list[str] = []
     for p in projects:
@@ -514,25 +740,26 @@ def score_resume(
             project_texts.append(p["role"])
     project_text = " ".join(project_texts)
 
-    # Combine raw text + skills + summary for keyword density
     skills_text = " ".join(str(s) for s in (parsed_resume.get("skills") or []))
-    tech_text   = " ".join(str(t) for t in (parsed_resume.get("technologies") or []))
+    tech_text = " ".join(str(t) for t in (parsed_resume.get("technologies") or []))
     summary_text = parsed_resume.get("summary") or ""
     full_text = " ".join([raw_text, skills_text, tech_text, summary_text])
 
-    action_result       = _score_action_verbs(project_text or full_text)
-    quant_result        = _score_quantification(project_text or full_text)
-    keyword_result      = _score_keyword_density(full_text, role_key)
+    action_result = _score_action_verbs(project_text or full_text)
+    quant_result = _score_quantification(_resume_bullets(raw_text, parsed_resume))
     completeness_result = _score_section_completeness(parsed_resume)
+    style_result = _score_style(raw_text)
 
-    # Weighted overall — calibrated so a solid fresher resume lands 65-75.
-    # Keywords (real ATS weight), completeness, verbs, quantification.
     overall = (
-        keyword_result.score      * 0.35 +
-        completeness_result.score * 0.30 +
-        action_result.score       * 0.25 +
-        quant_result.score        * 0.10
+        quant_result.score * 0.30
+        + completeness_result.score * 0.30
+        + action_result.score * 0.20
+        + style_result.score * 0.20
     )
+    # The other checks are ratios, so a 60-word resume with two numbers would
+    # otherwise rate "Excellent". Too little text to judge caps the score.
+    if style_result.word_count < 150:
+        overall = min(overall, 0.60)
     overall_pct = round(overall * 100, 1)
 
     if overall >= 0.80:
@@ -546,31 +773,29 @@ def score_resume(
     else:
         overall_label = "Weak"
 
-    # Pick most impactful tip (lowest scoring dimension)
     dims = [
-        (action_result.score,       action_result.tip),
-        (quant_result.score,        quant_result.tip),
-        (keyword_result.score,      keyword_result.tip),
+        (action_result.score, action_result.tip),
+        (quant_result.score, quant_result.tip),
         (completeness_result.score, completeness_result.tip),
+        (style_result.score, style_result.tip),
     ]
     dims.sort(key=lambda x: x[0])
-    top_tip = dims[0][1]
 
     return ResumeQualityScore(
         overall_score=overall_pct,
         overall_label=overall_label,
         action_verbs=action_result,
         quantification=quant_result,
-        keyword_density=keyword_result,
         section_completeness=completeness_result,
-        top_tip=top_tip,
+        style=style_result,
+        top_tip=dims[0][1],
     )
 
 
 def score_resume_as_dict(
     parsed_resume: dict[str, Any],
     raw_text: str,
-    role_key: str = "software_engineer",
+    role_key: str | None = None,
 ) -> dict[str, Any]:
     """Serialisable version of score_resume for API responses."""
     result = score_resume(parsed_resume, raw_text, role_key)

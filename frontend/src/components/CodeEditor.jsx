@@ -1,4 +1,5 @@
 import Editor from "@monaco-editor/react";
+import "./monacoSetup.js";
 
 const DSA_MONACO_THEME = "interview-simulator-dsa";
 
@@ -70,7 +71,7 @@ export default function CodeEditor({
         </div>
         <div className="dsa-editor__bar-controls">
           {headerActions}
-          <span className="status-pill status-pill--neutral">{statusLabel}</span>
+          {statusLabel ? <span className="status-pill status-pill--neutral">{statusLabel}</span> : null}
         </div>
       </div>
       <div className="dsa-editor__surface" style={{ minHeight: height }}>

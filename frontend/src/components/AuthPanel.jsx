@@ -10,12 +10,15 @@ function describeAuthState(authState) {
 	return "Use password to sign in or sign up.";
 }
 
-export default function AuthPanel({ authState, onSignIn, onSignUp, onSignOut, compact = false }) {
+export default function AuthPanel({ authState, onSignIn, onSignUp, onSignOut, onForgotPassword, compact = false }) {
 	const [mode, setMode] = useState("sign-in");
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
+	const [showForgotPassword, setShowForgotPassword] = useState(false);
+	const [forgotPasswordEmail, setForgotPasswordEmail] = useState("");
 
 	const isBusy = authState?.busyAction && authState.busyAction !== "idle";
+	const isForgotPasswordBusy = authState?.busyAction === "forgot-password";
 	const isAuthenticated = authState?.status === "authenticated";
 	const isInitializing = authState?.status === "loading";
 	const isInputLocked = Boolean(isBusy);
@@ -44,6 +47,15 @@ export default function AuthPanel({ authState, onSignIn, onSignUp, onSignOut, co
 			return;
 		}
 		await onSignIn?.(credentials);
+	}
+
+	async function handleForgotPasswordSubmit(event) {
+		event.preventDefault();
+		const trimmedEmail = forgotPasswordEmail.trim();
+		if (!trimmedEmail || isForgotPasswordBusy) {
+			return;
+		}
+		await onForgotPassword?.(trimmedEmail);
 	}
 
 	if (isAuthenticated && compact) {
@@ -104,6 +116,41 @@ export default function AuthPanel({ authState, onSignIn, onSignUp, onSignOut, co
 						</button>
 					</div>
 				</div>
+			) : showForgotPassword ? (
+				<div className="auth-shell__workspace">
+					<div className="auth-shell__access-rail">
+						<div className="auth-shell__guide">
+							<span>Current mode</span>
+							<strong>Reset password</strong>
+							<p>We'll email a reset link if that address has an account.</p>
+						</div>
+					</div>
+
+					<form className="auth-form auth-form--studio" onSubmit={handleForgotPasswordSubmit}>
+						<label className="field-label" htmlFor="auth-forgot-email">Email</label>
+						<input
+							id="auth-forgot-email"
+							className="text-input"
+							type="email"
+							value={forgotPasswordEmail}
+							onChange={(event) => setForgotPasswordEmail(event.target.value)}
+							placeholder="you@example.com"
+							disabled={isForgotPasswordBusy}
+						/>
+
+						<button className="primary-button" type="submit" disabled={isForgotPasswordBusy}>
+							{isForgotPasswordBusy ? "Sending..." : "Send reset link"}
+						</button>
+						<button
+							type="button"
+							className="secondary-button"
+							onClick={() => setShowForgotPassword(false)}
+							disabled={isForgotPasswordBusy}
+						>
+							Back to sign in
+						</button>
+					</form>
+				</div>
 			) : (
 				<div className="auth-shell__workspace">
 					<div className="auth-shell__access-rail">
@@ -155,6 +202,20 @@ export default function AuthPanel({ authState, onSignIn, onSignUp, onSignOut, co
 							placeholder={mode === "sign-up" ? "At least 6 characters" : "Enter your password"}
 							disabled={isInputLocked}
 						/>
+
+						{mode === "sign-in" ? (
+							<button
+								type="button"
+								className="auth-forgot-link"
+								onClick={() => {
+									setForgotPasswordEmail(email);
+									setShowForgotPassword(true);
+								}}
+								disabled={isBusy}
+							>
+								Forgot password?
+							</button>
+						) : null}
 
 						<button className="primary-button" type="submit" disabled={isSubmitLocked}>
 							{isBusy

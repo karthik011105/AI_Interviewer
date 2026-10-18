@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from typing import Any, Mapping
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.api.auth import AuthenticatedUser, ensure_session_access, require_current_user
+from backend.api.routes_interview_end import ensure_interview_open
 from backend.api.quotas import DSA_EXECUTION, quota_dependency
 from backend.database.queries import (
 	append_dsa_submission,
@@ -23,7 +25,13 @@ from backend.database.queries import (
 	update_session_status,
 	upsert_final_report,
 )
-from backend.database.db_errors import DSAStage, JudgeStatus, DatabaseClientError, build_default_dsa_state
+from backend.database.db_errors import (
+	DSAStage,
+	DatabaseClientError,
+	DuplicateRecordError,
+	JudgeStatus,
+	build_default_dsa_state,
+)
 from backend.dsa.code_analyzer import analyze_submission_code
 from backend.dsa.code_executor import (
 	build_editor_starter_code,
@@ -53,6 +61,8 @@ from backend.dsa.problem_selector import (
 	serialize_problem,
 )
 from backend.dsa.report_engine import build_dsa_question_report, build_dsa_round_report
+
+_LOGGER = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dsa", tags=["dsa"])
 
@@ -261,6 +271,31 @@ def start_dsa_round(
 			approach_text=None,
 			current_code_draft=current_code_draft,
 		)
+	except DuplicateRecordError:
+		# The get_dsa_session check above and this insert are not atomic, and
+		# dsa_sessions has a unique index on (session_id, question_number). Two
+		# concurrent starts — a double-clicked button, or a client retry — both
+		# see no existing record and both try to create one. The loser lands
+		# here.
+		#
+		# This is not an error from the caller's point of view: the record they
+		# asked for now exists, it was simply created by the other request a
+		# moment earlier. Returning it makes the endpoint idempotent, which is
+		# what the check-then-create was reaching for. Raising instead would
+		# fail one of two identical requests for no reason the user could act
+		# on.
+		existing_record = get_dsa_session(request.session_id, request.question_number)
+		if existing_record is None:
+			# The unique-index violation says a record exists, so not finding
+			# it means something else is wrong; do not mask that.
+			raise
+		problem = _resolve_record_problem(existing_record)
+		existing_record = _ensure_record_language_state(
+			existing_record, problem, requested_language=request.language
+		)
+		response = _serialize_dsa_session_record(existing_record, problem=problem)
+		response["created_dsa_session"] = False
+		return response
 	except DatabaseClientError as exc:
 		raise HTTPException(
 			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -331,7 +366,7 @@ def run_dsa_code(
 	except SafetyViolationError as exc:
 		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 	except CodeExecutionError as exc:
-		print("!!! JUDGE0 ERROR:", str(exc))
+		_LOGGER.error("Judge0 execution error: %s", exc)
 		raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 	judge_status = _derive_judge_status(execution_results)
@@ -575,7 +610,9 @@ def _require_parent_session(
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail="No interview session exists for the supplied session_id.",
 		)
-	return ensure_session_access(parent_session, current_user)
+	ensure_session_access(parent_session, current_user)
+	ensure_interview_open(parent_session)
+	return parent_session
 
 
 def _resolve_role_key(parent_session: Mapping[str, Any], requested_role_key: str | None) -> str:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -165,6 +167,42 @@ _ROLE_TITLE_ALIASES: dict[str, str] = {
 	"security engineer": "cybersecurity_analyst",
 }
 
+_LOGGER = logging.getLogger(__name__)
+
+# Ordered: the first matching token wins.
+_TECH_ROLE_HINTS: tuple[tuple[str, str], ...] = (
+	("django", "backend_python_developer"),
+	("flask", "backend_python_developer"),
+	("fastapi", "backend_python_developer"),
+	("python", "backend_python_developer"),
+	("spring", "backend_java_developer"),
+	("java", "backend_java_developer"),
+	("node", "backend_node_developer"),
+	("nodejs", "backend_node_developer"),
+	("express", "backend_node_developer"),
+	("react", "frontend_react_developer"),
+	("frontend", "frontend_react_developer"),
+	("android", "mobile_app_developer"),
+	("ios", "mobile_app_developer"),
+	("flutter", "mobile_app_developer"),
+	("mobile", "mobile_app_developer"),
+	("devops", "devops_engineer"),
+	("sre", "site_reliability_engineer"),
+	("security", "cybersecurity_analyst"),
+	("cybersecurity", "cybersecurity_analyst"),
+	("qa", "qa_automation_engineer"),
+	("automation", "qa_automation_engineer"),
+	("testing", "manual_test_engineer"),
+	("tester", "manual_test_engineer"),
+)
+
+# Used when a role matches nothing in the catalog. Role matching generates
+# role keys freely ("junior_backend_engineer", "api_engineer"), and refusing
+# to start the assessment for those - which is what happened - blocks the
+# candidate outright. General software-engineering questions are a far
+# better answer than an error.
+FALLBACK_ASSESSMENT_ROLE_KEY = "software_engineer"
+
 _GENERIC_ROLE_TOKENS = {
 	"analyst",
 	"associate",
@@ -260,6 +298,12 @@ def _infer_role_key_from_tokens(catalog: Mapping[str, AssessmentBlueprint], cand
 
 	if {"cloud", "engineer"}.issubset(candidate_tokens):
 		return "cloud_engineer"
+
+	# A framework or platform in the role name pins the stack even when the
+	# rest is generic ("django_developer", "spring_boot_engineer").
+	for token, hinted_key in _TECH_ROLE_HINTS:
+		if token in candidate_tokens and hinted_key in catalog:
+			return hinted_key
 
 	best_role_key: str | None = None
 	best_score = 0
@@ -489,12 +533,21 @@ def get_assessment_blueprint(role_key: str) -> AssessmentBlueprint:
 	resolved_role_key = normalize_assessment_role_key(role_key)
 	if not resolved_role_key:
 		raise AssessmentBankError("role_key is required to build an assessment batch.")
-	try:
-		return load_role_catalog()[resolved_role_key]
-	except KeyError as exc:
+	catalog = load_role_catalog()
+	blueprint = catalog.get(resolved_role_key)
+	if blueprint is not None:
+		return blueprint
+	fallback = catalog.get(FALLBACK_ASSESSMENT_ROLE_KEY)
+	if fallback is None:
 		raise AssessmentBankError(
 			f"No assessment blueprint exists for role {resolved_role_key}."
-		) from exc
+		)
+	_LOGGER.info(
+		"No assessment blueprint for role %s; using %s.",
+		resolved_role_key,
+		FALLBACK_ASSESSMENT_ROLE_KEY,
+	)
+	return fallback
 
 
 def normalize_assessment_role_key(role_key: str, role_title: str | None = None) -> str:

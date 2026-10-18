@@ -18,6 +18,8 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError
 
+from backend.database.db_errors import DatabaseClientError, DuplicateRecordError
+
 from backend import config
 from backend.api import routes_auth
 from backend.api.auth import (
@@ -177,20 +179,51 @@ class SignupTests(_AuthTestBase):
 
 		The loser hits the unique index on users.email. That must be reported as
 		the same 409 conflict rather than escaping as an unhandled 500.
+
+		Parameterised over both error types on purpose. This test used to mock
+		only pymongo's DuplicateKeyError, and it kept passing after
+		MongoRepository.insert_one began translating that into the domain
+		DuplicateRecordError -- so the mock asserted a contract the repository
+		no longer had, and the real signup race would have produced a 500.
+		A mocked boundary is only as good as the exception it mocks.
 		"""
-		repo = MagicMock()
-		repo.db.users.find_one.return_value = None
-		repo.insert_one.side_effect = DuplicateKeyError("E11000 duplicate key error")
+		for error in (
+			DuplicateRecordError("already exists in 'users'"),
+			DuplicateKeyError("E11000 duplicate key error"),
+		):
+			with self.subTest(error=type(error).__name__):
+				repo = MagicMock()
+				repo.db.users.find_one.return_value = None
+				repo.insert_one.side_effect = error
 
-		with patch("backend.api.routes_auth.get_repository", return_value=repo):
-			with self.assertRaises(HTTPException) as context:
-				routes_auth.signup(
-					routes_auth.SignupRequest(email="user@example.com", password="password123"),
-					_make_request(),
-				)
+				with patch("backend.api.routes_auth.get_repository", return_value=repo):
+					with self.assertRaises(HTTPException) as context:
+						routes_auth.signup(
+							routes_auth.SignupRequest(
+								email="user@example.com", password="password123"
+							),
+							_make_request(),
+						)
 
-		self.assertEqual(context.exception.status_code, 409)
-		self.assertIn("already exists", context.exception.detail)
+				self.assertEqual(context.exception.status_code, 409)
+				self.assertIn("already exists", context.exception.detail)
+
+	def test_the_repository_raises_what_signup_actually_catches(self) -> None:
+		"""Pin the contract the test above mocks.
+
+		The mock is only meaningful if MongoRepository.insert_one really does
+		raise DuplicateRecordError on a unique-index violation. Asserting the
+		translation exists here means renaming or removing it fails a test
+		rather than silently making the signup race a 500 again.
+		"""
+		import inspect
+
+		from backend.database import mongo_client
+
+		source = inspect.getsource(mongo_client.MongoRepository.insert_one)
+		self.assertIn("DuplicateKeyError", source)
+		self.assertIn("DuplicateRecordError", source)
+		self.assertTrue(issubclass(DuplicateRecordError, DatabaseClientError))
 
 
 class LoginTests(_AuthTestBase):
@@ -831,3 +864,252 @@ class TokenRevocationTests(_AuthTestBase):
 			user = authenticate_access_token(token)
 
 		self.assertEqual(user.user_id, "user-1")
+
+
+class ResetTokenHashingTests(TestCase):
+	def test_is_deterministic(self) -> None:
+		self.assertEqual(
+			routes_auth._hash_reset_token("same-token"),
+			routes_auth._hash_reset_token("same-token"),
+		)
+
+	def test_different_tokens_hash_differently(self) -> None:
+		self.assertNotEqual(
+			routes_auth._hash_reset_token("token-a"),
+			routes_auth._hash_reset_token("token-b"),
+		)
+
+	def test_never_returns_the_raw_token(self) -> None:
+		self.assertNotIn("super-secret-token", routes_auth._hash_reset_token("super-secret-token"))
+
+
+class ForgotPasswordTests(_AuthTestBase):
+	def test_an_existing_account_gets_a_token_and_an_email(self) -> None:
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch("backend.api.routes_auth.send_email") as mock_send:
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request()
+			)
+
+		repo.create_password_reset_token.assert_called_once()
+		kwargs = repo.create_password_reset_token.call_args.kwargs
+		self.assertEqual(kwargs["user_id"], "user-1")
+		mock_send.assert_called_once()
+		self.assertEqual(mock_send.call_args.kwargs["to"], "user@example.com")
+		self.assertIn("detail", result)
+
+	def test_an_unknown_address_gets_the_identical_response_and_no_token(self) -> None:
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch("backend.api.routes_auth.send_email") as mock_send:
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="nobody@example.com"), _make_request()
+			)
+
+		repo.create_password_reset_token.assert_not_called()
+		mock_send.assert_not_called()
+		self.assertEqual(result, {"detail": routes_auth._GENERIC_FORGOT_PASSWORD_DETAIL})
+
+	def test_known_and_unknown_addresses_get_byte_identical_responses(self) -> None:
+		"""The response body itself must carry no signal either way."""
+		found_repo = MagicMock()
+		found_repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+		missing_repo = MagicMock()
+		missing_repo.db.users.find_one.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=found_repo), \
+			 patch("backend.api.routes_auth.send_email"):
+			found_result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request("203.0.113.1")
+			)
+		with patch("backend.api.routes_auth.get_repository", return_value=missing_repo), \
+			 patch("backend.api.routes_auth.send_email"):
+			missing_result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="nobody@example.com"), _make_request("203.0.113.2")
+			)
+
+		self.assertEqual(found_result, missing_result)
+
+	def test_an_email_delivery_failure_is_swallowed_not_surfaced(self) -> None:
+		"""Letting delivery failure reach the caller would disclose the address exists."""
+		repo = MagicMock()
+		repo.db.users.find_one.return_value = {"_id": "user-1", "email": "user@example.com"}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo), \
+			 patch(
+				 "backend.api.routes_auth.send_email",
+				 side_effect=routes_auth.EmailDeliveryError("smtp down"),
+			 ):
+			result = routes_auth.forgot_password(
+				routes_auth.ForgotPasswordRequest(email="user@example.com"), _make_request()
+			)
+
+		self.assertEqual(result, {"detail": routes_auth._GENERIC_FORGOT_PASSWORD_DETAIL})
+
+
+class ResetPasswordTests(_AuthTestBase):
+	def test_a_valid_token_updates_the_password(self) -> None:
+		repo = MagicMock()
+		repo.consume_password_reset_token.return_value = {
+			"_id": "hash", "user_id": "user-1", "used_at": "now",
+		}
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			result = routes_auth.reset_password(
+				routes_auth.ResetPasswordRequest(token="raw-token", new_password="new-password-123")
+			)
+
+		repo.db.users.update_one.assert_called_once()
+		args, _ = repo.db.users.update_one.call_args
+		self.assertEqual(args[0], {"_id": "user-1"})
+		new_hash = args[1]["$set"]["password_hash"]
+		self.assertTrue(bcrypt.checkpw(b"new-password-123", new_hash.encode("utf-8")))
+		self.assertIn("detail", result)
+
+	def test_an_invalid_or_expired_or_reused_token_is_rejected(self) -> None:
+		repo = MagicMock()
+		repo.consume_password_reset_token.return_value = None
+
+		with patch("backend.api.routes_auth.get_repository", return_value=repo):
+			with self.assertRaises(HTTPException) as context:
+				routes_auth.reset_password(
+					routes_auth.ResetPasswordRequest(token="bad-token", new_password="new-password-123")
+				)
+
+		self.assertEqual(context.exception.status_code, 400)
+		repo.db.users.update_one.assert_not_called()
+
+	def test_the_new_password_is_still_subject_to_the_signup_policy(self) -> None:
+		with self.assertRaises(ValidationError):
+			routes_auth.ResetPasswordRequest(token="raw-token", new_password="short")
+
+
+class RateLimiterKeyReclamationTests(TestCase):
+	"""Both throttles are long-lived process state, so they must not grow with
+	the number of keys *ever* seen.
+
+	Before the sweep existed, a key's deque was only pruned when that same key
+	was checked again — and a caller who never returns is never checked again.
+	Measured: 10,000 one-off callers left 10,000 entries in place, still
+	holding their timestamps, long after every window had lapsed. The auth
+	limiter keys on client address and the quota limiters key on user id, so
+	ordinary traffic drove it. These tests pin the reclamation without
+	loosening the limits themselves.
+	"""
+
+	def test_a_lapsed_window_releases_the_keys_it_was_tracking(self) -> None:
+		clock = [1000.0]
+		limiter = FixedWindowRateLimiter(
+			max_events=5, window_seconds=60.0, clock=lambda: clock[0]
+		)
+
+		for index in range(500):
+			limiter.check(f"login:198.51.100.{index}")
+		self.assertEqual(limiter.tracked_key_count(), 500)
+
+		# Move well past the window so every recorded event is stale, then let
+		# one unrelated caller arrive to trigger the sweep.
+		clock[0] += 10_000.0
+		limiter.check("login:someone-new")
+
+		self.assertEqual(
+			limiter.tracked_key_count(),
+			1,
+			"only the caller still inside the window should be retained",
+		)
+
+	def test_keys_inside_the_window_are_never_swept(self) -> None:
+		"""The sweep must not become a way to escape the limit."""
+
+		clock = [0.0]
+		limiter = FixedWindowRateLimiter(
+			max_events=2, window_seconds=100.0, clock=lambda: clock[0]
+		)
+
+		limiter.check("caller-a")
+		limiter.check("caller-a")
+
+		# Advance enough to trigger a sweep, but not enough to expire caller-a.
+		clock[0] += 99.0
+		limiter.check("caller-b")
+
+		with self.assertRaises(RateLimitExceeded):
+			limiter.check("caller-a")
+
+	def test_the_sweep_does_not_run_more_than_once_per_window(self) -> None:
+		"""A sweep is O(n) in tracked keys, so it is bounded to once per window
+		to keep the amortised cost of a check negligible."""
+
+		clock = [0.0]
+		limiter = FixedWindowRateLimiter(
+			max_events=1, window_seconds=100.0, clock=lambda: clock[0]
+		)
+		sweeps = []
+		original = limiter._maybe_sweep
+
+		def counting_sweep(now: float) -> None:
+			before = limiter._last_sweep_at
+			original(now)
+			if limiter._last_sweep_at != before:
+				sweeps.append(now)
+
+		limiter._maybe_sweep = counting_sweep  # type: ignore[method-assign]
+
+		for index in range(50):
+			clock[0] += 1.0
+			limiter.check(f"key-{index}")
+
+		# 50 checks spanning 50 seconds, against a 100 second window.
+		self.assertEqual(len(sweeps), 1, f"expected one sweep, got {sweeps}")
+
+	def test_expired_lockouts_release_their_keys(self) -> None:
+		clock = [500.0]
+		tracker = FailureTracker(
+			max_failures=3, lockout_seconds=300.0, clock=lambda: clock[0]
+		)
+
+		for index in range(500):
+			tracker.record_failure(f"user{index}@example.com")
+		self.assertEqual(tracker.tracked_key_count(), 500)
+
+		clock[0] += 100_000.0
+		tracker.check("unrelated@example.com")
+
+		self.assertEqual(tracker.tracked_key_count(), 0)
+
+	def test_an_active_lockout_survives_a_sweep(self) -> None:
+		"""The sweep must not release someone who is still locked out."""
+
+		clock = [0.0]
+		tracker = FailureTracker(
+			max_failures=2, lockout_seconds=300.0, clock=lambda: clock[0]
+		)
+
+		tracker.record_failure("target@example.com")
+		tracker.record_failure("target@example.com")
+
+		# Far enough to trigger a sweep, not far enough to clear the lockout.
+		clock[0] += 299.0
+		tracker.record_failure("someone-else@example.com")
+
+		with self.assertRaises(RateLimitExceeded):
+			tracker.check("target@example.com")
+
+	def test_clear_resets_the_sweep_schedule_too(self) -> None:
+		"""Otherwise a limiter cleared between tests could skip its first sweep
+		and carry a stale schedule into unrelated assertions."""
+
+		clock = [0.0]
+		limiter = FixedWindowRateLimiter(
+			max_events=1, window_seconds=50.0, clock=lambda: clock[0]
+		)
+		limiter.check("a")
+		limiter.clear()
+
+		self.assertIsNone(limiter._last_sweep_at)
+		self.assertEqual(limiter.tracked_key_count(), 0)

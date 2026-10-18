@@ -15,8 +15,10 @@
 /.gitignore
 /.github
 
-/.venv/
-venv/
+# Glob, not just /.venv/ — a virtualenv under any other name (.venv311)
+# would otherwise be shipped into the build context, adding ~2 GB of torch.
+/.venv*/
+venv*/
 __pycache__/
 *.py[cod]
 /.pytest_cache/
