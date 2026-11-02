@@ -314,11 +314,16 @@ def submit_assessment_answer(
 		"question_id": request.question_id,
 		"selected_option_id": selected_ids[0],
 		"selected_option_ids": selected_ids,
-		"correct_option_id": correct_ids[0] if correct_ids else "",
-		"correct_option_ids": correct_ids,
-		"is_correct": is_correct,
-		"explanation": str(question_snapshot.get("explanation") or ""),
 	}
+	# Like a real online test, nothing says whether an answer was right until
+	# the attempt is over - not on screen, not in the API response.
+	if assessment_status == "completed":
+		response["submitted_result"].update({
+			"correct_option_id": correct_ids[0] if correct_ids else "",
+			"correct_option_ids": correct_ids,
+			"is_correct": is_correct,
+			"explanation": str(question_snapshot.get("explanation") or ""),
+		})
 	return response
 
 
@@ -399,6 +404,7 @@ def _serialize_assessment_record(record: Mapping[str, Any]) -> dict[str, Any]:
 	question_snapshots = _require_question_snapshots(batch_snapshot)
 	answers = _clone_answers(state.get("answers"))
 	next_question_id = _find_next_question_id(question_snapshots, answers)
+	finished = str(record.get("status") or "").strip().lower() in {"completed", "complete"}
 	return {
 		"session_id": str(record.get("session_id") or ""),
 		"role_key": str(record.get("role_key") or ""),
@@ -407,8 +413,9 @@ def _serialize_assessment_record(record: Mapping[str, Any]) -> dict[str, Any]:
 		"completed_at": record.get("completed_at"),
 		"total_questions": int(record.get("total_questions") or len(question_snapshots)),
 		"answered_count": int(record.get("answered_count") or len(answers)),
-		"correct_count": int(record.get("correct_count") or 0),
-		"score_percent": float(record.get("score_percent") or 0.0),
+		# Scores only once the attempt is over (see submit_assessment_answer).
+		"correct_count": int(record.get("correct_count") or 0) if finished else None,
+		"score_percent": float(record.get("score_percent") or 0.0) if finished else None,
 		# From the answers, not the stored index: sections are appended after
 		# the last submit that stored it.
 		"current_question_index": _find_next_question_index(question_snapshots, answers),
@@ -418,9 +425,9 @@ def _serialize_assessment_record(record: Mapping[str, Any]) -> dict[str, Any]:
 		"format": str(batch_snapshot.get("format") or "bank"),
 		# More sections are still being written; the page waits for them.
 		"pending": bool(batch_snapshot.get("pending")),
-		"sections": section_results(record),
+		"sections": section_results(record) if finished else [],
 		"questions": [
-			_serialize_question_snapshot(question, answers)
+			_serialize_question_snapshot(question, answers, reveal=finished)
 			for question in question_snapshots
 		],
 	}
@@ -429,6 +436,8 @@ def _serialize_assessment_record(record: Mapping[str, Any]) -> dict[str, Any]:
 def _serialize_question_snapshot(
 	question_snapshot: Mapping[str, Any],
 	answers: Mapping[str, Mapping[str, Any]],
+	*,
+	reveal: bool = False,
 ) -> dict[str, Any]:
 	question_id = str(question_snapshot.get("question_id") or "")
 	answer = answers.get(question_id)
@@ -458,7 +467,8 @@ def _serialize_question_snapshot(
 		payload["selected_option_id"] = str(answer.get("selected_option_id") or "")
 		payload["selected_option_ids"] = list(answer.get("selected_option_ids") or [payload["selected_option_id"]])
 		payload["answered"] = True
-		payload["was_correct"] = bool(answer.get("is_correct"))
+		if reveal:
+			payload["was_correct"] = bool(answer.get("is_correct"))
 		payload["answered_at"] = answer.get("answered_at")
 	return payload
 

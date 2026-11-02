@@ -190,6 +190,16 @@ export function interviewReducer(state, action) {
 				}),
 			};
 
+		// "Can you repeat that?" was a request, not an answer: drop it from the
+		// thread; Maya says the question again in its own bubble.
+		case "META_REQUEST":
+			return {
+				...state,
+				turns: state.turns.filter(
+					(t) => !(t.role === "candidate" && t.turnIndex === action.payload.turn_index),
+				),
+			};
+
 		case "TRANSCRIPT": {
 			const { text, no_speech: noSpeech } = action.payload;
 			if (noSpeech || !String(text || "").trim()) {
@@ -350,6 +360,7 @@ export const SOCKET_ACTIONS = {
 	turn_delta: "TURN_DELTA",
 	turn_end: "TURN_END",
 	turn_snippet: "TURN_SNIPPET",
+	meta_request: "META_REQUEST",
 	transcript: "TRANSCRIPT",
 	stt_partial: "STT_PARTIAL",
 	scoring_state: "SCORING_STATE",

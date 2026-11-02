@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import WorkflowResetControl from "../components/WorkflowResetControl";
 import { buildApiHeaders } from "../lib/api";
-import { formatOptionIds, languageLabel, splitQuestion } from "../lib/assessmentQuestion";
+import { languageLabel, splitQuestion } from "../lib/assessmentQuestion";
 import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
@@ -43,7 +43,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
   const [errorMessage, setErrorMessage] = useState("");
   const [assessmentSession, setAssessmentSession] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [lastSubmission, setLastSubmission] = useState(null);
 
   const syncedSessionId = workflowState?.sessionId || "";
   const syncedRoleKey = workflowState?.selectedRoleKey || "";
@@ -98,7 +97,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
   function handleWorkflowReset(payload) {
     setAssessmentSession(null);
     setSelectedIds([]);
-    setLastSubmission(null);
     setErrorMessage("");
     onWorkflowStateChange?.((current) => ({
       ...current,
@@ -129,7 +127,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
 
     setBusyState("starting");
     setErrorMessage("");
-    setLastSubmission(null);
 
     try {
       const response = await fetch(`${baseUrl}/assessment/start`, {
@@ -196,7 +193,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
       }
 
       setAssessmentSession(payload);
-      setLastSubmission(payload.submitted_result || null);
       setSelectedIds([]);
       syncProgress(payload);
     } catch (error) {
@@ -270,18 +266,6 @@ export default function AssessmentPage({ authState, workflowState, onWorkflowSta
       </div>
 
       {errorMessage ? <p className="error-banner">{errorMessage}</p> : null}
-
-      {lastSubmission && !finished ? (
-        <section className={`pp-feedback pp-feedback--${lastSubmission.is_correct ? "right" : "wrong"}`}>
-          <strong>
-            <span className="pp-feedback__label">Last question</span>
-            {lastSubmission.is_correct
-              ? "✓ Correct"
-              : `✗ Not quite - the answer was ${formatOptionIds(lastSubmission.correct_option_ids || [lastSubmission.correct_option_id])}`}
-          </strong>
-          {lastSubmission.explanation ? <p>{lastSubmission.explanation}</p> : null}
-        </section>
-      ) : null}
 
       {!assessmentSession ? (
         <section className="interview-launch-card">

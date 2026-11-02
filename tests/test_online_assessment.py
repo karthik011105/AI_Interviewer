@@ -328,7 +328,11 @@ class RouteTests(TestCase):
 			with patch("backend.api.routes_assessment._require_parent_session", return_value={}), \
 				 patch("backend.api.routes_assessment.fetch_assessment_session", return_value=record), \
 				 patch("backend.api.routes_assessment.persist_assessment_session", side_effect=persist):
-				return routes_assessment.submit_assessment_answer(request, _USER)["submitted_result"]
+				result = routes_assessment.submit_assessment_answer(request, _USER)["submitted_result"]
+			# Mid-test the response never says whether the answer was right.
+			self.assertNotIn("is_correct", result)
+			self.assertNotIn("correct_option_ids", result)
+			return saved["state_json"]["answers"][multi["question_id"]]
 
 		self.assertTrue(submit(list(multi["correct_option_ids"]))["is_correct"])
 		self.assertFalse(submit(multi["correct_option_ids"][:1])["is_correct"])

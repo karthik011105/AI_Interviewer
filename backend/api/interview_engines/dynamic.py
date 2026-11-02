@@ -35,6 +35,7 @@ from backend.api.interview_runtime import (
 	_cancel_turn_commit,
 	_handle_speech_end,
 	_handle_speech_start,
+	_iter_prompt_sentences,
 	_quota_blocked,
 	_stop_tts,
 	_transcribe_captured_audio,
@@ -44,6 +45,7 @@ from backend.api.interview_engines import scripted
 from backend.api.quotas import INTERVIEW_TURN
 from backend.api.routes_interview import (
 	_build_round_context,
+	_generate_clarification_reply,
 	_get_parsed_resume,
 	_merge_saved_response_history,
 	_record_covered_topic,
@@ -77,6 +79,7 @@ from backend.nlp.interview_director import (
 	build_director_messages,
 	build_director_system_prompt,
 )
+from backend.nlp.meta_requests import classify_meta_request
 from backend.nlp.round_plans import build_round_coverage_plan
 
 _LOGGER = logging.getLogger(__name__)
@@ -593,6 +596,69 @@ async def _complete_round(runtime: InterviewRuntime) -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _answer_meta_request(
+	runtime: InterviewRuntime,
+	kind: str,
+	request_text: str,
+	*,
+	turn_index: int,
+	question: Mapping[str, Any],
+) -> None:
+	"""Say the current question again, or clarify it, as the same turn.
+
+	Re-sent under the question's own turn index, so the interviewer bubble is
+	typed out again in place and the candidate's next words answer it.
+	"""
+
+	question_text = str(question.get("question") or "").strip()
+	await runtime.send_json({"type": "meta_request", "kind": kind, "turn_index": turn_index})
+
+	say = question_text
+	if kind == "clarify":
+		role_key = str(runtime.parent_session.get("role_selected") or "").strip() or None
+		try:
+			say = await asyncio.to_thread(
+				_generate_clarification_reply,
+				round_type=runtime.round_type,
+				role_key=role_key,
+				question_text=_with_snippet(question_text, question.get("snippet")),
+				clarification_text=request_text,
+			)
+		except Exception:  # Groq down or over budget: the question itself still helps
+			_LOGGER.warning("Clarification reply failed; repeating the question.", exc_info=True)
+			say = question_text
+	if not say:
+		await runtime.set_state("LISTENING")
+		return
+
+	runtime.reset_audio_capture()
+	runtime.interrupt_event = asyncio.Event()
+	runtime.prompt_phase = "preparing"
+	await runtime.send_json({"type": "turn_start", "turn_index": turn_index})
+	await runtime.set_state("PLAYING")
+
+	async def _sentences() -> AsyncIterator[str]:
+		async for sentence in _iter_prompt_sentences(say):
+			with contextlib.suppress(RuntimeError, WebSocketDisconnect, ClosedResourceError):
+				await runtime.send_json({"type": "turn_delta", "turn_index": turn_index, "text": sentence})
+			yield sentence
+
+	await speak_stream(runtime, _sentences())
+	await runtime.send_json(
+		{
+			"type": "turn_end",
+			"turn_index": turn_index,
+			"text": say,
+			"action": question.get("turn_action"),
+			"focus_skill": question.get("focus_skill"),
+			"question_tier": question.get("question_tier"),
+			"difficulty": question.get("difficulty"),
+			"snippet": question.get("snippet"),
+			"fallback_used": False,
+		}
+	)
+
+
 async def start(runtime: InterviewRuntime) -> None:
 	_ensure_round_state(runtime)
 	await _ask_next_turn(runtime)
@@ -626,6 +692,14 @@ async def handle_transcript(runtime: InterviewRuntime, text: str) -> None:
 	# next question, which would shift this index out from under the scorer.
 	turn_index = len(questions) - 1
 	question = questions[turn_index]
+
+	# "Can you repeat that?" is a request, not an answer: don't score it or
+	# move on. Capped per question so a misread answer can't loop forever.
+	meta_request = classify_meta_request(clean_answer)
+	if meta_request and runtime.clarification_count < _MAX_CLARIFICATIONS_PER_QUESTION:
+		runtime.clarification_count += 1
+		await _answer_meta_request(runtime, meta_request, clean_answer, turn_index=turn_index, question=question)
+		return
 
 	await _record_candidate_turn(runtime, clean_answer, turn_index=turn_index)
 

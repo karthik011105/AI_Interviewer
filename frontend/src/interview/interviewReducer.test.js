@@ -97,6 +97,22 @@ describe("answers and out-of-order scoring", () => {
 		assert.equal(state.turns.find((t) => t.role === "interviewer" && t.turnIndex === 1).text, "Q1?");
 	});
 
+	it("drops a 'can you repeat that?' and says the same question again in place", () => {
+		const state = apply(INITIAL_STATE, [
+			frame({ type: "turn_start", turn_index: 0 }),
+			frame({ type: "turn_end", turn_index: 0, text: "What does the GIL protect?" }),
+			{ type: "LOCAL_ANSWER", turnIndex: 0, text: "Can you repeat the question?" },
+			frame({ type: "meta_request", kind: "repeat", turn_index: 0 }),
+			frame({ type: "turn_start", turn_index: 0 }),
+			frame({ type: "turn_end", turn_index: 0, text: "What does the GIL protect?" }),
+		]);
+
+		assert.equal(state.turns.filter((t) => t.role === "candidate").length, 0);
+		const questions = state.turns.filter((t) => t.role === "interviewer");
+		assert.equal(questions.length, 1);
+		assert.equal(questions[0].text, "What does the GIL protect?");
+	});
+
 	it("marks an answer as scoring while it is in flight", () => {
 		const state = apply(INITIAL_STATE, [
 			{ type: "LOCAL_ANSWER", turnIndex: 0, text: "answer" },
