@@ -74,11 +74,13 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /opt/hf-cache /opt/hf-cache
+# Run as an unprivileged user. uid 1000 because Hugging Face Spaces run the
+# container as uid 1000; the model cache is owned by it so libraries that
+# write lock files next to a model can.
+RUN useradd --create-home --uid 1000 appuser
 
-# Run as an unprivileged user. Created before COPY so the layer is cached.
-RUN useradd --create-home --uid 10001 appuser
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appuser /opt/hf-cache /opt/hf-cache
 WORKDIR /app
 
 COPY --chown=appuser:appuser backend/ /app/backend/

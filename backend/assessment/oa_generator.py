@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 import threading
@@ -311,6 +312,10 @@ def generate_section(
 
 
 def _default_run(code: str, language: str) -> Mapping[str, Any]:
+	# A hosted Judge0 free plan allows ~50 runs a day: keep them for the
+	# candidate's own code. The answer is then checked by the second model.
+	if os.getenv("OA_RUN_CODE_ON_JUDGE0", "1").strip().casefold() in {"0", "false", "no", "off"}:
+		raise RuntimeError("Running assessment code on Judge0 is turned off.")
 	from backend.dsa.code_executor import run_program
 
 	return run_program(code, language)

@@ -802,6 +802,10 @@ def _open_json_request(
 	# an existing local instance that was set up without a token.
 	if settings.auth_token:
 		headers[settings.auth_header] = settings.auth_token
+	rapidapi_key = getattr(settings, "rapidapi_key", "")
+	if rapidapi_key:
+		headers["X-RapidAPI-Key"] = rapidapi_key
+		headers["X-RapidAPI-Host"] = urllib_parse.urlsplit(settings.api_base_url).hostname or ""
 
 	request = urllib_request.Request(url, data=request_body, headers=headers, method=method)
 	started_at = time.monotonic()
@@ -936,14 +940,44 @@ def _poll_submission(token: str) -> dict[str, Any]:
 	)
 
 
+def _submit(payload: Mapping[str, Any]) -> dict[str, Any]:
+	"""Submit one program and return Judge0's finished result.
+
+	Self-hosted: POST for a token, then poll. wait=true is unreliable in Judge0
+	CE v1.13.x with separate server+worker containers: the synchronous response
+	occasionally omits stdout even when execution completed.
+
+	Hosted (wait_for_result): one POST with wait=true, because the RapidAPI
+	free plan counts every request and a poll loop spends 3-10 per run. If
+	that response is not finished, fall back to polling its token.
+	"""
+	settings = get_settings().judge0
+	if getattr(settings, "wait_for_result", False):
+		query = urllib_parse.urlencode({"base64_encoded": "true", "wait": "true"})
+		encoded = {
+			**payload,
+			"source_code": base64.b64encode(str(payload.get("source_code") or "").encode("utf-8")).decode("ascii"),
+			"stdin": base64.b64encode(str(payload.get("stdin") or "").encode("utf-8")).decode("ascii"),
+		}
+		response = _open_json_request(f"{settings.api_base_url}/submissions?{query}", method="POST", payload=encoded)
+		if not isinstance(response, Mapping):
+			raise CodeExecutionError("Judge0 returned an unexpected submission payload.")
+		result = _decode_base64_result_fields(response)
+		if _get_judge0_status_id(result) in _JUDGE0_TERMINAL_STATUS_IDS:
+			return result
+	else:
+		query = urllib_parse.urlencode({"base64_encoded": "false"})
+		response = _open_json_request(f"{settings.api_base_url}/submissions?{query}", method="POST", payload=payload)
+		if not isinstance(response, Mapping):
+			raise CodeExecutionError("Judge0 returned an unexpected submission payload.")
+	token = str(response.get("token") or "").strip()
+	if not token:
+		raise CodeExecutionError("Judge0 submission did not return a token. Cannot poll for results.")
+	return _poll_submission(token)
+
+
 def _submit_harness(harness_code: str, *, language: str) -> dict[str, Any]:
 	settings = get_settings().judge0
-	# POST without wait=true to get a submission token immediately.
-	# wait=true is unreliable in Judge0 CE v1.13.x with separate server+worker
-	# containers: the synchronous response occasionally omits stdout even when
-	# execution completed. Polling by token via GET always returns the full result.
-	query = urllib_parse.urlencode({"base64_encoded": "false"})
-	url = f"{settings.api_base_url}/submissions?{query}"
 	payload = {
 		"language_id": _resolve_judge0_language_id(language),
 		"source_code": harness_code,
@@ -954,13 +988,7 @@ def _submit_harness(harness_code: str, *, language: str) -> dict[str, Any]:
 		"enable_per_process_and_thread_time_limit": True,
 		"enable_per_process_and_thread_memory_limit": True,
 	}
-	response = _open_json_request(url, method="POST", payload=payload)
-	if not isinstance(response, Mapping):
-		raise CodeExecutionError("Judge0 returned an unexpected submission payload.")
-	token = str(response.get("token") or "").strip()
-	if not token:
-		raise CodeExecutionError("Judge0 submission did not return a token. Cannot poll for results.")
-	return _poll_submission(token)
+	return _submit(payload)
 
 
 # Judge0 CE language ids for whole programs (assessment answer checks). The
@@ -987,7 +1015,6 @@ def run_program(source_code: str, language: str) -> dict[str, Any]:
 		raise CodeExecutionError(f"Judge0 has no program runner for {language!r}.")
 	if len(source_code) > settings.max_source_characters:
 		raise SafetyViolationError("Program exceeds the configured source limit.")
-	query = urllib_parse.urlencode({"base64_encoded": "false"})
 	payload = {
 		"language_id": language_id,
 		"source_code": source_code,
@@ -998,11 +1025,7 @@ def run_program(source_code: str, language: str) -> dict[str, Any]:
 		"enable_per_process_and_thread_time_limit": True,
 		"enable_per_process_and_thread_memory_limit": True,
 	}
-	response = _open_json_request(f"{settings.api_base_url}/submissions?{query}", method="POST", payload=payload)
-	token = str((response or {}).get("token") or "").strip() if isinstance(response, Mapping) else ""
-	if not token:
-		raise CodeExecutionError("Judge0 submission did not return a token.")
-	return _poll_submission(token)
+	return _submit(payload)
 
 
 def _extract_case_results(stdout: str) -> tuple[list[CaseExecutionResult], str]:
