@@ -1,5 +1,8 @@
 """Speech-to-text using faster-whisper English models, int8 CPU, VAD enabled.
 
+STT_PROVIDER=groq sends the audio to Groq's hosted Whisper instead, for small
+free hosts that cannot hold a local model in memory (Render: 512 MB).
+
 Public API
 ----------
 transcribe_audio(audio_bytes, *, sample_rate=16000) -> TranscribeResult
@@ -65,6 +68,9 @@ _INITIAL_PROMPT: str = os.environ.get("WHISPER_INITIAL_PROMPT", "").strip()
 _HOTWORDS: str = os.environ.get("WHISPER_HOTWORDS", "").strip()
 _CPU_THREADS: int = max(0, int(os.environ.get("WHISPER_CPU_THREADS", "0")))
 _NUM_WORKERS: int = max(1, int(os.environ.get("WHISPER_NUM_WORKERS", "1")))
+
+_PROVIDER: str = (os.environ.get("STT_PROVIDER") or "local").strip().casefold()
+_GROQ_STT_MODEL: str = (os.environ.get("STT_GROQ_MODEL") or "whisper-large-v3-turbo").strip()
 
 _model = None  # lazy-loaded
 _model_error: str | None = None
@@ -275,6 +281,9 @@ def transcribe_audio(
             text="", no_speech=True, duration_sec=0.0, latency_sec=0.0
         )
 
+    if _PROVIDER == "groq":
+        return _transcribe_with_groq(audio_bytes)
+
     model = _get_model()  # raises STTUnavailableError if unavailable
 
     wav_bytes = _to_wav_bytes(audio_bytes)
@@ -318,8 +327,126 @@ def transcribe_audio(
     )
 
 
+# ---------------------------------------------------------------------------
+# Hosted transcription (Groq Whisper)
+# ---------------------------------------------------------------------------
+
+def _audio_filename(audio_bytes: bytes) -> str:
+    """Groq picks the decoder from the file name, so name the blob by its bytes."""
+    if audio_bytes[:4] == b"RIFF":
+        return "answer.wav"
+    if audio_bytes[:4] == b"\x1aE\xdf\xa3":
+        return "answer.webm"
+    if audio_bytes[:4] == b"OggS":
+        return "answer.ogg"
+    if audio_bytes[:3] == b"ID3" or audio_bytes[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"}:
+        return "answer.mp3"
+    return "answer.wav"
+
+
+_SPEECH_RMS = 400.0  # same onset level as backend/voice/vad.py
+_MIN_VOICED_MS = 200
+# What Whisper says for silence or breath noise. Dropped only as the whole
+# transcript, never from inside a real answer.
+_SILENCE_PHRASES = frozenset({"thank you", "thanks", "thank you for watching", "thanks for watching", "you", "bye", "okay"})
+
+
+def _has_voiced_audio(audio_bytes: bytes) -> bool:
+    """True unless this is a 16-bit WAV with under 200 ms above speech level.
+
+    Other formats (WebM from the REST route) cannot be measured without a
+    decoder, so they are sent as they are."""
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
+            if reader.getsampwidth() != 2:
+                return True
+            channels = max(1, reader.getnchannels())
+            rate = max(1, reader.getframerate())
+            frames = reader.readframes(reader.getnframes())
+    except Exception:
+        return True
+    samples = array("h")
+    samples.frombytes(frames[: len(frames) - len(frames) % 2])
+    window = max(1, int(rate * channels * 0.03))  # 30 ms
+    voiced_ms = 0
+    for start in range(0, len(samples), window):
+        chunk = samples[start:start + window]
+        if chunk and (sum(s * s for s in chunk) / len(chunk)) ** 0.5 >= _SPEECH_RMS:
+            voiced_ms += 30
+            if voiced_ms >= _MIN_VOICED_MS:
+                return True
+    return False
+
+
+def _groq_settings():
+    from backend.config import get_settings
+
+    settings = get_settings().groq
+    if settings is None or not settings.api_key:
+        raise STTUnavailableError("GROQ_API_KEY is not set, so hosted speech-to-text is unavailable.")
+    return settings
+
+
+def _transcribe_with_groq(audio_bytes: bytes) -> TranscribeResult:
+    from backend.nlp.groq_client import get_groq_client
+
+    settings = _groq_settings()
+    if not _has_voiced_audio(audio_bytes):
+        return TranscribeResult(text="", no_speech=True, duration_sec=0.0, latency_sec=0.0)
+    client = get_groq_client(settings.api_key, settings.api_base_url)
+    t0 = time.perf_counter()
+    try:
+        response = client.audio.transcriptions.create(
+            file=(_audio_filename(audio_bytes), audio_bytes),
+            model=_GROQ_STT_MODEL,
+            language="en",
+            response_format="verbose_json",
+            temperature=0.0,
+            prompt=_INITIAL_PROMPT or None,
+        )
+    except Exception as exc:
+        raise STTTranscriptionError(f"Transcription failed: {exc}") from exc
+    latency = time.perf_counter() - t0
+
+    # Whisper invents a "Thank you." for silence; the local path drops it with
+    # VAD, here each segment's own no-speech probability does the same job.
+    segments = getattr(response, "segments", None)
+    if segments is None and isinstance(response, dict):
+        segments = response.get("segments")
+    if segments:
+        parts = []
+        for segment in segments:
+            get = segment.get if isinstance(segment, dict) else lambda key, default=None: getattr(segment, key, default)
+            if float(get("no_speech_prob", 0.0) or 0.0) > _NO_SPEECH_THRESHOLD:
+                continue
+            text = str(get("text", "") or "").strip()
+            if text:
+                parts.append(text)
+        full_text = " ".join(parts).strip()
+    else:
+        full_text = str(getattr(response, "text", None) or (response.get("text") if isinstance(response, dict) else "") or "").strip()
+    if full_text.casefold().strip(" .!?,") in _SILENCE_PHRASES:
+        full_text = ""
+    duration = getattr(response, "duration", None)
+    if duration is None and isinstance(response, dict):
+        duration = response.get("duration")
+
+    return TranscribeResult(
+        text=full_text,
+        no_speech=(len(full_text) == 0),
+        duration_sec=float(duration or 0.0),
+        latency_sec=round(latency, 3),
+    )
+
+
 def stt_health() -> dict[str, object]:
     """Return health/status dict for the STT subsystem."""
+    if _PROVIDER == "groq":
+        try:
+            _groq_settings()
+        except STTUnavailableError as exc:
+            return {"status": "unavailable", "error": str(exc)}
+        return {"status": "ready", "provider": "groq", "model": _GROQ_STT_MODEL}
     try:
         _get_model()
         return {
@@ -342,6 +469,8 @@ def warmup_stt() -> bool:
     model load (2-5s on CPU) inside their turn, on top of the decode.
     """
 
+    if _PROVIDER == "groq":
+        return True  # nothing to load
     try:
         _get_model()
     except STTUnavailableError as exc:

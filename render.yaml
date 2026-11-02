@@ -1,0 +1,65 @@
+# Render blueprint: the backend and the frontend on Render's free plan.
+#
+# In Render: New -> Blueprint -> pick this GitHub repo. Render asks for the
+# values marked `sync: false` (they are never stored in the repo).
+#
+# The free backend has 512 MB of memory, too little for the local AI models,
+# so it installs backend/requirements-slim.txt and uses hosted services
+# instead: Groq's Whisper for speech-to-text, keyword matching for resume
+# skills and roles. It sleeps after 15 minutes without traffic; the next
+# visit wakes it in about a minute.
+#
+# If Render gives a service a different address (the name is taken), update
+# VITE_API_BASE_URL and CORS_ALLOW_ORIGIN_REGEX to match.
+
+services:
+  - type: web
+    name: prepforge-api
+    runtime: python
+    plan: free
+    region: virginia  # next to MongoDB Atlas us-east-1
+    buildCommand: pip install -r backend/requirements-slim.txt
+    # Render's proxy is the only way in, so trusting its forwarded headers
+    # keeps per-user rate limits per user (see backend/Dockerfile).
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+      - key: JUDGE0_RAPIDAPI_KEY
+        sync: false
+      - key: JUDGE0_API_BASE_URL
+        value: https://judge0-ce.p.rapidapi.com
+      - key: JUDGE0_WAIT_FOR_RESULT
+        value: "true"
+      - key: OA_RUN_CODE_ON_JUDGE0
+        value: "false"
+      - key: STT_PROVIDER
+        value: groq
+      - key: DISABLE_SEMANTIC_ENCODER
+        value: "1"
+      - key: DISABLE_SKILL_EXTRACTOR
+        value: "1"
+      - key: RATE_LIMIT_BACKEND
+        value: mongo
+      - key: CORS_ALLOW_ORIGIN_REGEX
+        value: https://prepforge(-[a-z0-9]+)?\.onrender\.com
+
+  - type: web
+    name: prepforge
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite  # the app routes in the browser (/report, /assessment, ...)
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://prepforge-api.onrender.com

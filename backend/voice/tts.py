@@ -742,18 +742,31 @@ def synthesize(text: str, *, voice: str | None = None) -> bytes:
     return synthesize_detailed(text, voice=voice).audio
 
 
+def _edge_health() -> dict[str, object]:
+    try:
+        import edge_tts  # noqa: F401
+    except ImportError:
+        return {"status": "unavailable", "error": "edge-tts library is not installed."}
+    return {"status": "ready", "provider": "edge"}
+
+
 def tts_health() -> dict[str, object]:
     """Return health/status dict for the TTS subsystem."""
     selected_provider = _current_tts_provider()
     provider_statuses = {
         "piper": _piper_health(),
         "elevenlabs": _elevenlabs_health(),
+        "edge": _edge_health(),
     }
 
     active_provider: str | None = None
     fallback_reason: str | None = None
 
-    if selected_provider == "elevenlabs":
+    # edge-tts is the default voice; this report used to leave it out and
+    # said "unavailable" while the interview was speaking through it.
+    if selected_provider == "edge" and provider_statuses["edge"]["status"] == "ready":
+        active_provider = "edge"
+    elif selected_provider == "elevenlabs":
         if provider_statuses["elevenlabs"]["status"] == "ready":
             active_provider = "elevenlabs"
         elif provider_statuses["piper"]["status"] == "ready":
@@ -761,6 +774,9 @@ def tts_health() -> dict[str, object]:
             fallback_reason = str(provider_statuses["elevenlabs"].get("error") or "ElevenLabs is unavailable.")
     elif provider_statuses["piper"]["status"] == "ready":
         active_provider = "piper"
+    if active_provider is None and provider_statuses["edge"]["status"] == "ready":
+        active_provider = "edge"
+        fallback_reason = f"{selected_provider} is unavailable."
 
     response: dict[str, object] = {
         "status": "ready" if active_provider is not None else "unavailable",
