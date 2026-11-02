@@ -28,6 +28,7 @@ _HARNESS_END_MARKER = "__INTERVIEW_SIMULATOR_RESULTS_END__"
 _JUDGE0_TERMINAL_STATUS_IDS: frozenset[int] = frozenset(range(3, 15))
 # Poll up to 30 times with 1-second intervals = 30 seconds max.
 # This gives local Judge0 workers extra headroom when the compile queue is busy.
+_USER_AGENT = "PrepForge/1.0 (+https://github.com/karthik011105/AI_Interviewer)"
 _POLL_MAX_ATTEMPTS = 30
 _POLL_INTERVAL_SECONDS = 1.0
 
@@ -791,7 +792,9 @@ def _open_json_request(
 ) -> Any:
 	settings = get_settings().judge0
 	request_body = None
-	headers = {"Accept": "application/json"}
+	# Judge0's public instance sits behind Cloudflare, which answers urllib's
+	# default "Python-urllib/3.x" user agent with 403 (error 1010).
+	headers = {"Accept": "application/json", "User-Agent": _USER_AGENT}
 	if payload is not None:
 		request_body = json.dumps(payload).encode("utf-8")
 		headers["Content-Type"] = "application/json"

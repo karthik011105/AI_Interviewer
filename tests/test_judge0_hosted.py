@@ -77,6 +77,8 @@ class HostedJudge0Tests(TestCase):
 		self.assertIn("wait=true", request.full_url)
 		self.assertEqual(request.get_header("X-rapidapi-key"), "test-key")
 		self.assertEqual(request.get_header("X-rapidapi-host"), "judge0-ce.p.rapidapi.com")
+		# ce.judge0.com's Cloudflare rejects urllib's default user agent.
+		self.assertTrue(request.get_header("User-agent").startswith("PrepForge/"))
 		self.assertEqual(result["stdout"], "hello\n")
 
 	def test_unfinished_wait_response_falls_back_to_polling(self) -> None:
