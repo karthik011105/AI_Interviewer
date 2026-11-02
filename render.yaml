@@ -43,6 +43,8 @@ services:
         value: "false"
       - key: STT_PROVIDER
         value: groq
+      - key: TTS_PROVIDER
+        value: edge
       - key: DISABLE_SEMANTIC_ENCODER
         value: "1"
       - key: DISABLE_SKILL_EXTRACTOR
@@ -63,4 +65,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://prepforge-api.onrender.com
+        value: https://prepforge-api-xwl7.onrender.com
