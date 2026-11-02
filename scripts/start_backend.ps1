@@ -42,4 +42,6 @@ if (-not $SkipDependencySync) {
 }
 
 Set-Location $repoRoot
-& $pythonPath -m uvicorn backend.main:app --reload --port $Port
+# Not uvicorn --reload: on Windows it restarts with CTRL_C_EVENT, which also
+# stops the reloader, so the first code change took the backend down.
+& $pythonPath (Join-Path $repoRoot "scripts\dev_server.py") $Port
