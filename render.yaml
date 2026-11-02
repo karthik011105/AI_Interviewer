@@ -1,7 +1,8 @@
 # Render blueprint: the backend and the frontend on Render's free plan.
 #
 # In Render: New -> Blueprint -> pick this GitHub repo. Render asks for the
-# values marked `sync: false` (they are never stored in the repo).
+# values marked `sync: false` (GROQ_API_KEY, MONGO_URI); they are never
+# stored in the repo.
 #
 # The free backend has 512 MB of memory, too little for the local AI models,
 # so it installs backend/requirements-slim.txt and uses hosted services
@@ -32,10 +33,10 @@ services:
         sync: false
       - key: AUTH_JWT_SECRET
         generateValue: true
-      - key: JUDGE0_RAPIDAPI_KEY
-        sync: false
+      # Judge0's own public instance: no key, no account. It is shared and
+      # rate-limited; candidates' code is run there.
       - key: JUDGE0_API_BASE_URL
-        value: https://judge0-ce.p.rapidapi.com
+        value: https://ce.judge0.com
       - key: JUDGE0_WAIT_FOR_RESULT
         value: "true"
       - key: OA_RUN_CODE_ON_JUDGE0
