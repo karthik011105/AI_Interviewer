@@ -185,6 +185,11 @@ class Judge0Settings:
 	memory_limit_kb: int
 	max_source_characters: int
 	max_case_output_characters: int
+	# Hosted Judge0 on RapidAPI (the free plan counts every request, polls
+	# included): the key goes in X-RapidAPI-Key, and wait_for_result asks for
+	# the result in the submit call instead of polling for it.
+	rapidapi_key: str = ""
+	wait_for_result: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +374,8 @@ class AppSettings:
 				4000,
 				minimum=256,
 			),
+			rapidapi_key=(source.get("JUDGE0_RAPIDAPI_KEY") or "").strip(),
+			wait_for_result=_read_bool(source, "JUDGE0_WAIT_FOR_RESULT", False),
 		)
 
 		groq_api_key = (source.get("GROQ_API_KEY") or "").strip()
