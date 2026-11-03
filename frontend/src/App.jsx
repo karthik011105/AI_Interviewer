@@ -935,6 +935,7 @@ export default function App() {
 														accessToken={authState.accessToken}
 														onNavigate={navigateToPage}
 														onStateChange={handleInterviewEndChange}
+														onWorkflowStateChange={setWorkflowState}
 													>
 														<PageComponent
 															authState={authState}

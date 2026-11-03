@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 
 import RoundStatusPage from "../components/RoundStatusPage";
+import StartOverButton from "../components/StartOverButton";
 import { buildApiHeaders } from "../lib/api";
+import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 const API_DEFAULT = "http://127.0.0.1:8000";
 const REPORT_SECTION_ORDER = [
@@ -63,7 +65,7 @@ function toPct(value) {
   return Math.round(numeric <= 1 ? numeric * 100 : numeric);
 }
 
-export default function ReportPage({ authState, workflowState, onNavigate, roleRequiresDsa = true }) {
+export default function ReportPage({ authState, workflowState, onNavigate, onWorkflowStateChange, roleRequiresDsa = true }) {
   const [reportEnvelope, setReportEnvelope] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -214,6 +216,18 @@ export default function ReportPage({ authState, workflowState, onNavigate, roleR
           <p>{selectedRoleTitle || reportEnvelope?.role_selected || "Your chosen role"}</p>
         </div>
         <div className="pp-report__actions">
+          <StartOverButton
+            accessToken={accessToken}
+            apiBaseUrl={apiBaseUrl}
+            sessionId={sessionId}
+            onRestarted={(payload) => {
+              onWorkflowStateChange?.((current) => ({
+                ...current,
+                ...buildWorkflowResetPatch(current, payload?.cleared_targets),
+              }));
+              onNavigate?.("assessment");
+            }}
+          />
           <button
             type="button"
             className="primary-button pp-report__download"

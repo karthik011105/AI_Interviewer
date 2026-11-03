@@ -16,6 +16,7 @@ from backend.database.queries import (
 	delete_interview_responses,
 	delete_interview_round_session,
 	get_session,
+	reopen_interview,
 	update_session_status,
 )
 from backend.database.db_errors import DatabaseClientError
@@ -75,9 +76,9 @@ def reset_workflow_stage(
 	current_user: AuthenticatedUser = Depends(require_current_user),
 ) -> dict[str, Any]:
 	parent_session = _require_parent_session(request.session_id, current_user)
-	# A finished interview can't be restarted by resetting rounds; only the
-	# report can be regenerated.
-	if request.target != "report":
+	# A finished interview can't be patched by resetting single rounds; it can
+	# be started over as a whole (Start over), or its report regenerated.
+	if request.target not in {"report", "entire_interview"}:
 		ensure_interview_open(parent_session)
 	cleared_targets = RESET_CASCADE[request.target]
 	summary: dict[str, Any] = {
@@ -103,6 +104,9 @@ def reset_workflow_stage(
 
 		if "report" in cleared_targets:
 			summary["final_reports"] = delete_final_report(request.session_id)
+
+		if request.target == "entire_interview" and parent_session.get("interview_ended"):
+			reopen_interview(request.session_id)
 
 		next_session_status = str(parent_session.get("status") or "created")
 		if _should_downgrade_session_status(cleared_targets):

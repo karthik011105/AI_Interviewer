@@ -6278,3 +6278,24 @@ body.pp-focus-mode .pp-watermark {
 	text-align: right;
 	font-variant-numeric: tabular-nums;
 }
+
+/* Start over: an icon-and-label button beside Download PDF and on the
+   "Interview finished" screen. */
+.pp-report__actions .secondary-button,
+.round-shell__actions .secondary-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.round-shell__actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 10px;
+}
+
+.round-shell__actions .primary-button,
+.round-shell__actions .secondary-button {
+	width: auto;
+}
