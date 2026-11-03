@@ -62,6 +62,10 @@ def mark_interview_finished(session_id: str, round_name: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.mark_interview_finished(session_id=session_id, round_name=round_name)
 
+def reopen_interview(session_id: str) -> dict[str, Any]:
+	repo = get_repository()
+	return repo.reopen_interview(session_id=session_id)
+
 def update_session_role_selected(session_id: str, role_selected: str) -> dict[str, Any]:
 	repo = get_repository()
 	return repo.update_session_role_selected(

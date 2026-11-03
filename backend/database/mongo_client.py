@@ -374,6 +374,15 @@ class MongoRepository:
 			not_found_message="The supplied session_id does not exist.",
 		)
 
+	def reopen_interview(self, *, session_id: str) -> dict[str, Any]:
+		"""Undo Finish interview: the candidate is starting over."""
+		return self.update_one(
+			"sessions",
+			values={"interview_ended": None},
+			filters={"id": session_id},
+			not_found_message="The supplied session_id does not exist.",
+		)
+
 	def update_session_role_selected(
 		self,
 		*,

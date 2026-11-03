@@ -30,6 +30,9 @@ export function buildWorkflowResetPatch(currentState, clearedTargets) {
   };
 
   if (cleared.has("assessment")) {
+    // Everything is cleared, so a finished interview is open again (the
+    // server reopens it on an entire_interview reset).
+    patch.interviewEnd = null;
     patch.assessmentStatus = "idle";
     patch.assessmentAnsweredCount = 0;
     patch.assessmentTotalQuestions = 0;

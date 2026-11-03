@@ -82,3 +82,36 @@ class ResetTests(TestCase):
 			with self.assertRaises(HTTPException) as ctx:
 				routes_workflow.reset_workflow_stage(request, _USER)
 		self.assertEqual(ctx.exception.status_code, 409)
+
+	def test_start_over_reopens_a_finished_interview(self) -> None:
+		request = routes_workflow.WorkflowResetRequest(session_id="s1", target="entire_interview")
+		deletes = {
+			name: patch(f"backend.api.routes_workflow.{name}", return_value=1)
+			for name in (
+				"delete_assessment_session",
+				"delete_interview_round_session",
+				"delete_interview_responses",
+				"delete_dsa_sessions",
+				"delete_final_report",
+			)
+		}
+		for patcher in deletes.values():
+			patcher.start()
+			self.addCleanup(patcher.stop)
+		with patch("backend.api.routes_workflow._require_parent_session", return_value=_FINISHED), \
+			 patch("backend.api.routes_workflow.update_session_status", return_value={"status": "created"}), \
+			 patch("backend.api.routes_workflow.reopen_interview") as reopen:
+			result = routes_workflow.reset_workflow_stage(request, _USER)
+		reopen.assert_called_once_with("s1")
+		self.assertIn("assessment", result["cleared_targets"])
+		self.assertIn("report", result["cleared_targets"])
+
+	def test_reopen_clears_the_finished_flag_by_mongo_id(self) -> None:
+		repo = MongoRepository.__new__(MongoRepository)
+		sessions = MagicMock()
+		sessions.find_one_and_update.return_value = {"_id": "s1", "interview_ended": None}
+		repo.db = {"sessions": sessions}
+		repo.reopen_interview(session_id="s1")
+		filters, update = sessions.find_one_and_update.call_args.args[:2]
+		self.assertEqual(filters, {"_id": "s1"})
+		self.assertIsNone(update["$set"]["interview_ended"])

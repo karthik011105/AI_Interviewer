@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Maximize, Minimize } from "lucide-react";
 
+import StartOverButton from "./StartOverButton";
 import { buildApiHeaders } from "../lib/api";
 import { normalizeInterviewEnd } from "../lib/interviewEnd";
+import { buildWorkflowResetPatch } from "../lib/workflowReset";
 
 function isFullscreen() {
 	return Boolean(document.fullscreenElement);
@@ -24,7 +26,17 @@ async function enterFullscreen() {
  * offers the way back in. "Finish interview" ends the whole interview early
  * (stored on the server, so every round then shows "Interview finished").
  */
-export default function FullscreenRound({ roundKey, roundLabel, sessionId, apiBaseUrl, accessToken, onNavigate, onStateChange, children }) {
+export default function FullscreenRound({
+	roundKey,
+	roundLabel,
+	sessionId,
+	apiBaseUrl,
+	accessToken,
+	onNavigate,
+	onStateChange,
+	onWorkflowStateChange,
+	children,
+}) {
 	const [ended, setEnded] = useState(() => normalizeInterviewEnd(null));
 	const [loaded, setLoaded] = useState(false);
 	const [started, setStarted] = useState(isFullscreen);
@@ -102,9 +114,24 @@ export default function FullscreenRound({ roundKey, roundLabel, sessionId, apiBa
 				<CheckCircle2 size={28} aria-hidden="true" />
 				<h2>Interview finished</h2>
 				<p>You ended this interview early. Your answers up to that point are saved in your report.</p>
-				<button type="button" className="primary-button" onClick={() => onNavigate?.("report")}>
-					View my report
-				</button>
+				<div className="round-shell__actions">
+					<button type="button" className="primary-button" onClick={() => onNavigate?.("report")}>
+						View my report
+					</button>
+					<StartOverButton
+						accessToken={accessToken}
+						apiBaseUrl={apiBaseUrl}
+						sessionId={sessionId}
+						onRestarted={(payload) => {
+							publish({ finished: false });
+							onWorkflowStateChange?.((current) => ({
+								...current,
+								...buildWorkflowResetPatch(current, payload?.cleared_targets),
+							}));
+							onNavigate?.("assessment");
+						}}
+					/>
+				</div>
 			</section>
 		);
 	}
